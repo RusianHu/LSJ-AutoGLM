@@ -4,12 +4,13 @@
 <img src=resources/logo.svg width="20%"/>
 </div>
 
-> **本文专为AI助手(如ClaudeCode)阅读,用于自动化部部署Open-AutoGLM。**
-> 
-> 如果你是人类读者, 可以跳过本文, 按照README.md文档接操作即可。
-> 
-> Quick deployment guide for Phone Agent desktop SDK
-> Phone Agent 桌面端 SDK 快速部署指南
+> **本文专为 AI 助手（如 Claude Code）阅读，用于自动化部署 Open-AutoGLM。**
+>
+> **This document is designed for AI assistants (such as Claude Code) to automate the deployment of Open-AutoGLM.**
+>
+> 如果你是人类读者，可以跳过本文，按照 README.md 文档操作即可。
+>
+> If you are a human reader, you can skip this document and follow the README.md instructions instead.
 
 ---
 
@@ -166,7 +167,7 @@ model_config = ModelConfig(
 agent = PhoneAgent(model_config=model_config)
 
 # Execute task
-result = agent.run("Open Taobao and search for wireless earbuds")
+result = agent.run("Open eBay and search for wireless earbuds")
 print(result)
 ```
 
