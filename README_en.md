@@ -11,8 +11,7 @@
 
 ## Project Introduction
 
-Phone Agent is a mobile intelligent assistant framework built on AutoGLM. It understands phone screen content in a multimodal manner and helps users complete tasks through automated operations. The system controls devices via ADB (Android Debug Bridge), perceives screens using vision-language models, and generates and executes operation workflows through intelligent planning. Users simply describe their needs in natural language, such as "Open Xiaohongshu and search for food," and Phone Agent will automatically parse the intent, understand the current interface, plan the next action, and complete the entire workflow. The system also includes a sensitive operation confirmation mechanism and supports manual takeover during login or verification code scenarios. Additionally, it provides remote ADB debugging capabilities, allowing device connection via WiFi or network for flexible remote control and development.
-
+Phone Agent is a mobile intelligent assistant framework built on AutoGLM. It understands phone screen content in a multimodal manner and helps users complete tasks through automated operations. The system controls devices via ADB (Android Debug Bridge), perceives screens using vision-language models, and generates and executes operation workflows through intelligent planning. Users simply describe their needs in natural language, such as "Open eBay and search for wireless earphones." and Phone Agent will automatically parse the intent, understand the current interface, plan the next action, and complete the entire workflow. The system also includes a sensitive operation confirmation mechanism and supports manual takeover during login or verification code scenarios. Additionally, it provides remote ADB debugging capabilities, allowing device connection via WiFi or network for flexible remote control and development.
 > ⚠️ This project is for research and learning purposes only. It is strictly prohibited to use for illegal information acquisition, system interference, or any illegal activities. Please carefully review the [Terms of Use](resources/privacy_policy_en.txt).
 
 ## Model Download Links
@@ -92,7 +91,7 @@ adb devices
 
 ```shell
 python3 -m vllm.entrypoints.openai.api_server \
- --served-model-name autoglm-phone-9b \
+ --served-model-name autoglm-phone-9b-multilingual \
  --allowed-local-media-path /   \
  --mm-encoder-tp-mode data \
  --mm_processor_cache_type shm \
@@ -100,7 +99,7 @@ python3 -m vllm.entrypoints.openai.api_server \
  --max-model-len 25480  \
  --chat-template-content-format string \
  --limit-mm-per-prompt "{\"image\":10}" \
- --model zai-org/AutoGLM-Phone-9B \
+ --model zai-org/AutoGLM-Phone-9B-Multilingual \
  --port 8000
 ```
 
@@ -116,10 +115,10 @@ Set the `--base-url` and `--model` parameters according to your deployed model. 
 
 ```bash
 # Interactive mode
-python main.py --base-url http://localhost:8000/v1 --model "autoglm-phone-9b"
+python main.py --base-url http://localhost:8000/v1 --model "autoglm-phone-9b-multilingual"
 
 # Specify model endpoint
-python main.py --base-url http://localhost:8000/v1 "Open Meituan and search for nearby hotpot restaurants"
+python main.py --base-url http://localhost:8000/v1 "Open Maps and search for nearby coffee shops"
 
 # Use API key for authentication
 python main.py --apikey sk-xxxxx
@@ -140,14 +139,14 @@ from phone_agent.model import ModelConfig
 # Configure model
 model_config = ModelConfig(
     base_url="http://localhost:8000/v1",
-    model_name="autoglm-phone-9b",
+    model_name="autoglm-phone-9b-multilingual",
 )
 
 # Create Agent
 agent = PhoneAgent(model_config=model_config)
 
 # Execute task
-result = agent.run("Open Taobao and search for wireless earbuds")
+result = agent.run("Open eBay and search for wireless earphones")
 print(result)
 ```
 
@@ -187,7 +186,7 @@ adb connect 192.168.1.100:5555
 adb disconnect 192.168.1.100:5555
 
 # Execute task on specific device
-python main.py --device-id 192.168.1.100:5555 --base-url http://localhost:8000/v1 --model "autoglm-phone-9b" "Open TikTok and browse videos"
+python main.py --device-id 192.168.1.100:5555 --base-url http://localhost:8000/v1 --model "autoglm-phone-9b-multilingual" "Open TikTok and browse videos"
 ```
 
 ### Python API Remote Connection
@@ -247,14 +246,14 @@ You can directly modify the corresponding config files to enhance model capabili
 
 ### Environment Variables
 
-| Variable                  | Description               | Default Value                |
-|---------------------------|---------------------------|------------------------------|
-| `PHONE_AGENT_BASE_URL`    | Model API URL             | `http://localhost:8000/v1`   |
-| `PHONE_AGENT_MODEL`       | Model name                | `autoglm-phone-9b`           |
-| `PHONE_AGENT_API_KEY`     | API key for authentication| `EMPTY`                      |
-| `PHONE_AGENT_MAX_STEPS`   | Maximum steps per task    | `100`                        |
-| `PHONE_AGENT_DEVICE_ID`   | ADB device ID             | (auto-detect)                |
-| `PHONE_AGENT_LANG`        | Language (`cn` or `en`)   | `cn`                         |
+| Variable                  | Description               | Default Value              |
+|---------------------------|---------------------------|----------------------------|
+| `PHONE_AGENT_BASE_URL`    | Model API URL             | `http://localhost:8000/v1` |
+| `PHONE_AGENT_MODEL`       | Model name                | `autoglm-phone-9b`         |
+| `PHONE_AGENT_API_KEY`     | API key for authentication| `EMPTY`                    |
+| `PHONE_AGENT_MAX_STEPS`   | Maximum steps per task    | `100`                      |
+| `PHONE_AGENT_DEVICE_ID`   | ADB device ID             | (auto-detect)              |
+| `PHONE_AGENT_LANG`        | Language (`cn` or `en`)   | `en`                       |
 
 ### Model Configuration
 
@@ -264,7 +263,7 @@ from phone_agent.model import ModelConfig
 config = ModelConfig(
     base_url="http://localhost:8000/v1",
     api_key="EMPTY",  # API key (if required)
-    model_name="autoglm-phone-9b",  # Model name
+    model_name="autoglm-phone-9b-multilingual",  # Model name
     max_tokens=3000,  # Maximum output tokens
     temperature=0.1,  # Sampling temperature
     frequency_penalty=0.2,  # Frequency penalty
@@ -279,7 +278,7 @@ from phone_agent.agent import AgentConfig
 config = AgentConfig(
     max_steps=100,  # Maximum steps per task
     device_id=None,  # ADB device ID (None for auto-detect)
-    lang="cn",  # Language: cn (Chinese) or en (English)
+    lang="en",  # Language: cn (Chinese) or en (English)
     verbose=True,  # Print debug info (including thinking process and actions)
 )
 ```
@@ -292,13 +291,13 @@ When `verbose=True`, the Agent outputs detailed information at each step:
 ==================================================
 💭 Thinking Process:
 --------------------------------------------------
-Currently on the system desktop, need to launch Xiaohongshu app first
+Currently on the system desktop, need to launch eBay app first
 --------------------------------------------------
 🎯 Executing Action:
 {
   "_metadata": "do",
   "action": "Launch",
-  "app": "Xiaohongshu"
+  "app": "eBay"
 }
 ==================================================
 
@@ -307,18 +306,18 @@ Currently on the system desktop, need to launch Xiaohongshu app first
 ==================================================
 💭 Thinking Process:
 --------------------------------------------------
-Xiaohongshu is now open, need to tap the search box
+eBay is now open, need to tap the search box
 --------------------------------------------------
 🎯 Executing Action:
 {
   "_metadata": "do",
   "action": "Tap",
-  "element": [500, 100]
+  "element": [499, 182]
 }
 ==================================================
 
 🎉 ================================================
-✅ Task Complete: Successfully searched for food guides
+✅ Task Completed: Successfully opened eBay and searched for 'wireless earphones'
 ==================================================
 ```
 
@@ -328,16 +327,13 @@ This allows you to clearly see the AI's reasoning process and specific operation
 
 Phone Agent supports 50+ mainstream Chinese applications:
 
-| Category          | Apps                                    |
-|-------------------|-----------------------------------------|
-| Social & Messaging| WeChat, QQ, Weibo                       |
-| E-commerce        | Taobao, JD.com, Pinduoduo              |
-| Food & Delivery   | Meituan, Ele.me, KFC                   |
-| Travel            | Ctrip, 12306, Did                     |
-| Video & Entertainment | Bilibili, TikTok, iQiyi            |
-| Music & Audio     | NetEase Music, QQ Music, Ximalaya      |
-| Life Services     | Dianping, Amap, Baidu Maps             |
-| Content Communities| Xiaohongshu, Zhihu, Douban            |
+| Category                 | Apps                                                                                   |
+|--------------------------|----------------------------------------------------------------------------------------|
+| Social & Messaging       | X, Tiktok, WhatsApp, Telegram, FacebookMessenger, GoogleChat, Quora, Reddit, Instagram |
+| Productivity & Office    | Gmail, GoogleCalendar, GoogleDrive, GoogleDocs, GoogleTasks, Joplin                    |
+| Life, Shopping & Finance | Amazon shopping, Temu, Bluecoins, Duolingo, GoogleFit, ebay                            |
+| Utilities & Media        | GoogleClock, Chrome, GooglePlayStore, GooglePlayBooks, FilesbyGoogle                   |
+| Travel & Navigation      | GoogleMaps, Booking.com, Trip.com, Expedia, OpenTracks                                 |
 
 Run `python main.py --list-apps` to see the complete list.
 
