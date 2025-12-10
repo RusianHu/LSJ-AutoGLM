@@ -335,7 +335,6 @@ Phone Agent supports 50+ mainstream Chinese applications:
 | Utilities & Media        | GoogleClock, Chrome, GooglePlayStore, GooglePlayBooks, FilesbyGoogle                   |
 | Travel & Navigation      | GoogleMaps, Booking.com, Trip.com, Expedia, OpenTracks                                 |
 
-
 Run `python main.py --list-apps` to see the complete list.
 
 ## Available Actions
