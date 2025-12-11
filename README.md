@@ -91,6 +91,30 @@ adb devices
 
 ### 3. 启动模型服务
 
+你可以选择自行部署模型服务，或使用第三方模型服务商。
+
+#### 选项 A: 使用第三方模型服务
+
+如果你不想自行部署模型，可以使用以下已部署我们模型的第三方服务：
+
+**1. ModelScope（魔搭社区）**
+
+- 文档: https://modelscope.cn/models/ZhipuAI/AutoGLM-Phone-9B
+- `--base-url`: `https://api-inference.modelscope.cn/v1`
+- `--model`: `ZhipuAI/AutoGLM-Phone-9B`
+- `--apikey`: 在 ModelScope 平台申请你的 API Key
+
+使用第三方服务的示例：
+
+```bash
+# 使用 ModelScope
+python main.py --base-url https://api-inference.modelscope.cn/v1 --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "your-modelscope-api-key" "打开美团搜索附近的火锅店"
+```
+
+#### 选项 B: 自行部署模型
+
+如果你希望在本地或自己的服务器上部署模型：
+
 1. 按照 `requirements.txt` 中 `For Model Deployment` 章节自行安装推理引擎框架。
 
 对于SGLang， 除了使用pip安装，你也可以使用官方docker:
