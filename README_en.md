@@ -84,6 +84,40 @@ adb devices
 
 ### 3. Start Model Service
 
+You can choose to deploy the model service yourself or use a third-party model service provider.
+
+#### Option A: Use Third-Party Model Services
+
+If you don't want to deploy the model yourself, you can use the following third-party services that have already deployed our model:
+
+**1. Novita AI**
+
+- Documentation: https://novita.ai/models/model-detail/zai-org-autoglm-phone-9b-multilingual
+- `--base-url`: `https://api.novita.ai/openai`
+- `--model`: `zai-org/autoglm-phone-9b-multilingual`
+- `--apikey`: Apply for your own API key on the Novita AI platform
+
+**2. Parasail**
+
+- Documentation: https://www.saas.parasail.io/serverless?name=auto-glm-9b-multilingual
+- `--base-url`: `https://api.parasail.io/v1`
+- `--model`: `parasail-auto-glm-9b-multilingual`
+- `--apikey`: Apply for your own API key on the Parasail platform
+
+Example usage with third-party services:
+
+```bash
+# Using Novita AI
+python main.py --base-url https://api.novita.ai/openai --model "zai-org/autoglm-phone-9b-multilingual" --apikey "your-novita-api-key" "Open Chrome browser"
+
+# Using Parasail
+python main.py --base-url https://api.parasail.io/v1 --model "parasail-auto-glm-9b-multilingual" --apikey "your-parasail-api-key" "Open Chrome browser"
+```
+
+#### Option B: Deploy Model Yourself
+
+If you prefer to deploy the model locally or on your own server:
+
 1. Download the model and install the inference engine framework according to the `For Model Deployment` section in `requirements.txt`.
 2. Start via SGlang / vLLM to get an OpenAI-format service. Here's a vLLM deployment solution; please strictly follow the startup parameters we provide:
 
