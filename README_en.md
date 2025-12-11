@@ -15,7 +15,7 @@ You can use Claude Code with [GLM Coding Plan](https://z.ai/subscribe) and enter
 
 ```
 Access the documentation and install AutoGLM for me
-https://raw.githubusercontent.com/zai-org/Open-AutoGLM/refs/heads/main/README.md
+https://raw.githubusercontent.com/zai-org/Open-AutoGLM/refs/heads/main/README_en.md
 ```
 
 ## Project Introduction
