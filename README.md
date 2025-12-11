@@ -97,7 +97,14 @@ adb devices
 
 如果你不想自行部署模型，可以使用以下已部署我们模型的第三方服务：
 
-**1. ModelScope(魔搭社区)**
+**1. 智谱 BigModel**
+
+- 文档: https://docs.bigmodel.cn/cn/api/introduction
+- `--base-url`: `https://open.bigmodel.cn/api/paas/v4`
+- `--model`: `autoglm-phone`
+- `--apikey`: 在智谱平台申请你的 API Key
+
+**2. ModelScope(魔搭社区)**
 
 - 文档: https://modelscope.cn/models/ZhipuAI/AutoGLM-Phone-9B
 - `--base-url`: `https://api-inference.modelscope.cn/v1`
@@ -107,6 +114,9 @@ adb devices
 使用第三方服务的示例：
 
 ```bash
+# 使用智谱 BigModel
+python main.py --base-url https://open.bigmodel.cn/api/paas/v4 --model "autoglm-phone" --apikey "your-bigmodel-api-key" "打开美团搜索附近的火锅店"
+
 # 使用 ModelScope
 python main.py --base-url https://api-inference.modelscope.cn/v1 --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "your-modelscope-api-key" "打开美团搜索附近的火锅店"
 ```
@@ -708,7 +718,13 @@ pip install -e .
 
 你可以使用以下第三方模型服务：
 
-1. **ModelScope(魔搭社区)**
+1. **智谱 BigModel**
+   - 文档：https://docs.bigmodel.cn/cn/api/introduction
+   - `--base-url`：`https://open.bigmodel.cn/api/paas/v4`
+   - `--model`：`autoglm-phone`
+   - `--apikey`：在智谱平台申请你的 API Key
+
+2. **ModelScope(魔搭社区)**
    - 文档：https://modelscope.cn/models/ZhipuAI/AutoGLM-Phone-9B
    - `--base-url`：`https://api-inference.modelscope.cn/v1`
    - `--model`：`ZhipuAI/AutoGLM-Phone-9B`
@@ -717,6 +733,9 @@ pip install -e .
 使用示例：
 
 ```bash
+# 使用智谱 BigModel
+python main.py --base-url https://open.bigmodel.cn/api/paas/v4 --model "autoglm-phone" --apikey "your-bigmodel-api-key" "打开美团搜索附近的火锅店"
+
 # 使用 ModelScope
 python main.py --base-url https://api-inference.modelscope.cn/v1 --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "your-modelscope-api-key" "打开美团搜索附近的火锅店"
 ```
