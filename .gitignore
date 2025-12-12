@@ -60,3 +60,4 @@ call_model.py
 app_package_name.py
 
 .claude/
+.venv
