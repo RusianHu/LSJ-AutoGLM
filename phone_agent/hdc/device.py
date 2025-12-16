@@ -5,7 +5,7 @@ import subprocess
 import time
 from typing import List, Optional, Tuple
 
-from phone_agent.config.apps_harmonyos import APP_PACKAGES
+from phone_agent.config.apps_harmonyos import APP_ABILITIES, APP_PACKAGES
 from phone_agent.config.timing import TIMING_CONFIG
 from phone_agent.hdc.connection import _run_hdc_command
 
@@ -242,9 +242,12 @@ def launch_app(
     hdc_prefix = _get_hdc_prefix(device_id)
     bundle = APP_PACKAGES[app_name]
 
+    # Get the ability name for this bundle
+    # Default to "EntryAbility" if not specified in APP_ABILITIES
+    ability = APP_ABILITIES.get(bundle, "EntryAbility")
+
     # HarmonyOS uses 'aa start' command to launch apps
     # Format: aa start -b {bundle} -a {ability}
-    # Most HarmonyOS apps use "EntryAbility" as the main ability name
     _run_hdc_command(
         hdc_prefix
         + [
@@ -254,7 +257,7 @@ def launch_app(
             "-b",
             bundle,
             "-a",
-            "EntryAbility",
+            ability,
         ],
         capture_output=True,
     )
