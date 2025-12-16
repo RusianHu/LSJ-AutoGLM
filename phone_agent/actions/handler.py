@@ -2,24 +2,13 @@
 
 import ast
 import re
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from phone_agent.adb import (
-    back,
-    clear_text,
-    detect_and_set_adb_keyboard,
-    double_tap,
-    home,
-    launch_app,
-    long_press,
-    restore_keyboard,
-    swipe,
-    tap,
-    type_text,
-)
 from phone_agent.config.timing import TIMING_CONFIG
+from phone_agent.device_factory import get_device_factory
 
 
 @dataclass
@@ -132,7 +121,8 @@ class ActionHandler:
         if not app_name:
             return ActionResult(False, False, "No app name specified")
 
-        success = launch_app(app_name, self.device_id)
+        device_factory = get_device_factory()
+        success = device_factory.launch_app(app_name, self.device_id)
         if success:
             return ActionResult(True, False)
         return ActionResult(False, False, f"App not found: {app_name}")
@@ -154,19 +144,22 @@ class ActionHandler:
                     message="User cancelled sensitive operation",
                 )
 
-        tap(x, y, self.device_id)
+        device_factory = get_device_factory()
+        device_factory.tap(x, y, self.device_id)
         return ActionResult(True, False)
 
     def _handle_type(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle text input action."""
         text = action.get("text", "")
 
+        device_factory = get_device_factory()
+
         # Switch to ADB keyboard
-        original_ime = detect_and_set_adb_keyboard(self.device_id)
+        original_ime = device_factory.detect_and_set_adb_keyboard(self.device_id)
         time.sleep(TIMING_CONFIG.action.keyboard_switch_delay)
 
         # Clear existing text and type new text
-        clear_text(self.device_id)
+        device_factory.clear_text(self.device_id)
         time.sleep(TIMING_CONFIG.action.text_clear_delay)
 
         # Handle multiline text by splitting on newlines
@@ -174,7 +167,7 @@ class ActionHandler:
             lines = text.split('\n')
             for i, line in enumerate(lines):
                 if line:  # Only type non-empty lines
-                    type_text(line, self.device_id)
+                    device_factory.type_text(line, self.device_id)
                     time.sleep(0.01)
 
                 # Send ENTER key between lines (not after the last line)
@@ -182,11 +175,11 @@ class ActionHandler:
                     self._send_keyevent("KEYCODE_ENTER")
                     time.sleep(0.01)
         else:
-            type_text(text, self.device_id)
+            device_factory.type_text(text, self.device_id)
             time.sleep(TIMING_CONFIG.action.text_input_delay)
 
         # Restore original keyboard
-        restore_keyboard(original_ime, self.device_id)
+        device_factory.restore_keyboard(original_ime, self.device_id)
         time.sleep(TIMING_CONFIG.action.keyboard_restore_delay)
 
         return ActionResult(True, False)
@@ -202,17 +195,20 @@ class ActionHandler:
         start_x, start_y = self._convert_relative_to_absolute(start, width, height)
         end_x, end_y = self._convert_relative_to_absolute(end, width, height)
 
-        swipe(start_x, start_y, end_x, end_y, device_id=self.device_id)
+        device_factory = get_device_factory()
+        device_factory.swipe(start_x, start_y, end_x, end_y, device_id=self.device_id)
         return ActionResult(True, False)
 
     def _handle_back(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle back button action."""
-        back(self.device_id)
+        device_factory = get_device_factory()
+        device_factory.back(self.device_id)
         return ActionResult(True, False)
 
     def _handle_home(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle home button action."""
-        home(self.device_id)
+        device_factory = get_device_factory()
+        device_factory.home(self.device_id)
         return ActionResult(True, False)
 
     def _handle_double_tap(self, action: dict, width: int, height: int) -> ActionResult:
@@ -222,7 +218,8 @@ class ActionHandler:
             return ActionResult(False, False, "No element coordinates")
 
         x, y = self._convert_relative_to_absolute(element, width, height)
-        double_tap(x, y, self.device_id)
+        device_factory = get_device_factory()
+        device_factory.double_tap(x, y, self.device_id)
         return ActionResult(True, False)
 
     def _handle_long_press(self, action: dict, width: int, height: int) -> ActionResult:
@@ -232,7 +229,8 @@ class ActionHandler:
             return ActionResult(False, False, "No element coordinates")
 
         x, y = self._convert_relative_to_absolute(element, width, height)
-        long_press(x, y, device_id=self.device_id)
+        device_factory = get_device_factory()
+        device_factory.long_press(x, y, device_id=self.device_id)
         return ActionResult(True, False)
 
     def _handle_wait(self, action: dict, width: int, height: int) -> ActionResult:
@@ -271,13 +269,65 @@ class ActionHandler:
 
     def _send_keyevent(self, keycode: str) -> None:
         """Send a keyevent to the device."""
-        import subprocess
-        adb_prefix = ["adb", "-s", self.device_id] if self.device_id else ["adb"]
-        subprocess.run(
-            adb_prefix + ["shell", "input", "keyevent", keycode],
-            capture_output=True,
-            text=True,
-        )
+        from phone_agent.device_factory import DeviceType, get_device_factory
+        from phone_agent.hdc.connection import _run_hdc_command
+
+        device_factory = get_device_factory()
+
+        # Handle HDC devices with HarmonyOS-specific keyEvent command
+        if device_factory.device_type == DeviceType.HDC:
+            hdc_prefix = ["hdc", "-t", self.device_id] if self.device_id else ["hdc"]
+            
+            # Map common keycodes to HarmonyOS keyEvent codes
+            # KEYCODE_ENTER (66) -> 2054 (HarmonyOS Enter key code)
+            if keycode == "KEYCODE_ENTER" or keycode == "66":
+                _run_hdc_command(
+                    hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", "2054"],
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                # For other keys, try to use the numeric code directly
+                # If keycode is a string like "KEYCODE_ENTER", convert it
+                try:
+                    # Try to extract numeric code from string or use as-is
+                    if keycode.startswith("KEYCODE_"):
+                        # For now, only handle ENTER, other keys may need mapping
+                        if "ENTER" in keycode:
+                            _run_hdc_command(
+                                hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", "2054"],
+                                capture_output=True,
+                                text=True,
+                            )
+                        else:
+                            # Fallback to ADB-style command for unsupported keys
+                            subprocess.run(
+                                hdc_prefix + ["shell", "input", "keyevent", keycode],
+                                capture_output=True,
+                                text=True,
+                            )
+                    else:
+                        # Assume it's a numeric code
+                        _run_hdc_command(
+                            hdc_prefix + ["shell", "uitest", "uiInput", "keyEvent", str(keycode)],
+                            capture_output=True,
+                            text=True,
+                        )
+                except Exception:
+                    # Fallback to ADB-style command
+                    subprocess.run(
+                        hdc_prefix + ["shell", "input", "keyevent", keycode],
+                        capture_output=True,
+                        text=True,
+                    )
+        else:
+            # ADB devices use standard input keyevent command
+            cmd_prefix = ["adb", "-s", self.device_id] if self.device_id else ["adb"]
+            subprocess.run(
+                cmd_prefix + ["shell", "input", "keyevent", keycode],
+                capture_output=True,
+                text=True,
+            )
 
     @staticmethod
     def _default_confirmation(message: str) -> bool:
