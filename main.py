@@ -402,6 +402,36 @@ Examples:
     )
 
     parser.add_argument(
+        "--thirdparty",
+        action="store_true",
+        default=os.getenv("PHONE_AGENT_THIRDPARTY", "").lower() == "true",
+        help="Use thirdparty prompt engineering for non-AutoGLM models (e.g., Qwen3-VL)",
+    )
+
+    thirdparty_thinking_group = parser.add_mutually_exclusive_group()
+    thirdparty_thinking_group.add_argument(
+        "--thirdparty-thinking",
+        dest="thirdparty_thinking",
+        action="store_true",
+        default=None,
+        help="Enable <think>/<answer> output format in thirdparty mode (default: enabled)",
+    )
+    thirdparty_thinking_group.add_argument(
+        "--thirdparty-no-thinking",
+        dest="thirdparty_thinking",
+        action="store_false",
+        default=None,
+        help="Disable <think>/<answer> output format in thirdparty mode (fallback to action-only)",
+    )
+
+    parser.add_argument(
+        "--no-compress-image",
+        action="store_true",
+        default=os.getenv("PHONE_AGENT_NO_COMPRESS_IMAGE", "").lower() == "true",
+        help="Disable screenshot compression (useful if UI recognition is poor in thirdparty mode)",
+    )
+
+    parser.add_argument(
         "--device-type",
         type=str,
         choices=["adb", "hdc"],
@@ -542,7 +572,17 @@ def main():
         device_id=args.device_id,
         verbose=not args.quiet,
         lang=args.lang,
+        use_thirdparty_prompt=args.thirdparty,
+        thirdparty_thinking=(
+            True
+            if args.thirdparty and args.thirdparty_thinking is None
+            else bool(args.thirdparty_thinking)
+        ),
     )
+
+    # 第三方模型需要压缩图片（某些 API 对大图片敏感）
+    if args.thirdparty and not args.no_compress_image:
+        os.environ["PHONE_AGENT_COMPRESS_IMAGE"] = "true"
 
     # Create agent
     agent = PhoneAgent(
@@ -559,6 +599,8 @@ def main():
     print(f"Max Steps: {agent_config.max_steps}")
     print(f"Language: {agent_config.lang}")
     print(f"Device Type: {args.device_type.upper()}")
+    if args.thirdparty:
+        print("Prompt Mode: 第三方模型适配 (Thirdparty)")
 
     # Show device info
     device_factory = get_device_factory()

@@ -191,24 +191,45 @@ class ModelClient:
         Returns:
             Tuple of (thinking, action).
         """
+        # 清理常见的 XML 标签
+        def clean_tags(text: str) -> str:
+            for tag in ["<think>", "</think>", "<tool_call>", "</tool_call>",
+                       "<answer>", "</answer>", "\n"]:
+                text = text.replace(tag, " ")
+            return text.strip()
+
         # Rule 1: Check for finish(message=
         if "finish(message=" in content:
             parts = content.split("finish(message=", 1)
-            thinking = parts[0].strip()
-            action = "finish(message=" + parts[1]
+            thinking = clean_tags(parts[0])
+            # 提取 finish 动作，清理尾部标签
+            action_part = parts[1]
+            # 找到闭合括号
+            if ")" in action_part:
+                paren_idx = action_part.find(")")
+                action = "finish(message=" + action_part[:paren_idx + 1]
+            else:
+                action = "finish(message=" + clean_tags(action_part)
             return thinking, action
 
         # Rule 2: Check for do(action=
         if "do(action=" in content:
             parts = content.split("do(action=", 1)
-            thinking = parts[0].strip()
-            action = "do(action=" + parts[1]
+            thinking = clean_tags(parts[0])
+            # 提取 do 动作，清理尾部标签
+            action_part = parts[1]
+            # 找到闭合括号
+            if ")" in action_part:
+                paren_idx = action_part.rfind(")")
+                action = "do(action=" + action_part[:paren_idx + 1]
+            else:
+                action = "do(action=" + clean_tags(action_part)
             return thinking, action
 
         # Rule 3: Fallback to legacy XML tag parsing
         if "<answer>" in content:
             parts = content.split("<answer>", 1)
-            thinking = parts[0].replace("<think>", "").replace("</think>", "").strip()
+            thinking = clean_tags(parts[0])
             action = parts[1].replace("</answer>", "").strip()
             return thinking, action
 
@@ -238,13 +259,17 @@ class MessageBuilder:
         Returns:
             Message dictionary.
         """
+        import os
         content = []
 
         if image_base64:
+            # 根据是否启用压缩决定 MIME 类型
+            compress = os.environ.get("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true"
+            mime_type = "image/jpeg" if compress else "image/png"
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                    "image_url": {"url": f"data:{mime_type};base64,{image_base64}"},
                 }
             )
 

@@ -7,6 +7,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import Tuple
 
 from PIL import Image
@@ -69,9 +70,33 @@ def get_screenshot(device_id: str | None = None, timeout: int = 10) -> Screensho
         img = Image.open(temp_path)
         width, height = img.size
 
+        # 检查是否需要压缩（用于第三方模型）
+        compress = os.environ.get("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true"
+
         buffered = BytesIO()
-        img.save(buffered, format="PNG")
-        base64_data = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        if compress:
+            # 压缩图片：缩小尺寸并转换为 JPEG
+            target_height = 1200
+            target_width = int(width * target_height / height)
+            img_resized = img.convert('RGB').resize((target_width, target_height), Image.LANCZOS)
+            img_resized.save(buffered, format="JPEG", quality=70)
+        else:
+            img.save(buffered, format="PNG")
+
+        image_bytes = buffered.getvalue()
+        base64_data = base64.b64encode(image_bytes).decode("utf-8")
+
+        # Optional debug: save the exact image bytes sent to the model.
+        # Set PHONE_AGENT_SCREENSHOT_DUMP_DIR to enable.
+        dump_dir = os.environ.get("PHONE_AGENT_SCREENSHOT_DUMP_DIR", "").strip()
+        if dump_dir:
+            try:
+                Path(dump_dir).mkdir(parents=True, exist_ok=True)
+                ext = "jpg" if compress else "png"
+                out_path = Path(dump_dir) / f"screen_{uuid.uuid4()}.{ext}"
+                out_path.write_bytes(image_bytes)
+            except Exception:
+                pass
 
         # Cleanup
         os.remove(temp_path)

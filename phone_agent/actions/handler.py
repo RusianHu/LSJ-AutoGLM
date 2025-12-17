@@ -1,6 +1,7 @@
 """Action handler for processing AI model outputs."""
 
 import ast
+import json
 import re
 import subprocess
 import time
@@ -344,45 +345,249 @@ def parse_action(response: str) -> dict[str, Any]:
     """
     print(f"Parsing action: {response}")
     try:
-        response = response.strip()
-        if response.startswith('do(action="Type"') or response.startswith(
-            'do(action="Type_Name"'
-        ):
-            text = response.split("text=", 1)[1][1:-2]
-            action = {"_metadata": "do", "action": "Type", "text": text}
-            return action
-        elif response.startswith("do"):
-            # Use AST parsing instead of eval for safety
+        def _split_top_level_args(arg_str: str) -> list[str]:
+            parts: list[str] = []
+            buf: list[str] = []
+            depth_square = 0
+            depth_curly = 0
+            in_quote: str | None = None
+            escape = False
+
+            for ch in arg_str:
+                if escape:
+                    buf.append(ch)
+                    escape = False
+                    continue
+
+                if ch == "\\":
+                    buf.append(ch)
+                    escape = True
+                    continue
+
+                if in_quote:
+                    buf.append(ch)
+                    if ch == in_quote:
+                        in_quote = None
+                    continue
+
+                if ch in ("'", '"'):
+                    buf.append(ch)
+                    in_quote = ch
+                    continue
+
+                if ch == "[":
+                    depth_square += 1
+                elif ch == "]":
+                    depth_square = max(0, depth_square - 1)
+                elif ch == "{":
+                    depth_curly += 1
+                elif ch == "}":
+                    depth_curly = max(0, depth_curly - 1)
+
+                if ch == "," and depth_square == 0 and depth_curly == 0:
+                    part = "".join(buf).strip()
+                    if part:
+                        parts.append(part)
+                    buf = []
+                    continue
+
+                buf.append(ch)
+
+            tail = "".join(buf).strip()
+            if tail:
+                parts.append(tail)
+            return parts
+
+        def _parse_loose_string(value: str) -> str:
+            v = (value or "").strip()
+            if not v:
+                return ""
+            if v[0] in ("'", '"'):
+                q = v[0]
+                end = v.rfind(q)
+                inner = v[1:end] if end > 0 else v[1:]
+                return (
+                    inner.replace("\\n", "\n")
+                    .replace("\\r", "\r")
+                    .replace("\\t", "\t")
+                    .strip()
+                )
+            return v
+
+        def _fallback_parse_call(call_text: str) -> dict[str, Any] | None:
+            t = (call_text or "").strip()
+            if not (t.startswith("do(") or t.startswith("finish(")):
+                return None
+
+            open_idx = t.find("(")
+            close_idx = t.rfind(")")
+            if open_idx < 0 or close_idx < 0 or close_idx <= open_idx:
+                return None
+
+            fn = t[:open_idx].strip()
+            args_str = t[open_idx + 1 : close_idx].strip()
+            metadata = "do" if fn == "do" else "finish"
+            payload: dict[str, Any] = {"_metadata": metadata}
+
+            if not args_str:
+                return payload
+
+            for part in _split_top_level_args(args_str):
+                if not part:
+                    continue
+                if "=" in part:
+                    key, raw_val = part.split("=", 1)
+                elif ":" in part:
+                    key, raw_val = part.split(":", 1)
+                else:
+                    continue
+
+                key = key.strip().strip('"').strip("'")
+                raw_val = raw_val.strip()
+
+                if key in ("message", "text", "app", "action", "duration"):
+                    # Be tolerant of unescaped quotes inside the string (common model error),
+                    # by extracting using the last matching quote.
+                    payload[key] = _parse_loose_string(raw_val)
+                    continue
+
+                try:
+                    safe_val = (
+                        raw_val.replace("\n", "\\n")
+                        .replace("\r", "\\r")
+                        .replace("\t", "\\t")
+                    )
+                    payload[key] = ast.literal_eval(safe_val)
+                except Exception:
+                    payload[key] = _parse_loose_string(raw_val)
+
+            return payload
+
+        def _strip_wrappers(text: str) -> str:
+            t = text.strip()
+
+            # Remove common XML tags that some models output
+            for tag in [
+                "<think>",
+                "</think>",
+                "<answer>",
+                "</answer>",
+                "<tool_call>",
+                "</tool_call>",
+            ]:
+                t = t.replace(tag, " ")
+
+            # Unwrap markdown code fences if present
+            fence_match = re.search(r"```(?:python)?\s*(.*?)\s*```", t, re.DOTALL)
+            if fence_match:
+                t = fence_match.group(1).strip()
+            return t.strip()
+
+        def _extract_first_call(text: str) -> str:
+            candidates = []
+            for prefix in ("do(", "finish("):
+                idx = text.find(prefix)
+                if idx != -1:
+                    candidates.append((idx, prefix))
+            if not candidates:
+                return text
+
+            start_idx, _ = min(candidates, key=lambda x: x[0])
+            in_quote: str | None = None
+            escaped = False
+            depth = 0
+            for i in range(start_idx, len(text)):
+                ch = text[i]
+                if in_quote:
+                    if escaped:
+                        escaped = False
+                        continue
+                    if ch == "\\":
+                        escaped = True
+                        continue
+                    if ch == in_quote:
+                        in_quote = None
+                    continue
+
+                if ch in ("'", '"'):
+                    in_quote = ch
+                    continue
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start_idx : i + 1].strip()
+
+            return text[start_idx:].strip()
+
+        def _normalize_common_typos(text: str) -> str:
+            t = text.strip()
+            t = (
+                t.replace("“", '"')
+                .replace("”", '"')
+                .replace("‘", "'")
+                .replace("’", "'")
+                .replace("，", ",")
+                .replace("：", ":")
+            )
+
+            # Fix JSON-style or malformed keyword separators in function calls
+            # e.g. element": [1,2]  or  "element": [1,2]  or  element: [1,2]
+            keys = r"(element|start|end|app|text|message|duration)"
+            t = re.sub(rf'"{keys}"\s*:\s*', r"\1=", t)
+            t = re.sub(rf"\b{keys}\"\s*:\s*", r"\1=", t)
+            t = re.sub(rf"\b{keys}\s*:\s*", r"\1=", t)
+
+            # Occasionally models output a trailing semicolon
+            t = t.rstrip(";")
+            return t
+
+        raw = response
+        response = _strip_wrappers(raw)
+
+        # JSON action payload (some thirdparty models output dict directly)
+        if response.startswith("{") and response.endswith("}"):
             try:
-                # Escape special characters (newlines, tabs, etc.) for valid Python syntax
-                response = response.replace('\n', '\\n')
-                response = response.replace('\r', '\\r')
-                response = response.replace('\t', '\\t')
+                payload = json.loads(response)
+                if isinstance(payload, dict):
+                    if "_metadata" not in payload:
+                        payload["_metadata"] = (
+                            "finish" if "message" in payload and "action" not in payload else "do"
+                        )
+                    return payload
+            except json.JSONDecodeError:
+                pass
 
-                tree = ast.parse(response, mode="eval")
-                if not isinstance(tree.body, ast.Call):
-                    raise ValueError("Expected a function call")
+        response = _extract_first_call(response)
+        response = _normalize_common_typos(response)
 
-                call = tree.body
-                # Extract keyword arguments safely
-                action = {"_metadata": "do"}
-                for keyword in call.keywords:
-                    key = keyword.arg
-                    value = ast.literal_eval(keyword.value)
-                    action[key] = value
+        # Use AST parsing instead of eval for safety
+        try:
+            # Escape special characters (newlines, tabs, etc.) for valid Python syntax
+            safe = response.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
 
-                return action
-            except (SyntaxError, ValueError) as e:
-                raise ValueError(f"Failed to parse do() action: {e}")
+            tree = ast.parse(safe, mode="eval")
+            if not isinstance(tree.body, ast.Call):
+                raise ValueError("Expected a function call")
 
-        elif response.startswith("finish"):
-            action = {
-                "_metadata": "finish",
-                "message": response.replace("finish(message=", "")[1:-2],
-            }
-        else:
-            raise ValueError(f"Failed to parse action: {response}")
-        return action
+            call = tree.body
+            if not isinstance(call.func, ast.Name) or call.func.id not in ("do", "finish"):
+                raise ValueError("Expected do(...) or finish(...)")
+
+            action: dict[str, Any] = {"_metadata": "do" if call.func.id == "do" else "finish"}
+            for keyword in call.keywords:
+                if keyword.arg is None:
+                    raise ValueError("Unsupported **kwargs in action call")
+                action[keyword.arg] = ast.literal_eval(keyword.value)
+
+            return action
+        except (SyntaxError, ValueError) as e:
+            # Fallback: tolerate common model mistakes like unescaped quotes inside message/text.
+            fallback = _fallback_parse_call(response)
+            if fallback is not None:
+                return fallback
+            raise ValueError(f"Failed to parse action call: {e}. Raw: {raw!r}")
     except Exception as e:
         raise ValueError(f"Failed to parse action: {e}")
 
