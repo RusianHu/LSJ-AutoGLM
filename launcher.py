@@ -140,7 +140,7 @@ API_PRESETS = {
         "use_thirdparty_prompt": False,      # 标记需要使用第三方提示词
         "allow_empty_key": _env_truthy("OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY", default=True),
         "compatible": True,
-        "note": "部分本地服务允许不填 Key；如服务使用 /v1 路径会自动补全",
+        "note": "可选 Key：OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY；部分本地服务允许不填 Key",
     }
 }
 
@@ -589,6 +589,9 @@ def apply_api_preset(preset_key: str) -> None:
     preset = API_PRESETS[preset_key]
     CONFIG.base_url = preset["base_url"]
     CONFIG.model = preset["model"]
+    # Avoid leaking keys across presets; start clean and then apply preset-specific keys.
+    CONFIG.api_key = ""
+    CONFIG.backup_api_key = ""
 
     # 从环境变量注入预设 Key（不在代码中存储敏感信息）
     if preset_key == "modelscope":
@@ -602,12 +605,14 @@ def apply_api_preset(preset_key: str) -> None:
         zhipu_key = os.environ.get("OPEN_AUTOGLM_ZHIPU_API_KEY", "").strip()
         if zhipu_key:
             CONFIG.api_key = zhipu_key
-            CONFIG.backup_api_key = ""
     elif preset_key == "newapi":
         newapi_key = os.environ.get("OPEN_AUTOGLM_NEWAPI_API_KEY", "").strip()
         if newapi_key:
             CONFIG.api_key = newapi_key
-            CONFIG.backup_api_key = ""
+    elif preset_key == "local_openai":
+        local_key = os.environ.get("OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY", "").strip()
+        if local_key:
+            CONFIG.api_key = local_key
 
     # 允许空 Key 的本地服务
     if preset.get("allow_empty_key", False) and not (CONFIG.api_key or "").strip():
