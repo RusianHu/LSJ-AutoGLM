@@ -57,6 +57,11 @@ screenshots/
 .open-autoglm-launcher.json
 .open-autoglm-launcher.json.tmp
 
+# Env files (secrets/config)
+.env
+.env.*
+!.env.example
+
 # Keep old files during transition
 call_model.py
 app_package_name.py

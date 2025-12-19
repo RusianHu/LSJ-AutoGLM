@@ -12,7 +12,7 @@ import shutil
 import time
 import json
 import getpass
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import Optional, Tuple, List, Union, Any, Dict
 
@@ -20,6 +20,73 @@ from typing import Optional, Tuple, List, Union, Any, Dict
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 if sys.platform == 'win32':
     os.system('chcp 65001 >nul 2>&1')
+
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _load_env_file(env_path: Union[str, Path], override: bool = False) -> Tuple[bool, str]:
+    """
+    Load a minimal .env file into process environment.
+
+    - Supports KEY=VALUE (VALUE may be quoted).
+    - Ignores blank lines and lines starting with '#'.
+    - By default does NOT override existing environment variables.
+    """
+    try:
+        p = Path(env_path).expanduser().resolve()
+    except Exception:
+        p = Path(env_path)
+
+    if not p.exists() or not p.is_file():
+        return False, f".env 文件不存在: {p}"
+
+    try:
+        for raw_line in p.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+
+            if not key:
+                continue
+
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+
+            if not override and key in os.environ:
+                continue
+
+            os.environ[key] = value
+        return True, f".env 已加载: {p}"
+    except Exception as e:
+        return False, f".env 读取失败: {type(e).__name__}: {e}"
+
+
+def allow_config_file_secrets() -> bool:
+    return _env_truthy("OPEN_AUTOGLM_ALLOW_CONFIG_FILE_SECRETS", default=False)
+
+
+# 尝试加载 .env（用于把敏感信息/配置从脚本中剥离）
+# 仅在环境变量未设置时生效（避免覆盖用户的系统环境变量）
+_env_path = os.environ.get("OPEN_AUTOGLM_ENV_PATH", ".env").strip() or ".env"
+_ENV_LOAD_OK, _ENV_LOAD_MSG = _load_env_file(_env_path, override=False)
+if _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
+    print(f"[debug] {_ENV_LOAD_MSG}")
+
 
 # ============== 配置 ==============
 # 配置文件路径（用于持久化 launcher 配置）
@@ -34,42 +101,44 @@ DEFAULT_ADB_PORT = 5555
 ADB_KEYBOARD_APK_ENV = "OPEN_AUTOGLM_ADBKEYBOARD_APK"
 ADB_KEYBOARD_APK_NAME = "ADBKeyboard.apk"
 
-# 预设的 API 配置
+# 预设的 API 配置（不包含任何硬编码敏感信息）
+def _env_str(name: str, default: str = "") -> str:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip()
+
+
 API_PRESETS = {
     "modelscope": {
         "name": "ModelScope (魔搭社区)",
         "base_url": "https://api-inference.modelscope.cn/v1",
         "model": "ZhipuAI/AutoGLM-Phone-9B",
-        "api_keys": [
-            "REDACTED_MODELSCOPE_KEY_1",
-            "REDACTED_MODELSCOPE_KEY_2"
-        ],
-        "compatible": True
+        "compatible": True,
+        "note": "API Key 请在 .env 中设置 OPEN_AUTOGLM_MODELSCOPE_API_KEY/OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY",
     },
     "zhipu": {
         "name": "智谱 BigModel",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "autoglm-phone",
-        "api_keys": [],
-        "compatible": True
+        "compatible": True,
+        "note": "API Key 请在 .env 中设置 OPEN_AUTOGLM_ZHIPU_API_KEY",
     },
     "newapi": {
         "name": "第三方API",
-        "base_url": "https://ai.yanshanlaosiji.top/v1",
-        "model": "Qwen/Qwen3-VL-235B-A22B-Instruct",
-        "api_keys": ["REDACTED_THIRDPARTY_KEY"],
+        "base_url": _env_str("OPEN_AUTOGLM_NEWAPI_BASE_URL", "https://ai.yanshanlaosiji.top/v1"),
+        "model": _env_str("OPEN_AUTOGLM_NEWAPI_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct"),
         "compatible": True,                 # 使用第三方提示词工程后兼容
-        "use_thirdparty_prompt": True,      # 标记需要使用第三方提示词
-        "thirdparty_thinking": True,        # 允许第三方模型按规范输出 <think>/<answer>
-        "note": "使用提示词工程适配"
+        "use_thirdparty_prompt": _env_truthy("OPEN_AUTOGLM_NEWAPI_USE_THIRDPARTY_PROMPT", default=True),
+        "thirdparty_thinking": _env_truthy("OPEN_AUTOGLM_NEWAPI_THIRDPARTY_THINKING", default=True),
+        "note": "API Key 请在 .env 中设置 OPEN_AUTOGLM_NEWAPI_API_KEY",
     },
     "local_openai": {
         "name": "本地 OpenAI 兼容服务",
-        "base_url": "http://127.0.0.1:8080",
-        "model": "gpt-5.2",
-        "api_keys": ["REDACTED_LOCAL_KEY"],
-        "use_thirdparty_prompt": True,      # 标记需要使用第三方提示词
-        "allow_empty_key": True,
+        "base_url": _env_str("OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL", "http://127.0.0.1:1234"),
+        "model": _env_str("OPEN_AUTOGLM_LOCAL_OPENAI_MODEL", "autoglm-phone-9b"),
+        "use_thirdparty_prompt": False,      # 标记需要使用第三方提示词
+        "allow_empty_key": _env_truthy("OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY", default=True),
         "compatible": True,
         "note": "部分本地服务允许不填 Key；如服务使用 /v1 路径会自动补全",
     }
@@ -77,24 +146,51 @@ API_PRESETS = {
 
 @dataclass
 class Config:
-    """API 和设备配置"""
-    # ModelScope API (默认)
-    base_url: str = "https://api-inference.modelscope.cn/v1"
-    model: str = "ZhipuAI/AutoGLM-Phone-9B"
-    api_key: str = "REDACTED_MODELSCOPE_KEY_1"
-    # 备用 Key
-    backup_api_key: str = "REDACTED_MODELSCOPE_KEY_2"
+    """API 和设备配置（默认从 .env / 环境变量读取）"""
+
+    base_url: str = field(
+        default_factory=lambda: os.environ.get(
+            "OPEN_AUTOGLM_BASE_URL", "https://api-inference.modelscope.cn/v1"
+        ).strip()
+    )
+    model: str = field(
+        default_factory=lambda: os.environ.get(
+            "OPEN_AUTOGLM_MODEL", "ZhipuAI/AutoGLM-Phone-9B"
+        ).strip()
+    )
+
+    # 敏感信息：从环境变量读取，默认留空
+    api_key: str = field(default_factory=lambda: os.environ.get("OPEN_AUTOGLM_API_KEY", "").strip())
+    backup_api_key: str = field(
+        default_factory=lambda: os.environ.get("OPEN_AUTOGLM_BACKUP_API_KEY", "").strip()
+    )
+
     # 设备
-    device_id: Optional[str] = None
+    device_id: Optional[str] = field(
+        default_factory=lambda: (os.environ.get("OPEN_AUTOGLM_DEVICE_ID", "").strip() or None)
+    )
+
     # 语言
-    lang: str = "cn"
-    max_steps: int = 100
+    lang: str = field(default_factory=lambda: os.environ.get("OPEN_AUTOGLM_LANG", "cn").strip() or "cn")
+
+    max_steps: int = field(
+        default_factory=lambda: int(os.environ.get("OPEN_AUTOGLM_MAX_STEPS", "100").strip() or "100")
+    )
+
     # 第三方模型提示词工程
-    use_thirdparty_prompt: bool = False
+    use_thirdparty_prompt: bool = field(
+        default_factory=lambda: _env_truthy("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", default=False)
+    )
+
     # 第三方模式启用思考（规范输出 <think>/<answer>；部分中转站不兼容可关闭）
-    thirdparty_thinking: bool = True
+    thirdparty_thinking: bool = field(
+        default_factory=lambda: _env_truthy("OPEN_AUTOGLM_THIRDPARTY_THINKING", default=True)
+    )
+
     # 第三方模式截图压缩（部分模型/中转站对大图敏感；但压缩过度会影响识别）
-    compress_image: bool = False
+    compress_image: bool = field(
+        default_factory=lambda: _env_truthy("OPEN_AUTOGLM_COMPRESS_IMAGE", default=False)
+    )
 
 CONFIG = Config()
 _SKIP_CLEAR_ONCE = False
@@ -189,7 +285,12 @@ def find_adb_keyboard_apk() -> Optional[Path]:
     return None
 
 def load_config_from_file() -> Tuple[bool, str]:
-    """从本地文件加载配置（可选）"""
+    """
+    从本地文件加载配置（可选）
+
+    默认不从配置文件读取敏感信息（API Key），防止无意间落盘/共享导致泄露；
+    如确需允许，请设置环境变量 OPEN_AUTOGLM_ALLOW_CONFIG_FILE_SECRETS=true
+    """
     if not CONFIG_PATH.exists():
         return False, "未找到配置文件"
     try:
@@ -201,10 +302,20 @@ def load_config_from_file() -> Tuple[bool, str]:
         CONFIG.base_url = data["base_url"].strip()
     if isinstance(data.get("model"), str) and data["model"].strip():
         CONFIG.model = data["model"].strip()
-    if isinstance(data.get("api_key"), str):
-        CONFIG.api_key = data["api_key"].strip()
-    if isinstance(data.get("backup_api_key"), str):
-        CONFIG.backup_api_key = data["backup_api_key"].strip()
+
+    if (not allow_config_file_secrets()) and _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
+        if isinstance(data.get("api_key"), str) or isinstance(data.get("backup_api_key"), str):
+            print(
+                "[debug] 已忽略配置文件中的 api_key/backup_api_key "
+                "(OPEN_AUTOGLM_ALLOW_CONFIG_FILE_SECRETS=false)"
+            )
+
+    if allow_config_file_secrets():
+        if isinstance(data.get("api_key"), str):
+            CONFIG.api_key = data["api_key"].strip()
+        if isinstance(data.get("backup_api_key"), str):
+            CONFIG.backup_api_key = data["backup_api_key"].strip()
+
     if isinstance(data.get("device_id"), str):
         CONFIG.device_id = data["device_id"].strip() or None
     if data.get("lang") in ("cn", "en"):
@@ -225,12 +336,23 @@ def load_config_from_file() -> Tuple[bool, str]:
     return True, "配置已加载"
 
 def save_config_to_file() -> Tuple[bool, str]:
-    """保存配置到本地文件（包含 API Key，请注意本机安全）"""
+    """
+    保存配置到本地文件
+
+    默认不落盘保存敏感信息（API Key）；
+    如确需允许，请设置环境变量 OPEN_AUTOGLM_ALLOW_CONFIG_FILE_SECRETS=true
+    """
     try:
         payload = asdict(CONFIG)
+        if not allow_config_file_secrets():
+            payload.pop("api_key", None)
+            payload.pop("backup_api_key", None)
+
         tmp_path = CONFIG_PATH.with_suffix(CONFIG_PATH.suffix + ".tmp")
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(CONFIG_PATH)
+        if allow_config_file_secrets():
+            return True, f"配置已保存(包含敏感字段): {CONFIG_PATH}"
         return True, f"配置已保存: {CONFIG_PATH}"
     except Exception as e:
         return False, f"保存失败: {type(e).__name__}: {e}"
@@ -468,21 +590,40 @@ def apply_api_preset(preset_key: str) -> None:
     CONFIG.base_url = preset["base_url"]
     CONFIG.model = preset["model"]
 
-    api_keys = preset.get("api_keys") or []
-    if api_keys:
-        CONFIG.api_key = api_keys[0]
-        CONFIG.backup_api_key = api_keys[1] if len(api_keys) > 1 else ""
-    else:
-        if preset.get("allow_empty_key", False):
-            CONFIG.api_key = ""
+    # 从环境变量注入预设 Key（不在代码中存储敏感信息）
+    if preset_key == "modelscope":
+        modelscope_key = os.environ.get("OPEN_AUTOGLM_MODELSCOPE_API_KEY", "").strip()
+        modelscope_backup = os.environ.get("OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY", "").strip()
+        if modelscope_key:
+            CONFIG.api_key = modelscope_key
+        if modelscope_backup:
+            CONFIG.backup_api_key = modelscope_backup
+    elif preset_key == "zhipu":
+        zhipu_key = os.environ.get("OPEN_AUTOGLM_ZHIPU_API_KEY", "").strip()
+        if zhipu_key:
+            CONFIG.api_key = zhipu_key
             CONFIG.backup_api_key = ""
+    elif preset_key == "newapi":
+        newapi_key = os.environ.get("OPEN_AUTOGLM_NEWAPI_API_KEY", "").strip()
+        if newapi_key:
+            CONFIG.api_key = newapi_key
+            CONFIG.backup_api_key = ""
+
+    # 允许空 Key 的本地服务
+    if preset.get("allow_empty_key", False) and not (CONFIG.api_key or "").strip():
+        CONFIG.api_key = ""
+        CONFIG.backup_api_key = ""
 
     CONFIG.use_thirdparty_prompt = preset.get("use_thirdparty_prompt", False)
     CONFIG.thirdparty_thinking = preset.get("thirdparty_thinking", True)
     note = preset.get("note", "")
     print(f"  ✅ 已切换到 {preset['name']}")
-    if preset_key == "zhipu":
-        print("  ⚠️  请手动设置智谱 API Key (配置设置 → API Key)")
+    if preset_key == "zhipu" and not (CONFIG.api_key or "").strip():
+        print("  ⚠️  未检测到智谱 API Key：请在 .env 设置 OPEN_AUTOGLM_ZHIPU_API_KEY 或在配置设置中手动输入")
+    if preset_key == "modelscope" and not (CONFIG.api_key or "").strip():
+        print("  ⚠️  未检测到 ModelScope API Key：请在 .env 设置 OPEN_AUTOGLM_MODELSCOPE_API_KEY 或在配置设置中手动输入")
+    if preset_key == "newapi" and not (CONFIG.api_key or "").strip():
+        print("  ⚠️  未检测到第三方 API Key：请在 .env 设置 OPEN_AUTOGLM_NEWAPI_API_KEY 或在配置设置中手动输入")
     if CONFIG.use_thirdparty_prompt:
         print("  📝 已自动启用第三方模型提示词工程")
     if note:
@@ -678,6 +819,27 @@ def run_agent_interactive():
         if not CONFIG.compress_image:
             cmd.append("--no-compress-image")
 
+    if _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
+        sanitized = []
+        redact_next = False
+        for part in cmd:
+            if redact_next:
+                sanitized.append("<redacted>")
+                redact_next = False
+                continue
+            if part == "--apikey":
+                sanitized.append(part)
+                redact_next = True
+                continue
+            sanitized.append(str(part))
+        print(
+            "[debug] launch flags: "
+            f"thirdparty={CONFIG.use_thirdparty_prompt} "
+            f"thirdparty_thinking={CONFIG.thirdparty_thinking} "
+            f"compress_image={CONFIG.compress_image}"
+        )
+        print(f"[debug] cmd: {' '.join(sanitized)}")
+
     try:
         subprocess.run(cmd)
     except KeyboardInterrupt:
@@ -713,6 +875,27 @@ def run_single_task():
         cmd.append("--thirdparty-thinking" if CONFIG.thirdparty_thinking else "--thirdparty-no-thinking")
         if not CONFIG.compress_image:
             cmd.append("--no-compress-image")
+
+    if _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
+        sanitized = []
+        redact_next = False
+        for part in cmd:
+            if redact_next:
+                sanitized.append("<redacted>")
+                redact_next = False
+                continue
+            if part == "--apikey":
+                sanitized.append(part)
+                redact_next = True
+                continue
+            sanitized.append(str(part))
+        print(
+            "[debug] launch flags: "
+            f"thirdparty={CONFIG.use_thirdparty_prompt} "
+            f"thirdparty_thinking={CONFIG.thirdparty_thinking} "
+            f"compress_image={CONFIG.compress_image}"
+        )
+        print(f"[debug] cmd: {' '.join(sanitized)}")
 
     try:
         subprocess.run(cmd)

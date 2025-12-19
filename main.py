@@ -425,10 +425,17 @@ Examples:
     )
 
     parser.add_argument(
+        "--compress-image",
+        action="store_true",
+        default=os.getenv("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true",
+        help="Enable screenshot compression in thirdparty mode (some APIs are sensitive to large images)",
+    )
+
+    parser.add_argument(
         "--no-compress-image",
         action="store_true",
         default=os.getenv("PHONE_AGENT_NO_COMPRESS_IMAGE", "").lower() == "true",
-        help="Disable screenshot compression (useful if UI recognition is poor in thirdparty mode)",
+        help="Disable screenshot compression in thirdparty mode (default in thirdparty mode; useful if UI recognition is poor)",
     )
 
     parser.add_argument(
@@ -580,9 +587,38 @@ def main():
         ),
     )
 
-    # 第三方模型需要压缩图片（某些 API 对大图片敏感）
-    if args.thirdparty and not args.no_compress_image:
-        os.environ["PHONE_AGENT_COMPRESS_IMAGE"] = "true"
+    # 第三方模式截图压缩开关：
+    # - CLI 默认：不压缩（与 launcher.py 行为一致）
+    # - 显式开启：--compress-image 或 PHONE_AGENT_COMPRESS_IMAGE=true
+    # - 显式关闭：--no-compress-image 或 PHONE_AGENT_NO_COMPRESS_IMAGE=true
+    if args.thirdparty:
+        argv = set(sys.argv[1:])
+        flag_compress = "--compress-image" in argv
+        flag_no_compress = "--no-compress-image" in argv
+
+        if flag_compress and flag_no_compress:
+            print("Error: --compress-image and --no-compress-image cannot be used together.")
+            sys.exit(2)
+
+        env_no_compress = os.getenv("PHONE_AGENT_NO_COMPRESS_IMAGE", "").lower() == "true"
+        env_compress = os.getenv("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true"
+
+        if flag_compress:
+            compress = True
+        elif flag_no_compress:
+            compress = False
+        elif env_no_compress:
+            compress = False
+        elif env_compress:
+            compress = True
+        else:
+            compress = False
+
+        if compress:
+            os.environ["PHONE_AGENT_COMPRESS_IMAGE"] = "true"
+        else:
+            if os.environ.get("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true":
+                os.environ.pop("PHONE_AGENT_COMPRESS_IMAGE", None)
 
     # Create agent
     agent = PhoneAgent(
