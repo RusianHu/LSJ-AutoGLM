@@ -1155,6 +1155,13 @@ def main():
     """主函数"""
     print("  正在初始化...")
 
+    # 检查是否有默认预设配置
+    default_preset = os.environ.get("OPEN_AUTOGLM_DEFAULT_PRESET", "").strip().lower()
+    if default_preset and default_preset in API_PRESETS:
+        # 如果配置了默认预设，则应用它
+        # 注意：这会重置 API Key，需要配合对应的 OPEN_AUTOGLM_{PRESET}_API_KEY 使用
+        apply_api_preset(default_preset)
+
     # 尝试从文件恢复配置（可选）
     load_config_from_file()
 
