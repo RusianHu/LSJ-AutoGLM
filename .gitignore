@@ -67,4 +67,5 @@ call_model.py
 app_package_name.py
 
 .claude/
+AGENTS.md
 .venv
