@@ -55,7 +55,7 @@ def get_current_app(device_id: str | None = None) -> str:
                 current_bundle = match.group(1)
 
         # Check if this mission is in FOREGROUND state
-        if "state #foreground" in line.lower():
+        if "state #FOREGROUND" in line or "state #foreground" in line.lower():
             if current_bundle:
                 foreground_bundle = current_bundle
                 break  # Found the foreground app, no need to continue

@@ -1,5 +1,6 @@
 """Input utilities for HarmonyOS device text input."""
 
+import base64
 import subprocess
 from typing import Optional
 

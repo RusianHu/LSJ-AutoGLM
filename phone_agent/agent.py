@@ -24,16 +24,10 @@ class AgentConfig:
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
-    use_thirdparty_prompt: bool = False  # 使用第三方模型提示词
-    thirdparty_thinking: bool = True  # 第三方模式也使用 <think>/<answer> 规范输出
 
     def __post_init__(self):
         if self.system_prompt is None:
-            self.system_prompt = get_system_prompt(
-                self.lang,
-                self.use_thirdparty_prompt,
-                thirdparty_thinking=self.thirdparty_thinking,
-            )
+            self.system_prompt = get_system_prompt(self.lang)
 
 
 @dataclass
@@ -199,81 +193,21 @@ class PhoneAgent:
             self._screen_unchanged_steps = 0
         self._last_screen_hash = current_hash
 
-        # If we're clearly stuck for a long time, force a manual takeover to avoid burning steps.
-        if (
-            self.agent_config.use_thirdparty_prompt
-            and self._screen_unchanged_steps >= 6
-            and self._stuck_warnings >= 2
-        ):
-            action = do(
-                action="Take_over",
-                message="检测到长时间无界面变化且动作可能循环，请手动进入目标页面（例如 QQ 钱包/余额页），完成后按回车继续。",
-            )
-            result = self.action_handler.execute(action, screenshot.width, screenshot.height)
-            return StepResult(
-                success=result.success,
-                finished=result.should_finish,
-                action=action,
-                thinking="",
-                message=result.message,
-            )
-
         # Build messages
         if is_first:
             screen_info = MessageBuilder.build_screen_info(current_app)
-
-            if self.agent_config.use_thirdparty_prompt:
-                # 第三方模型：将系统提示词嵌入用户消息（某些 API 不支持 system role）
-                text_content = f"{self.agent_config.system_prompt}\n\n---\n任务: {user_prompt}\n\n{screen_info}"
-                self._context.append(
-                    MessageBuilder.create_user_message(
-                        text=text_content, image_base64=screenshot.base64_data
-                    )
+            self._context.append(
+                MessageBuilder.create_system_message(self.agent_config.system_prompt)
+            )
+            text_content = f"{user_prompt}\n\n{screen_info}"
+            self._context.append(
+                MessageBuilder.create_user_message(
+                    text=text_content, image_base64=screenshot.base64_data
                 )
-            else:
-                # 标准模式：使用 system role
-                self._context.append(
-                    MessageBuilder.create_system_message(self.agent_config.system_prompt)
-                )
-                text_content = f"{user_prompt}\n\n{screen_info}"
-                self._context.append(
-                    MessageBuilder.create_user_message(
-                        text=text_content, image_base64=screenshot.base64_data
-                    )
-                )
+            )
         else:
             screen_info = MessageBuilder.build_screen_info(current_app)
-
-            if self.agent_config.use_thirdparty_prompt:
-                # 第三方模型：显式给出最近动作，且在卡住时要求改变策略/请求接管
-                recent = list(self._recent_action_signatures)[-6:]
-                history_text = "\n".join([f"- {s}" for s in recent]) if recent else "(无)"
-
-                stuck_hints = ""
-                is_loop = self._looks_like_loop(list(self._recent_action_signatures))
-                if self._screen_unchanged_steps >= 2 or is_loop:
-                    self._stuck_warnings += 1
-                    stuck_hints = (
-                        "\n\n你可能卡住了（界面长时间未变化或动作重复）。"
-                        "请改变策略：例如先确保在 QQ 的“我的/个人中心”页，再进入“钱包/余额”；"
-                        "必要时可尝试下拉/搜索；如需登录/验证码请输出："
-                        'do(action="Take_over", message="需要你手动登录/验证")。'
-                    )
-
-                tail_instruction = (
-                    "按规范输出 <think>/<answer>（think 尽量简短），每步只输出一个动作。"
-                    if self.agent_config.thirdparty_thinking
-                    else "只输出一个动作代码，不要解释。"
-                )
-                text_content = (
-                    f"继续执行任务。当前屏幕信息：{screen_info}\n\n"
-                    f"最近动作(供参考)：\n{history_text}"
-                    f"{stuck_hints}\n\n"
-                    f"{tail_instruction}"
-                )
-            else:
-                text_content = f"** Screen Info **\n\n{screen_info}"
-
+            text_content = f"** Screen Info **\n\n{screen_info}"
             self._context.append(
                 MessageBuilder.create_user_message(
                     text=text_content, image_base64=screenshot.base64_data
@@ -302,75 +236,25 @@ class PhoneAgent:
         self._context[-1] = MessageBuilder.remove_images_from_message(self._context[-1])
 
         # Add assistant response to context
-        if self.agent_config.use_thirdparty_prompt:
-            if self.agent_config.thirdparty_thinking:
-                self._context.append(
-                    MessageBuilder.create_assistant_message(
-                        f"<think>{response.thinking}</think><answer>{response.action}</answer>"
-                    )
-                )
-            else:
-                # 第三方模型：不使用 XML 标签，直接输出动作
-                self._context.append(MessageBuilder.create_assistant_message(response.action))
-        else:
-            self._context.append(
-                MessageBuilder.create_assistant_message(
-                    f"<think>{response.thinking}</think><answer>{response.action}</answer>"
-                )
+        self._context.append(
+            MessageBuilder.create_assistant_message(
+                f"<think>{response.thinking}</think><answer>{response.action}</answer>"
             )
+        )
 
-        # Parse action from response (retry once for thirdparty models)
-        parse_error: Exception | None = None
-        action: dict[str, Any] | None = None
-        for attempt in range(2):
-            try:
-                action = parse_action(response.action)
-                parse_error = None
-                break
-            except ValueError as e:
-                parse_error = e
-                if self.agent_config.verbose:
-                    traceback.print_exc()
-
-                # Thirdparty models are more likely to produce slightly malformed action code.
-                # Ask the model to re-output a strictly valid action once.
-                if attempt == 0 and self.agent_config.use_thirdparty_prompt:
-                    retry_text = (
-                        "上一步输出的动作代码无法解析。\n"
-                        f"原始输出: {response.action}\n"
-                        f"解析错误: {e}\n\n"
-                        "请重新输出。优先按规范使用 <think>/<answer>，但必须保证动作可解析；"
-                        "如果不支持 XML 标签，则直接输出 1 行动作代码。\n"
-                        "示例：\n"
-                        "<think>点击搜索</think><answer>do(action=\"Tap\", element=[500, 500])</answer>\n"
-                        "或\n"
-                        "finish(message=\"任务完成\")"
-                    )
-                    self._context.append(
-                        MessageBuilder.create_user_message(text=retry_text, image_base64=None)
-                    )
-                    response = self.model_client.request(self._context)
-
-                    # Append the retry assistant output too
-                    if self.agent_config.use_thirdparty_prompt:
-                        if self.agent_config.thirdparty_thinking:
-                            self._context.append(
-                                MessageBuilder.create_assistant_message(
-                                    f"<think>{response.thinking}</think><answer>{response.action}</answer>"
-                                )
-                            )
-                        else:
-                            self._context.append(
-                                MessageBuilder.create_assistant_message(response.action)
-                            )
-                    else:
-                        self._context.append(
-                            MessageBuilder.create_assistant_message(
-                                f"<think>{response.thinking}</think><answer>{response.action}</answer>"
-                            )
-                        )
-                    continue
-                break
+        # Parse action from response
+        try:
+            action = parse_action(response.action)
+        except ValueError as e:
+            if self.agent_config.verbose:
+                traceback.print_exc()
+            return StepResult(
+                success=False,
+                finished=True,
+                action=None,
+                thinking=response.thinking,
+                message=f"Failed to parse action: {e}",
+            )
 
         if action is None:
             return StepResult(
