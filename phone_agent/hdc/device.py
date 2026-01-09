@@ -1,6 +1,7 @@
 """Device control utilities for HarmonyOS automation."""
 
 import os
+import re
 import subprocess
 import time
 from typing import List, Optional, Tuple
@@ -8,7 +9,6 @@ from typing import List, Optional, Tuple
 from phone_agent.config.apps_harmonyos import APP_ABILITIES, APP_PACKAGES
 from phone_agent.config.timing import TIMING_CONFIG
 from phone_agent.hdc.connection import _run_hdc_command
-import re
 
 def get_current_app(device_id: str | None = None) -> str:
     """
@@ -30,7 +30,6 @@ def get_current_app(device_id: str | None = None) -> str:
         encoding="utf-8"
     )
     output = result.stdout
-    # print(output)
     if not output:
         raise ValueError("No output from aa dump")
 
@@ -56,7 +55,7 @@ def get_current_app(device_id: str | None = None) -> str:
                 current_bundle = match.group(1)
 
         # Check if this mission is in FOREGROUND state
-        if "state #FOREGROUND" in line or "state #foreground" in line.lower():
+        if "state #foreground" in line.lower():
             if current_bundle:
                 foreground_bundle = current_bundle
                 break  # Found the foreground app, no need to continue
@@ -71,9 +70,7 @@ def get_current_app(device_id: str | None = None) -> str:
             if package == foreground_bundle:
                 return app_name
         # If bundle is found but not in our known apps, return the bundle name
-        print(f'Bundle is found but not in our known apps: {foreground_bundle}')
         return foreground_bundle
-    print(f'No bundle is found')
     return "System Home"
 
 
@@ -305,6 +302,3 @@ def _get_hdc_prefix(device_id: str | None) -> list:
     if device_id:
         return ["hdc", "-t", device_id]
     return ["hdc"]
-
-if __name__ == "__main__":
-    print(get_current_app())
