@@ -20,8 +20,15 @@ APP_PACKAGES: dict[str, str] = {
     "百度地图": "com.baidu.BaiduMap",
     # Food & Services
     "美团": "com.sankuai.meituan",
+    "美团外卖": "com.sankuai.meituan.takeoutnew",
     "大众点评": "com.dianping.v1",
+    "海底捞": "com.haidilao",
+    "肯德基": "com.yum.android.kfc.activity",
+    "瑞幸咖啡": "com.lucky.luckyclient",
+    "星巴克": "com.starbucks.cn",
     "饿了么": "me.ele",
+    "盒马": "com.alibaba.freshhema.trend",
+    "叮咚买菜": "com.yaya.zone",
     "肯德基": "com.yek.android.kfc.activitys",
     # Travel
     "携程": "ctrip.android.view",
