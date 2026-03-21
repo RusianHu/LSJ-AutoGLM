@@ -264,6 +264,30 @@ class DeviceService(QObject):
 
     # ---------- 连接管理 ----------
 
+    def pair_device(self, address: str, pairing_code: str) -> Tuple[bool, str]:
+        """
+        通过配对码与设备配对（Android 11+ 无线调试 / 二维码配对模式）。
+        address 格式：ip:port（配对端口，与连接端口不同）
+        pairing_code：6位数字配对码
+        """
+        if ":" not in address:
+            return False, "地址格式错误，需包含配对端口，例如：192.168.x.x:37890"
+        try:
+            r = subprocess.run(
+                ["adb", "pair", address, pairing_code],
+                capture_output=True, text=True, timeout=30
+            )
+            output = (r.stdout + r.stderr).strip()
+            # adb pair 成功输出包含 "Successfully paired"
+            success = "successfully paired" in output.lower()
+            if success:
+                self.refresh()
+            return success, output or "无输出"
+        except FileNotFoundError:
+            return False, "ADB 未找到，请确认已安装并加入 PATH"
+        except Exception as e:
+            return False, str(e)
+
     def connect_device(self, address: str) -> Tuple[bool, str]:
         """无线连接设备"""
         if ":" not in address:

@@ -1,5 +1,6 @@
 Pillow>=12.0.0
 openai>=2.9.0
+qrcode[pil]>=7.4.2
 
 # GUI 依赖
 PySide6>=6.6.0
