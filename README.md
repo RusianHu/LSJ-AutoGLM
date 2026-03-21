@@ -165,6 +165,16 @@ python main.py --thirdparty --base-url "https://your-api.com/v1" --model "Qwen/Q
 
 ---
 
+## 上游同步记录
+
+| 日期 | 同步内容 | 方式 |
+|------|----------|------|
+| 2026-03-21 | 同步上游文档与社区资源（微信二维码、X 账号链接、Discord 链接更新） | 选择性同步 |
+
+详见 [上游同步分析报告](plans/upstream_sync_analysis.md)。
+
+---
+
 ## 许可证
 
 本项目基于 [Apache License 2.0](LICENSE) 开源许可证。
