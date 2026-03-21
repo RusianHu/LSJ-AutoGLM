@@ -74,3 +74,6 @@ AGENTS.md
 # GUI 运行时产生的历史数据与截图（本地保留，不提交）
 gui_history/
 docs/gui_screenshot.png
+
+# scrcpy 可执行文件目录（项目内发行，不纳入版本控制）
+scrcpy/

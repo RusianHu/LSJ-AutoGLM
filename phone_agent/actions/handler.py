@@ -432,6 +432,19 @@ def parse_action(response: str) -> dict[str, Any]:
             if not args_str:
                 return payload
 
+            if metadata == "finish":
+                if "=" in args_str:
+                    key, raw_val = args_str.split("=", 1)
+                elif ":" in args_str:
+                    key, raw_val = args_str.split(":", 1)
+                else:
+                    return payload
+
+                key = key.strip().strip('"').strip("'")
+                if key == "message":
+                    payload["message"] = _parse_loose_string(raw_val.strip())
+                    return payload
+
             for part in _split_top_level_args(args_str):
                 if not part:
                     continue
@@ -545,6 +558,11 @@ def parse_action(response: str) -> dict[str, Any]:
 
         raw = response
         response = _strip_wrappers(raw)
+
+        if not (response or "").strip():
+            raise ValueError(
+                "Empty action response from model after stripping wrappers/tags"
+            )
 
         # JSON action payload (some thirdparty models output dict directly)
         if response.startswith("{") and response.endswith("}"):

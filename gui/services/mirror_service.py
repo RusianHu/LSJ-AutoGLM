@@ -14,6 +14,8 @@
 - 统一增加 shutdown() 接口供应用退出调用
 """
 
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -132,16 +134,38 @@ class _EmbedWindowThread(QThread):
                 self.embed_failed.emit("未找到 scrcpy 窗口，将以独立窗口显示")
                 return
 
-            # 移除边框并设置为子窗口
+            # 切为真正的子窗口并刷新 frame，避免顶层窗口样式残留
             GWL_STYLE = -16
             WS_CAPTION = 0x00C00000
-            style = user32.GetWindowLongW(hwnd, GWL_STYLE)
-            style = style & ~WS_CAPTION
-            user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+            WS_POPUP = 0x80000000
+            WS_CHILD = 0x40000000
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            SWP_SHOWWINDOW = 0x0040
+
+            raw_style = user32.GetWindowLongW(hwnd, GWL_STYLE)
+            style_u32 = ctypes.c_uint32(raw_style).value
+            clear_mask = (
+                WS_CAPTION
+                | WS_THICKFRAME
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_SYSMENU
+                | WS_POPUP
+            )
+            new_style_u32 = ((style_u32 & ~clear_mask) | WS_CHILD) & 0xFFFFFFFF
+            new_style = ctypes.c_int32(new_style_u32).value
+            user32.SetWindowLongW(hwnd, GWL_STYLE, new_style)
             user32.SetParent(hwnd, self._parent_wid)
             user32.SetWindowPos(
                 hwnd, 0, 0, 0, 0, 0,
-                0x0001 | 0x0002 | 0x0040  # SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW
+                SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_SHOWWINDOW
             )
             self.embed_done.emit(hwnd)
 
@@ -176,6 +200,11 @@ class MirrorService(QObject):
         self._screenshot_poller: Optional[_ScreenshotPoller] = None
         self._embed_thread: Optional[_EmbedWindowThread] = None
         self._window_hwnd: Optional[int] = None
+        self._device_screen_size: Optional[tuple[int, int]] = None
+        self._last_resize_request: Optional[tuple[int, int, int, int]] = None
+        self._mirror_debug_enabled = self._is_truthy(
+            os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
+        )
 
         # 进程存活监控定时器
         self._monitor_timer = QTimer(self)
@@ -233,12 +262,63 @@ class MirrorService(QObject):
                 return True, f"scrcpy: {path}"
         return False, "scrcpy 未找到，将使用 ADB 截图降级模式"
 
+    @property
+    def device_screen_size(self) -> Optional[tuple[int, int]]:
+        return self._device_screen_size
+
+    @staticmethod
+    def _is_truthy(value: str) -> bool:
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _emit_debug(self, message: str):
+        if self._mirror_debug_enabled:
+            self.error_occurred.emit(f"[调试] {message}")
+
+    @staticmethod
+    def _parse_screen_size_output(output: str) -> Optional[tuple[int, int]]:
+        for line in output.splitlines():
+            match = re.search(r"(\d+)\s*x\s*(\d+)", line)
+            if not match:
+                continue
+            width = int(match.group(1))
+            height = int(match.group(2))
+            if width > 0 and height > 0:
+                return width, height
+        return None
+
+    def _probe_device_screen_size(self, device_id: str) -> Optional[tuple[int, int]]:
+        try:
+            result = subprocess.run(
+                ["adb", "-s", device_id, "shell", "wm", "size"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout:
+                size = self._parse_screen_size_output(result.stdout)
+                if size:
+                    self._emit_debug(f"探测设备屏幕尺寸: {size[0]}x{size[1]}")
+                    return size
+                self._emit_debug(f"wm size 输出无法解析: {result.stdout.strip()}")
+            else:
+                detail = (result.stderr or result.stdout or "").strip()
+                self._emit_debug(
+                    f"wm size 执行失败: code={result.returncode}, output={detail or 'empty'}"
+                )
+        except Exception as e:
+            self._emit_debug(f"探测设备屏幕尺寸异常: {e}")
+        return None
+
     # ---------- 启动镜像 ----------
 
-    def start(self, device_id: str, embed_wid: Optional[int] = None):
+    def start(
+        self,
+        device_id: str,
+        embed_wid: Optional[int] = None,
+        embed_container_size: Optional[tuple[int, int]] = None,
+    ):
         """
         启动镜像。
         embed_wid: Qt 容器窗口 WId（用于嵌入），None 表示外部独立窗口。
+        embed_container_size: 嵌入宿主区域的逻辑尺寸，用于在 scrcpy 启动期做安全缩放。
         """
         if self._state in (MirrorState.RUNNING, MirrorState.STARTING):
             return
@@ -248,21 +328,64 @@ class MirrorService(QObject):
 
         scrcpy_path = self.find_scrcpy()
         if scrcpy_path:
-            self._start_scrcpy(scrcpy_path, device_id, embed_wid)
+            self._start_scrcpy(scrcpy_path, device_id, embed_wid, embed_container_size)
         else:
             self._start_adb_screenshot(device_id)
 
-    def _start_scrcpy(self, scrcpy_path: str, device_id: str, embed_wid: Optional[int]):
+    def _start_scrcpy(
+        self,
+        scrcpy_path: str,
+        device_id: str,
+        embed_wid: Optional[int],
+        embed_container_size: Optional[tuple[int, int]] = None,
+    ):
         """启动 scrcpy 进程"""
+        embedded_requested = bool(embed_wid and sys.platform == "win32")
+        self._device_screen_size = self._probe_device_screen_size(device_id)
+        self._last_resize_request = None
+
+        safe_embed_fit_size = None
+        if embedded_requested and embed_container_size and self._device_screen_size:
+            container_w, container_h = embed_container_size
+            device_w, device_h = self._device_screen_size
+            if container_w > 0 and container_h > 0 and device_w > 0 and device_h > 0:
+                scale = min(container_w / device_w, container_h / device_h)
+                safe_embed_fit_size = (
+                    max(1, int(device_w * scale)),
+                    max(1, int(device_h * scale)),
+                )
+
         args = [
             scrcpy_path,
             "--serial", device_id,
             "--window-title", f"AutoGLM Mirror - {device_id}",
             "--stay-awake",
-            "--turn-screen-off",
         ]
-        if embed_wid and sys.platform == "win32":
+        if embedded_requested:
             args += ["--window-borderless"]
+            if safe_embed_fit_size:
+                args += [
+                    "--window-width", str(safe_embed_fit_size[0]),
+                    "--window-height", str(safe_embed_fit_size[1]),
+                    "--max-size", str(max(safe_embed_fit_size)),
+                ]
+
+        self._emit_debug(
+            f"scrcpy 启动参数: embedded_requested={embedded_requested}, "
+            f"args={subprocess.list2cmdline(args)}"
+        )
+        if safe_embed_fit_size:
+            self._emit_debug(
+                "scrcpy 启动期安全缩放: "
+                f"container={embed_container_size[0]}x{embed_container_size[1]}, "
+                f"fit={safe_embed_fit_size[0]}x{safe_embed_fit_size[1]}, "
+                f"max_size={max(safe_embed_fit_size)}"
+            )
+        if self._device_screen_size:
+            self._emit_debug(
+                f"scrcpy 启动前缓存设备尺寸: "
+                f"{self._device_screen_size[0]}x{self._device_screen_size[1]}"
+            )
 
         try:
             self._scrcpy_proc = subprocess.Popen(
@@ -276,14 +399,15 @@ class MirrorService(QObject):
             self._start_adb_screenshot(device_id)
             return
 
-        embedded_requested = bool(embed_wid and sys.platform == "win32")
         mode = MirrorMode.SCRCPY_EMBEDDED if embedded_requested else MirrorMode.SCRCPY_EXTERNAL
         self._mode = mode
         self.mode_changed.emit(mode)
         self._set_state(MirrorState.RUNNING)
+        self._emit_debug(f"scrcpy 进程已启动: pid={self._scrcpy_proc.pid}, mode={mode.value}")
 
         # 若是嵌入模式，在独立线程中异步等待窗口句柄（不阻塞 UI）
         if embedded_requested:
+            self._emit_debug(f"等待 scrcpy 窗口嵌入: parent_wid={embed_wid}")
             self._embed_thread = _EmbedWindowThread(embed_wid, device_id)
             self._embed_thread.embed_done.connect(self._on_embed_done)
             self._embed_thread.embed_failed.connect(self._on_embed_failed)
@@ -428,11 +552,28 @@ class MirrorService(QObject):
         if self._window_hwnd and sys.platform == "win32":
             try:
                 import ctypes
+                import ctypes.wintypes
+
+                request = (x, y, w, h)
+                should_log = request != self._last_resize_request
+                self._last_resize_request = request
+
                 ctypes.windll.user32.SetWindowPos(
                     self._window_hwnd, 0, x, y, w, h, 0x0040
                 )
-            except Exception:
-                pass
+
+                if should_log:
+                    rect = ctypes.wintypes.RECT()
+                    ctypes.windll.user32.GetWindowRect(self._window_hwnd, ctypes.byref(rect))
+                    actual_w = rect.right - rect.left
+                    actual_h = rect.bottom - rect.top
+                    self._emit_debug(
+                        "scrcpy 窗口重设: "
+                        f"request=({x},{y},{w},{h}), "
+                        f"actual=({rect.left},{rect.top},{actual_w},{actual_h})"
+                    )
+            except Exception as e:
+                self._emit_debug(f"scrcpy 窗口重设异常: {e}")
 
     # ---------- 应用退出时的阻塞清理 ----------
 

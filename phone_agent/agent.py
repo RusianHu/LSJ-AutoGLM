@@ -10,6 +10,10 @@ from typing import Any, Callable
 from phone_agent.actions import ActionHandler
 from phone_agent.actions.handler import do, finish, parse_action
 from phone_agent.config import get_messages, get_system_prompt
+from phone_agent.config.prompts_thirdparty import (
+    THIRDPARTY_SYSTEM_PROMPT,
+    THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING,
+)
 from phone_agent.device_factory import get_device_factory
 from phone_agent.model import ModelClient, ModelConfig
 from phone_agent.model.client import MessageBuilder
@@ -24,10 +28,18 @@ class AgentConfig:
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
+    use_thirdparty_prompt: bool = False
+    thirdparty_thinking: bool = True
 
     def __post_init__(self):
         if self.system_prompt is None:
-            self.system_prompt = get_system_prompt(self.lang)
+            if self.use_thirdparty_prompt:
+                if self.thirdparty_thinking:
+                    self.system_prompt = THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING
+                else:
+                    self.system_prompt = THIRDPARTY_SYSTEM_PROMPT
+            else:
+                self.system_prompt = get_system_prompt(self.lang)
 
 
 @dataclass

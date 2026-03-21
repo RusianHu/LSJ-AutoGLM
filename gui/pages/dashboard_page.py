@@ -8,11 +8,14 @@
   └── 主区B：日志与事件（右侧）
 """
 
+import os
 import time
 
 from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
 from PySide6.QtGui import QColor, QFont, QPixmap, QTextCursor
+from gui.widgets.mirror_label import MirrorLabel
 from PySide6.QtWidgets import (
+    QComboBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -20,10 +23,12 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedLayout,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -66,14 +71,23 @@ class DashboardPage(QWidget):
         self._mirror = services.get("mirror")
         self._config = services.get("config")
 
-        self._mirror_label: QLabel = None   # ADB 截图降级时的图片显示
+        self._mirror_label: MirrorLabel = None   # ADB 截图降级时的图片显示
         self._mirror_container: QWidget = None
+        self._mirror_host: QWidget = None        # scrcpy 内嵌专用原生宿主控件
+        self._mirror_stack: QStackedLayout = None
         self._mirror_embedded = False
+        self._last_mirror_geometry_debug = None
+        self._mirror_debug_enabled = self._is_truthy(
+            os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
+        )
 
         self._build_ui()
         self._connect_signals()
         self._update_button_states(TaskState.IDLE)
         self._refresh_status_bar()
+        # 初始化时同步已选中设备的 device_id 到镜像控件
+        if self._device and self._device.selected_device and self._mirror_label:
+            self._mirror_label.set_device_id(self._device.selected_device.device_id)
 
     # ================================================================
     # UI 构建
@@ -112,10 +126,44 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(10)
 
+        # 渠道切换下拉框
+        self._channel_combo = QComboBox()
+        self._channel_combo.setFixedHeight(32)
+        self._channel_combo.setMinimumWidth(220)
+        self._channel_combo.setMaximumWidth(280)
+        self._channel_combo.setStyleSheet("""
+            QComboBox {
+                background:#21262d; border:1px solid #30363d; border-radius:6px;
+                color:#c9d1d9; padding:0 10px; font-size:12px;
+            }
+            QComboBox:hover { border-color:#58a6ff; }
+            QComboBox::drop-down {
+                border:none; width:24px;
+            }
+            QComboBox::down-arrow {
+                width:10px; height:10px;
+                border-left:2px solid #8b949e;
+                border-bottom:2px solid #8b949e;
+                transform:rotate(-45deg);
+                margin-right:6px;
+            }
+            QComboBox QAbstractItemView {
+                background:#1c2128; border:1px solid #30363d;
+                selection-background-color:#264f78;
+                color:#c9d1d9; padding:2px; outline:none;
+            }
+            QComboBox QAbstractItemView::item {
+                padding:4px 8px; min-height:24px;
+            }
+        """)
+        self._populate_channel_combo()
+        self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
+        layout.addWidget(self._channel_combo)
+
         # 任务输入框
         self._task_input = QLineEdit()
         self._task_input.setPlaceholderText("输入任务描述，例如：打开微信发消息给张三...")
-        self._task_input.setMinimumWidth(380)
+        self._task_input.setMinimumWidth(300)
         self._task_input.returnPressed.connect(self._on_start)
         layout.addWidget(self._task_input, 1)
 
@@ -162,14 +210,11 @@ class DashboardPage(QWidget):
 
         self._lbl_task_state = self._make_status_chip("状态", "空闲", "#8b949e")
         self._lbl_device_status = self._make_status_chip("设备", "未检测", "#8b949e")
-        self._lbl_model_info = self._make_status_chip("模型", "—", "#8b949e")
         self._lbl_mirror_status = self._make_status_chip("镜像", "未启动", "#8b949e")
 
         layout.addWidget(self._lbl_task_state)
         layout.addWidget(self._make_sep())
         layout.addWidget(self._lbl_device_status)
-        layout.addWidget(self._make_sep())
-        layout.addWidget(self._lbl_model_info)
         layout.addWidget(self._make_sep())
         layout.addWidget(self._lbl_mirror_status)
         layout.addStretch(1)
@@ -224,8 +269,8 @@ class DashboardPage(QWidget):
         self._mirror_container.setStyleSheet("background:#0a0e17; border-radius:6px;")
         self._mirror_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._mirror_container.installEventFilter(self)
-        mirror_layout = QVBoxLayout(self._mirror_container)
-        mirror_layout.setContentsMargins(0, 0, 0, 0)
+        self._mirror_stack = QStackedLayout(self._mirror_container)
+        self._mirror_stack.setContentsMargins(0, 0, 0, 0)
 
         # 占位标签（scrcpy 外部窗口模式或未启动时）
         self._mirror_placeholder = QLabel("镜像未启动\n\n点击状态栏「启动镜像」按钮\n或使用 scrcpy 外部窗口")
@@ -233,15 +278,19 @@ class DashboardPage(QWidget):
         self._mirror_placeholder.setStyleSheet("""
             color:#484f58; font-size:13px; line-height:1.8;
         """)
-        mirror_layout.addWidget(self._mirror_placeholder)
+        self._mirror_stack.addWidget(self._mirror_placeholder)
 
-        # ADB 截图降级时的图片显示
-        self._mirror_label = QLabel()
-        self._mirror_label.setAlignment(Qt.AlignCenter)
-        self._mirror_label.setScaledContents(False)
-        self._mirror_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._mirror_label.hide()
-        mirror_layout.addWidget(self._mirror_label)
+        # ADB 截图降级时的图片显示（MirrorLabel 自带自适应缩放和鼠标 tap 控制）
+        self._mirror_label = MirrorLabel()
+        self._mirror_stack.addWidget(self._mirror_label)
+
+        # scrcpy 内嵌专用原生宿主控件，避免直接挂到带 Qt 布局的容器上
+        self._mirror_host = QWidget()
+        self._mirror_host.setStyleSheet("background:#0a0e17;")
+        self._mirror_host.setAttribute(Qt.WA_NativeWindow, True)
+        self._mirror_host.installEventFilter(self)
+        self._mirror_stack.addWidget(self._mirror_host)
+        self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
 
         layout.addWidget(self._mirror_container, 1)
 
@@ -344,6 +393,76 @@ class DashboardPage(QWidget):
             self._mirror.error_occurred.connect(self._on_mirror_error)
             self._mirror.window_created.connect(self._on_mirror_window_created)
 
+        # 配置变化时同步渠道下拉框（例如设置页保存后）
+        if self._config:
+            self._config.config_changed.connect(self._sync_channel_combo)
+
+    # ================================================================
+    # 渠道切换
+    # ================================================================
+
+    def _populate_channel_combo(self):
+        """填充渠道下拉框选项（仅填充，不触发切换逻辑）"""
+        if not self._config:
+            return
+        self._channel_combo.blockSignals(True)
+        self._channel_combo.clear()
+        presets = self._config.CHANNEL_PRESETS
+        for preset in presets:
+            self._channel_combo.addItem(preset["name"], userData=preset["id"])
+        self._channel_combo.blockSignals(False)
+
+    def _sync_channel_combo(self):
+        """config_changed 信号触发：同步下拉框并刷新 tooltip。"""
+        self._refresh_status_bar()
+
+    def _on_channel_changed(self, index: int):
+        """用户切换渠道时触发"""
+        if not self._config or index < 0:
+            return
+        channel_id = self._channel_combo.itemData(index)
+        if not channel_id:
+            return
+
+        # 任务运行中禁止切换渠道
+        if self._task:
+            idle_states = {
+                TaskState.IDLE, TaskState.COMPLETED,
+                TaskState.FAILED, TaskState.CANCELLED,
+            }
+            if self._task.state not in idle_states:
+                QMessageBox.warning(
+                    self, "无法切换渠道",
+                    "任务运行中不能切换模型渠道，请先停止当前任务。"
+                )
+                # 回滚下拉框选中项
+                self._sync_channel_combo()
+                return
+
+        ok = self._config.set_active_channel(channel_id)
+        if not ok:
+            QMessageBox.warning(self, "切换失败", f"渠道切换失败: {channel_id}")
+            self._sync_channel_combo()
+            return
+
+        # 刷新状态条模型显示（config_changed 信号已连接 _sync_channel_combo，
+        # 但此处直接调用以确保及时刷新）
+        self._refresh_status_bar()
+        preset = next(
+            (p for p in self._config.CHANNEL_PRESETS if p["id"] == channel_id), None
+        )
+        if preset and channel_id != "custom":
+            thirdparty_hint = "(第三方提示词)" if preset["use_thirdparty"] else "(原生AutoGLM)"
+            resolved_url = self._config.get_preset_url(preset)
+            resolved_model = self._config.get_preset_model(preset)
+            self._append_log(
+                f"[渠道] 已切换至: {preset['name']} {thirdparty_hint}\n"
+                f"[渠道] Base URL: {resolved_url}\n"
+                f"[渠道] 模型: {resolved_model}\n"
+            )
+        else:
+            self._append_log("[渠道] 已切换至自定义模式（保留当前 URL/模型设置）\n")
+
     # ================================================================
     # 按钮回调
     # ================================================================
@@ -398,14 +517,31 @@ class DashboardPage(QWidget):
                     device_id = self._device.devices[0].device_id
             if device_id:
                 embed_wid = None
-                if self._mirror_container and self._mirror_container.isVisible():
+                embed_container_size = None
+                if self._mirror_host and self._mirror_container and self._mirror_container.isVisible():
                     try:
-                        embed_wid = int(self._mirror_container.winId())
+                        if self._mirror_stack:
+                            self._mirror_stack.setCurrentWidget(self._mirror_host)
+                        self._mirror_host.show()
+                        host_rect = self._mirror_host.contentsRect()
+                        if host_rect.width() > 0 and host_rect.height() > 0:
+                            embed_container_size = (host_rect.width(), host_rect.height())
+                        else:
+                            container_rect = self._mirror_container.contentsRect()
+                            if container_rect.width() > 0 and container_rect.height() > 0:
+                                embed_container_size = (container_rect.width(), container_rect.height())
+                        embed_wid = int(self._mirror_host.winId())
                     except Exception:
                         embed_wid = None
-                self._mirror.start(device_id, embed_wid=embed_wid)
-                self._append_log(
-                    f"[镜像] 启动请求: device_id={device_id}, embed_wid={embed_wid or 'None'}\n"
+                        embed_container_size = None
+                self._mirror.start(
+                    device_id,
+                    embed_wid=embed_wid,
+                    embed_container_size=embed_container_size,
+                )
+                self._append_mirror_debug_log(
+                    f"[镜像] 启动请求: device_id={device_id}, embed_wid={embed_wid or 'None'}, "
+                    f"embed_size={embed_container_size or 'None'}\n"
                 )
             else:
                 self._append_log("[GUI] 未找到可用设备，无法启动镜像\n")
@@ -451,6 +587,14 @@ class DashboardPage(QWidget):
         self._log_view.moveCursor(QTextCursor.End)
         self._log_view.insertPlainText(line)
         self._log_view.moveCursor(QTextCursor.End)
+
+    @staticmethod
+    def _is_truthy(value: str) -> bool:
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _append_mirror_debug_log(self, line: str):
+        if self._mirror_debug_enabled:
+            self._append_log(line)
 
     def _on_event_added(self, evt: dict):
         item = QListWidgetItem(
@@ -524,7 +668,13 @@ class DashboardPage(QWidget):
         if device_info is None:
             self._device_info_lbl.setText("未选择设备")
             self._update_device_status("未选择", "#8b949e")
+            # 清除镜像控件的设备绑定
+            if self._mirror_label:
+                self._mirror_label.set_device_id("")
             return
+        # 更新镜像控件绑定的 ADB 设备 ID（用于鼠标 tap 转发）
+        if self._mirror_label:
+            self._mirror_label.set_device_id(device_info.device_id)
         lines = [f"<b>{device_info.display_name}</b>"]
         conn_type = {"usb": "USB", "wifi": "WiFi"}.get(device_info.connection_type, "未知")
         lines.append(f"连接方式: {conn_type}")
@@ -562,47 +712,117 @@ class DashboardPage(QWidget):
     def _on_mirror_mode_changed(self, mode: MirrorMode):
         self._mirror_embedded = mode == MirrorMode.SCRCPY_EMBEDDED
         if mode == MirrorMode.ADB_SCREENSHOT:
-            self._mirror_placeholder.hide()
-            self._mirror_label.show()
+            if self._mirror_stack and self._mirror_label:
+                self._mirror_stack.setCurrentWidget(self._mirror_label)
         elif mode == MirrorMode.NONE:
-            self._mirror_label.hide()
-            self._mirror_placeholder.show()
             self._mirror_placeholder.setText("镜像已停止")
+            if self._mirror_stack and self._mirror_placeholder:
+                self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
         elif mode == MirrorMode.SCRCPY_EXTERNAL:
-            self._mirror_label.hide()
-            self._mirror_placeholder.show()
             self._mirror_placeholder.setText("scrcpy 镜像运行中（独立窗口）\n\n内嵌模式不可用时使用此模式")
+            if self._mirror_stack and self._mirror_placeholder:
+                self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
         elif mode == MirrorMode.SCRCPY_EMBEDDED:
-            self._mirror_label.hide()
-            self._mirror_placeholder.hide()
+            if self._mirror_stack and self._mirror_host:
+                self._mirror_stack.setCurrentWidget(self._mirror_host)
             self._sync_embedded_mirror_geometry()
 
     def _on_mirror_frame(self, pixmap: QPixmap):
         """ADB 截图降级模式下收到帧"""
         if not self._mirror_label.isVisible():
             return
-        w = self._mirror_label.width()
-        h = self._mirror_label.height()
-        scaled = pixmap.scaled(w, h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self._mirror_label.setPixmap(scaled)
+        # MirrorLabel.set_raw_pixmap 内部负责自适应缩放（包括 resizeEvent 时重新缩放）
+        self._mirror_label.set_raw_pixmap(pixmap)
 
     def _on_mirror_error(self, msg: str):
         self._append_log(f"[镜像] {msg}\n")
 
     def _on_mirror_window_created(self, hwnd: int):
-        self._append_log(f"[镜像] scrcpy 窗口已嵌入，HWND={hwnd}\n")
+        self._last_mirror_geometry_debug = None
+        self._append_mirror_debug_log(f"[镜像] scrcpy 窗口已嵌入，HWND={hwnd}\n")
         QTimer.singleShot(0, self._sync_embedded_mirror_geometry)
 
+    @staticmethod
+    def _calc_aspect_fit_rect(
+        container_w: int,
+        container_h: int,
+        content_w: int,
+        content_h: int,
+    ):
+        if container_w <= 0 or container_h <= 0 or content_w <= 0 or content_h <= 0:
+            return None
+        scale = min(container_w / content_w, container_h / content_h)
+        fit_w = max(1, int(content_w * scale))
+        fit_h = max(1, int(content_h * scale))
+        fit_x = (container_w - fit_w) // 2
+        fit_y = (container_h - fit_h) // 2
+        return fit_x, fit_y, fit_w, fit_h
+
     def _sync_embedded_mirror_geometry(self):
-        if not (self._mirror and self._mirror_container and self._mirror_embedded):
+        host = self._mirror_host or self._mirror_container
+        if not (self._mirror and host and self._mirror_embedded):
             return
-        rect = self._mirror_container.contentsRect()
+        if not host.isVisible():
+            return
+        rect = host.contentsRect()
         if rect.width() <= 0 or rect.height() <= 0:
             return
-        self._mirror.resize_scrcpy_window(rect.x(), rect.y(), rect.width(), rect.height())
+
+        device_size = getattr(self._mirror, "device_screen_size", None)
+        fit_rect = None
+        if device_size:
+            fit_rect = self._calc_aspect_fit_rect(
+                rect.width(), rect.height(), device_size[0], device_size[1]
+            )
+
+        scale_factor = 1.0
+        try:
+            scale_factor = max(1.0, float(host.devicePixelRatioF()))
+        except Exception:
+            scale_factor = 1.0
+
+        target_rect = fit_rect or (rect.x(), rect.y(), rect.width(), rect.height())
+        native_rect = (
+            int(round(target_rect[0] * scale_factor)),
+            int(round(target_rect[1] * scale_factor)),
+            max(1, int(round(target_rect[2] * scale_factor))),
+            max(1, int(round(target_rect[3] * scale_factor))),
+        )
+
+        debug_signature = (
+            rect.x(), rect.y(), rect.width(), rect.height(),
+            device_size[0] if device_size else None,
+            device_size[1] if device_size else None,
+            *(fit_rect or (None, None, None, None)),
+            round(scale_factor, 4),
+            *native_rect,
+        )
+        if debug_signature != self._last_mirror_geometry_debug:
+            self._last_mirror_geometry_debug = debug_signature
+            if fit_rect:
+                self._append_mirror_debug_log(
+                    "[镜像][调试] 容器="
+                    f"({rect.x()},{rect.y()},{rect.width()},{rect.height()})，"
+                    f"设备={device_size[0]}x{device_size[1]}，"
+                    f"DPR={scale_factor:.2f}，"
+                    "按比例适配(fit)="
+                    f"({fit_rect[0]},{fit_rect[1]},{fit_rect[2]},{fit_rect[3]})，"
+                    "下发原生(native)="
+                    f"({native_rect[0]},{native_rect[1]},{native_rect[2]},{native_rect[3]})\n"
+                )
+            else:
+                self._append_mirror_debug_log(
+                    "[镜像][调试] 尚未获取设备屏幕尺寸，"
+                    f"DPR={scale_factor:.2f}，按容器 full rect 下发原生窗口="
+                    f"({native_rect[0]},{native_rect[1]},{native_rect[2]},{native_rect[3]})\n"
+                )
+
+        self._mirror.resize_scrcpy_window(
+            native_rect[0], native_rect[1], native_rect[2], native_rect[3]
+        )
 
     def eventFilter(self, watched, event):
-        if watched is self._mirror_container and event.type() in (QEvent.Resize, QEvent.Show):
+        if watched in (self._mirror_container, self._mirror_host) and event.type() in (QEvent.Resize, QEvent.Show):
             QTimer.singleShot(0, self._sync_embedded_mirror_geometry)
         return super().eventFilter(watched, event)
 
@@ -611,15 +831,48 @@ class DashboardPage(QWidget):
     # ================================================================
 
     def _refresh_status_bar(self):
-        if self._config:
-            model = self._config.get("OPEN_AUTOGLM_MODEL") or "—"
-            self._lbl_model_info.setText(
-                f"<span style='color:#484f58'>模型:</span> "
-                f"<span style='color:#8b949e'>{model[:30]}</span>"
+        """同步渠道下拉框选中项，并在下拉框 tooltip 中显示当前 Base URL 和模型。"""
+        if not self._config:
+            return
+        # 同步下拉框选中项（blockSignals 防止递归）
+        active = self._config.get_active_channel()
+        active_id = active["id"] if active else "custom"
+        self._channel_combo.blockSignals(True)
+        for i in range(self._channel_combo.count()):
+            if self._channel_combo.itemData(i) == active_id:
+                self._channel_combo.setCurrentIndex(i)
+                break
+        self._channel_combo.blockSignals(False)
+        # 更新 tooltip 显示完整的 Base URL 和模型名
+        base_url = self._config.get("OPEN_AUTOGLM_BASE_URL") or "—"
+        model = self._config.get("OPEN_AUTOGLM_MODEL") or "—"
+        is_thirdparty = self._config._is_truthy(
+            self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
+        )
+        tp_hint = "[第三方提示词]" if is_thirdparty else "[原生AutoGLM]"
+        # 渠道下拉框显示名加上动态模型名后缀（便于区分同渠道不同模型）
+        active = self._config.get_active_channel()
+        active_id = active["id"] if active else "custom"
+        if active_id != "custom":
+            display_model = model[:24] if len(model) > 24 else model
+            self._channel_combo.setItemText(
+                self._channel_combo.currentIndex(),
+                f"{active['name']}  [{display_model}]"
             )
+        else:
+            # 自定义模式：显示当前实际模型名
+            display_model = model[:24] if len(model) > 24 else model
+            self._channel_combo.setItemText(
+                self._channel_combo.currentIndex(),
+                f"自定义  [{display_model}]" if display_model and display_model != "—" else "自定义"
+            )
+        self._channel_combo.setToolTip(
+            f"Base URL: {base_url}\n模型: {model}\n{tp_hint}"
+        )
 
     def on_page_activated(self):
         """页面激活时刷新状态"""
+        self._sync_channel_combo()
         self._refresh_status_bar()
 
     # ================================================================

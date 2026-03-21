@@ -94,6 +94,69 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": ("OPEN_AUTOGLM_THIRDPARTY",),
     }
 
+    # 渠道预设元信息。
+    # url_field/model_field: 从 .env 读取实际值的字段名
+    # default_url/default_model: 对应字段为空时的兜底默认值
+    # use_thirdparty: 是否启用第三方提示词工程（--thirdparty 参数）
+    # api_key_field: 该渠道对应的 API Key 环境变量名
+    CHANNEL_PRESETS: List[Dict] = [
+        {
+            "id": "modelscope",
+            "name": "ModelScope",
+            "url_field": "",
+            "model_field": "",
+            "default_url": "https://api-inference.modelscope.cn/v1",
+            "default_model": "ZhipuAI/AutoGLM-Phone-9B",
+            "use_thirdparty": False,
+            "compress_image": False,
+            "api_key_field": "OPEN_AUTOGLM_MODELSCOPE_API_KEY",
+        },
+        {
+            "id": "zhipu",
+            "name": "智谱",
+            "url_field": "",
+            "model_field": "",
+            "default_url": "https://open.bigmodel.cn/api/paas/v4",
+            "default_model": "AutoGLM-Phone-9B",
+            "use_thirdparty": False,
+            "compress_image": False,
+            "api_key_field": "OPEN_AUTOGLM_ZHIPU_API_KEY",
+        },
+        {
+            "id": "newapi",
+            "name": "自建中转站",
+            "url_field": "OPEN_AUTOGLM_NEWAPI_BASE_URL",
+            "model_field": "OPEN_AUTOGLM_NEWAPI_MODEL",
+            "default_url": "https://ai.yanshanlaosiji.top/v1",
+            "default_model": "Qwen/Qwen3-VL-235B-A22B-Instruct",
+            "use_thirdparty": True,
+            "compress_image": False,
+            "api_key_field": "OPEN_AUTOGLM_NEWAPI_API_KEY",
+        },
+        {
+            "id": "local",
+            "name": "本地 (localhost)",
+            "url_field": "",
+            "model_field": "",
+            "default_url": "http://127.0.0.1:8000/v1",
+            "default_model": "local-model",
+            "use_thirdparty": True,
+            "compress_image": False,
+            "api_key_field": "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY",
+        },
+        {
+            "id": "custom",
+            "name": "自定义",
+            "url_field": "",
+            "model_field": "",
+            "default_url": "",
+            "default_model": "",
+            "use_thirdparty": False,
+            "compress_image": False,
+            "api_key_field": "OPEN_AUTOGLM_API_KEY",
+        },
+    ]
+
     def __init__(self, env_file: Optional[Path] = None, parent=None):
         super().__init__(parent)
         self._env_file = env_file or _ENV_FILE
@@ -330,6 +393,88 @@ class ConfigService(QObject):
             errors.append(("OPEN_AUTOGLM_LANG", "语言仅支持 cn / en / zh"))
 
         return errors
+
+    # ---------- 渠道预设 ----------
+
+    def get_preset_url(self, preset: Dict) -> str:
+        """读取渠道预设的实际 Base URL（优先 .env 专用字段，兜底用 default_url）"""
+        field = preset.get("url_field", "")
+        if field:
+            val = self.get(field)
+            if val:
+                return val
+        return preset.get("default_url", "")
+
+    def get_preset_model(self, preset: Dict) -> str:
+        """读取渠道预设的实际模型名（优先 .env 专用字段，兜底用 default_model）"""
+        field = preset.get("model_field", "")
+        if field:
+            val = self.get(field)
+            if val:
+                return val
+        return preset.get("default_model", "")
+
+    def get_active_channel(self) -> Optional[Dict]:
+        """
+        根据当前 BASE_URL + MODEL 匹配最接近的渠道预设。
+        匹配时动态读取渠道的实际 URL 和模型（含用户自定义值）。
+        若找不到精确匹配，返回 'custom' 预设。
+        """
+        current_url = self.get("OPEN_AUTOGLM_BASE_URL").rstrip("/")
+        current_model = self.get("OPEN_AUTOGLM_MODEL")
+        for preset in self.CHANNEL_PRESETS:
+            if preset["id"] == "custom":
+                continue
+            preset_url = self.get_preset_url(preset).rstrip("/")
+            preset_model = self.get_preset_model(preset)
+            if preset_url == current_url and preset_model == current_model:
+                return preset
+        return next((p for p in self.CHANNEL_PRESETS if p["id"] == "custom"), None)
+
+    def set_active_channel(self, channel_id: str) -> bool:
+        """
+        切换到指定渠道预设，并写回 .env。
+        - BASE_URL/MODEL 使用该渠道在 .env 中的专用字段值（或 default 值）
+        - 若渠道对应的 api_key_field 已有值，同步到 OPEN_AUTOGLM_API_KEY
+        - 更新 USE_THIRDPARTY_PROMPT / COMPRESS_IMAGE
+        - 「自定义」模式不覆盖 url/model，仅更新提示词标志
+        返回 True 表示切换成功。
+        """
+        preset = next(
+            (p for p in self.CHANNEL_PRESETS if p["id"] == channel_id), None
+        )
+        if preset is None:
+            return False
+
+        if channel_id == "custom":
+            # 自定义模式：不覆盖 url/model，仅重置提示词标志
+            try:
+                self.set_many({"OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false"})
+            except Exception:
+                pass
+            return True
+
+        # 动态读取该渠道实际的 URL 和模型（含用户在 .env 中已自定义的值）
+        resolved_url = self.get_preset_url(preset)
+        resolved_model = self.get_preset_model(preset)
+
+        updates: Dict[str, str] = {
+            "OPEN_AUTOGLM_BASE_URL": resolved_url,
+            "OPEN_AUTOGLM_MODEL": resolved_model,
+            "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "true" if preset["use_thirdparty"] else "false",
+            "OPEN_AUTOGLM_COMPRESS_IMAGE": "true" if preset["compress_image"] else "false",
+        }
+        # 若渠道专用 api_key_field 有值，同步到通用 API_KEY
+        key_field = preset.get("api_key_field", "")
+        if key_field:
+            channel_key = self.get(key_field)
+            if channel_key:
+                updates["OPEN_AUTOGLM_API_KEY"] = channel_key
+        try:
+            self.set_many(updates)
+        except Exception:
+            return False
+        return True
 
     # ---------- 构建命令行参数 ----------
 

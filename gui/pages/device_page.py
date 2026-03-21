@@ -686,6 +686,7 @@ class DevicePage(QWidget):
         if self._device:
             self._device.devices_changed.connect(self._refresh_device_list)
             self._device.adb_status_changed.connect(self._on_adb_status)
+            self._device.error_occurred.connect(self._on_device_error)
             # 初始刷新
             self._refresh_device_list(self._device.devices)
 
@@ -702,6 +703,9 @@ class DevicePage(QWidget):
         self._adb_status_lbl.setText(
             f"ADB 状态: <span style='color:{color}'>{status}</span>  {msg}"
         )
+
+    def _on_device_error(self, msg: str):
+        self._log(f"设备服务: {msg}")
 
     def _refresh_device_list(self, devices):
         self._device_list.clear()
@@ -732,11 +736,28 @@ class DevicePage(QWidget):
     def _on_disconnect(self):
         item = self._device_list.currentItem()
         if not item:
+            self._log("断开操作未执行：当前没有选中设备，请先点击设备列表中的目标设备")
             return
+
         device_id = item.data(Qt.UserRole)
-        if device_id and self._device:
+        row = self._device_list.currentRow()
+        self._log(
+            f"断开操作触发: row={row}, text={item.text()}, device_id={device_id or 'None'}"
+        )
+
+        if not device_id:
+            self._log("断开操作未执行：当前条目没有可用的 device_id")
+            return
+
+        if isinstance(device_id, str) and "_adb-tls-connect._tcp" in device_id:
+            self._log(
+                "诊断提示：当前 device_id 看起来是 ADB TLS/mDNS 服务名，"
+                "adb disconnect 对这类标识的支持可能不稳定"
+            )
+
+        if self._device:
             ok, msg = self._device.disconnect_device(device_id)
-            self._log(f"断开 {device_id}: {msg}")
+            self._log(f"断开 {device_id}: {'成功' if ok else '失败'} - {msg}")
 
     def _on_refresh(self):
         if self._device:
