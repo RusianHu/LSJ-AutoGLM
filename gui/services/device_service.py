@@ -1,0 +1,359 @@
+# -*- coding: utf-8 -*-
+"""
+设备服务 - 管理 ADB 设备连接、状态轮询与检查。
+
+修复记录：
+- 添加 stop() 公共接口，供 MainWindow.closeEvent 统一调用
+- refresh() 改为在 QThread 中执行 ADB 命令，避免 UI 主线程阻塞
+- _enrich_device_info 改为在 worker 线程中执行
+"""
+
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Optional, Tuple
+
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
+
+
+class DeviceStatus(Enum):
+    """设备连接状态"""
+    UNKNOWN = "unknown"
+    CONNECTED = "connected"
+    UNAUTHORIZED = "unauthorized"
+    OFFLINE = "offline"
+    DISCONNECTED = "disconnected"
+
+
+@dataclass
+class DeviceInfo:
+    """设备信息"""
+    device_id: str
+    status: DeviceStatus
+    connection_type: str = "unknown"   # usb / wifi / unknown
+    model: str = ""
+    android_version: str = ""
+    adb_keyboard_installed: bool = False
+
+    @property
+    def display_name(self) -> str:
+        parts = []
+        if self.model:
+            parts.append(self.model)
+        parts.append(self.device_id)
+        if self.android_version:
+            parts.append(f"Android {self.android_version}")
+        return " | ".join(parts)
+
+
+class _RefreshWorker(QThread):
+    """在后台线程中执行 adb devices 枚举，避免阻塞 UI"""
+    result_ready = Signal(list)   # List[DeviceInfo]
+    adb_error = Signal(str)
+
+    def run(self):
+        try:
+            result = subprocess.run(
+                ["adb", "devices", "-l"],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                self.adb_error.emit(f"adb devices 失败: {result.stderr}")
+                return
+            devices = self._parse(result.stdout)
+            self.result_ready.emit(devices)
+        except FileNotFoundError:
+            self.adb_error.emit("ADB 未找到，请确认已安装并加入 PATH")
+        except Exception as e:
+            self.adb_error.emit(f"设备刷新异常: {e}")
+
+    def _parse(self, output: str) -> List[DeviceInfo]:
+        devices = []
+        for line in output.splitlines()[1:]:
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            device_id = parts[0]
+            status_str = parts[1]
+
+            status_map = {
+                "device":       DeviceStatus.CONNECTED,
+                "unauthorized": DeviceStatus.UNAUTHORIZED,
+                "offline":      DeviceStatus.OFFLINE,
+            }
+            status = status_map.get(status_str, DeviceStatus.UNKNOWN)
+            conn_type = "wifi" if ":" in device_id else "usb"
+
+            model = ""
+            for part in parts[2:]:
+                if part.startswith("model:"):
+                    model = part.split(":", 1)[1].replace("_", " ")
+                    break
+
+            info = DeviceInfo(
+                device_id=device_id,
+                status=status,
+                connection_type=conn_type,
+                model=model,
+            )
+            if status == DeviceStatus.CONNECTED:
+                self._enrich(info)
+            devices.append(info)
+        return devices
+
+    def _enrich(self, info: DeviceInfo):
+        """补充 Android 版本、型号、ADB Keyboard 状态"""
+        try:
+            r = subprocess.run(
+                ["adb", "-s", info.device_id, "shell",
+                 "getprop", "ro.build.version.release"],
+                capture_output=True, text=True, timeout=5
+            )
+            if r.returncode == 0:
+                info.android_version = r.stdout.strip()
+        except Exception:
+            pass
+
+        if not info.model:
+            try:
+                r2 = subprocess.run(
+                    ["adb", "-s", info.device_id, "shell",
+                     "getprop", "ro.product.model"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if r2.returncode == 0:
+                    info.model = r2.stdout.strip()
+            except Exception:
+                pass
+
+        try:
+            r3 = subprocess.run(
+                ["adb", "-s", info.device_id, "shell",
+                 "pm", "list", "packages", "com.android.adbkeyboard"],
+                capture_output=True, text=True, timeout=5
+            )
+            info.adb_keyboard_installed = "com.android.adbkeyboard" in r3.stdout
+        except Exception:
+            pass
+
+
+class DeviceService(QObject):
+    """
+    设备服务 - 负责：
+    - 枚举已连接 ADB 设备（异步，不阻塞 UI）
+    - 获取设备详细信息
+    - 连接/断开无线设备
+    - ADB 可用性检查
+    - ADB Keyboard 检查
+    - 定时刷新设备状态（每 5 秒）
+    """
+
+    devices_changed = Signal(list)          # List[DeviceInfo]
+    device_selected = Signal(object)        # DeviceInfo | None
+    adb_status_changed = Signal(bool, str)  # (available, message)
+    error_occurred = Signal(str)
+
+    POLL_INTERVAL_MS = 5000
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._adb_path: str = "adb"
+        self._devices: List[DeviceInfo] = []
+        self._selected_device: Optional[DeviceInfo] = None
+        self._adb_available: bool = False
+        self._worker: Optional[_RefreshWorker] = None
+
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self.refresh)
+        self._poll_timer.start(self.POLL_INTERVAL_MS)
+
+        # 启动时延迟 200ms 做第一次检查，避免阻塞主窗口初始化
+        QTimer.singleShot(200, self._initial_check)
+
+    def _initial_check(self):
+        self.check_adb()
+        self.refresh()
+
+    # ---------- ADB 检查（同步，仅检查可执行文件，速度快） ----------
+
+    def check_adb(self) -> Tuple[bool, str]:
+        """检查 ADB 是否可用（同步，仅运行 adb version，通常极快）"""
+        path = shutil.which("adb")
+        if path is None:
+            self._adb_available = False
+            msg = "ADB 未找到，请确认 ADB 已安装并加入 PATH"
+            self.adb_status_changed.emit(False, msg)
+            return False, msg
+
+        try:
+            result = subprocess.run(
+                ["adb", "version"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                version_line = result.stdout.splitlines()[0] if result.stdout else "ADB"
+                self._adb_available = True
+                self._adb_path = path
+                self.adb_status_changed.emit(True, version_line)
+                return True, version_line
+            else:
+                self._adb_available = False
+                msg = f"ADB 运行异常: {result.stderr}"
+                self.adb_status_changed.emit(False, msg)
+                return False, msg
+        except Exception as e:
+            self._adb_available = False
+            msg = f"ADB 检查失败: {e}"
+            self.adb_status_changed.emit(False, msg)
+            return False, msg
+
+    @property
+    def adb_available(self) -> bool:
+        return self._adb_available
+
+    # ---------- 异步设备枚举 ----------
+
+    def refresh(self):
+        """异步刷新设备列表（不阻塞 UI 线程）"""
+        if not self._adb_available:
+            self.check_adb()
+            if not self._adb_available:
+                return
+
+        # 若上一次 worker 还未完成，跳过本次刷新（避免并发）
+        if self._worker and self._worker.isRunning():
+            return
+
+        self._worker = _RefreshWorker()
+        self._worker.result_ready.connect(self._on_refresh_done)
+        self._worker.finished.connect(self._cleanup_worker)
+        self._worker.adb_error.connect(self._on_refresh_error)
+        self._worker.start()
+
+    def _on_refresh_done(self, devices: List[DeviceInfo]):
+        self._devices = devices
+
+        # 若当前选中设备已不在列表，自动清空选择；若仍存在则更新为最新对象并重新发信号
+        if self._selected_device:
+            ids = [d.device_id for d in devices]
+            if self._selected_device.device_id not in ids:
+                self._selected_device = None
+                self.device_selected.emit(None)
+            else:
+                for d in devices:
+                    if d.device_id == self._selected_device.device_id:
+                        self._selected_device = d
+                        self.device_selected.emit(d)
+                        break
+
+        self.devices_changed.emit(devices)
+
+    def _on_refresh_error(self, msg: str):
+        self.error_occurred.emit(msg)
+
+    def _cleanup_worker(self, *_args):
+        worker = self.sender()
+        if worker and worker is self._worker:
+            self._worker = None
+        if worker:
+            worker.deleteLater()
+
+    # ---------- 连接管理 ----------
+
+    def connect_device(self, address: str) -> Tuple[bool, str]:
+        """无线连接设备"""
+        if ":" not in address:
+            address = f"{address}:5555"
+        try:
+            r = subprocess.run(
+                ["adb", "connect", address],
+                capture_output=True, text=True, timeout=15
+            )
+            success = "connected" in r.stdout.lower()
+            msg = r.stdout.strip() or r.stderr.strip()
+            if success:
+                self.refresh()
+            return success, msg
+        except Exception as e:
+            return False, str(e)
+
+    def disconnect_device(self, device_id: str) -> Tuple[bool, str]:
+        """断开指定设备"""
+        try:
+            r = subprocess.run(
+                ["adb", "disconnect", device_id],
+                capture_output=True, text=True, timeout=10
+            )
+            msg = r.stdout.strip() or r.stderr.strip()
+            self.refresh()
+            return r.returncode == 0, msg
+        except Exception as e:
+            return False, str(e)
+
+    def select_device(self, device_id: Optional[str]):
+        """选中设备"""
+        if device_id is None:
+            self._selected_device = None
+            self.device_selected.emit(None)
+            return
+        for d in self._devices:
+            if d.device_id == device_id:
+                self._selected_device = d
+                self.device_selected.emit(d)
+                return
+
+    @property
+    def selected_device(self) -> Optional[DeviceInfo]:
+        return self._selected_device
+
+    @property
+    def devices(self) -> List[DeviceInfo]:
+        return list(self._devices)
+
+    # ---------- scrcpy 检查 ----------
+
+    def check_scrcpy(self) -> Tuple[bool, str]:
+        path = shutil.which("scrcpy")
+        if path:
+            try:
+                r = subprocess.run(
+                    ["scrcpy", "--version"],
+                    capture_output=True, text=True, timeout=5
+                )
+                ver = r.stdout.strip().splitlines()[0] if r.stdout else "scrcpy"
+                return True, ver
+            except Exception:
+                return True, f"scrcpy: {path}"
+        return False, "scrcpy 未找到"
+
+    # ---------- ADB Keyboard 检查 ----------
+
+    def check_adb_keyboard(self, device_id: str) -> Tuple[bool, str]:
+        try:
+            r = subprocess.run(
+                ["adb", "-s", device_id, "shell",
+                 "pm", "list", "packages", "com.android.adbkeyboard"],
+                capture_output=True, text=True, timeout=10
+            )
+            installed = "com.android.adbkeyboard" in r.stdout
+            if installed:
+                return True, "ADB Keyboard 已安装"
+            return False, "ADB Keyboard 未安装"
+        except Exception as e:
+            return False, str(e)
+
+    # ---------- 生命周期 ----------
+
+    def stop(self):
+        """停止定时器与后台 worker，供应用退出时调用"""
+        self._poll_timer.stop()
+        if self._worker:
+            if self._worker.isRunning():
+                self._worker.wait(3000)
+            if not self._worker.isRunning():
+                self._worker.deleteLater()
+            self._worker = None

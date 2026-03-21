@@ -1,0 +1,504 @@
+# -*- coding: utf-8 -*-
+"""
+任务服务 - 管理任务生命周期、子进程执行与状态机。
+
+架构：GUI 主进程 + 任务子进程
+- 每次任务创建独立子进程运行 main.py
+- GUI 捕获 stdout/stderr 并通过信号推送到日志区
+- 任务状态机：idle -> starting -> running -> paused/stopping -> completed/failed/cancelled
+
+修复记录：
+- 补充子进程 stop/wait/kill 完整三阶段回收
+- _poll_process 双路径防重入保护
+- reader 线程完成后同步等待再清理引用
+- 窗口关闭时提供 shutdown() 阻塞等待接口
+"""
+
+import os
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Callable, List, Optional
+
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
+
+
+class TaskState(Enum):
+    """任务状态机"""
+    IDLE = "idle"
+    STARTING = "starting"
+    RUNNING = "running"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass
+class TaskRecord:
+    """单次任务的元数据记录"""
+    task_id: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    task_text: str = ""
+    start_time: float = 0.0
+    end_time: float = 0.0
+    state: TaskState = TaskState.IDLE
+    device_id: str = ""
+    model: str = ""
+    base_url: str = ""
+    max_steps: str = "100"
+    exit_code: Optional[int] = None
+    error_summary: str = ""
+    log_file: str = ""
+    events: List[dict] = field(default_factory=list)
+
+    @property
+    def duration(self) -> float:
+        if self.end_time and self.start_time:
+            return self.end_time - self.start_time
+        elif self.start_time:
+            return time.time() - self.start_time
+        return 0.0
+
+    @property
+    def duration_str(self) -> str:
+        secs = int(self.duration)
+        if secs < 60:
+            return f"{secs}s"
+        return f"{secs // 60}m{secs % 60}s"
+
+
+class _LogReaderThread(QThread):
+    """
+    在独立线程中读取子进程 stdout/stderr，
+    通过信号将日志行推送给主线程，避免阻塞 UI。
+    """
+    line_ready = Signal(str)
+    finished_reading = Signal()
+
+    def __init__(self, process: subprocess.Popen, log_file: Optional[Path] = None):
+        super().__init__()
+        self._process = process
+        self._log_file = log_file
+
+    def run(self):
+        log_fp = None
+        try:
+            if self._log_file:
+                try:
+                    log_fp = open(self._log_file, "w", encoding="utf-8", buffering=1)
+                except Exception:
+                    log_fp = None
+
+            for raw_line in iter(self._process.stdout.readline, b""):
+                try:
+                    line = raw_line.decode("utf-8", errors="replace")
+                except Exception:
+                    line = repr(raw_line) + "\n"
+                self.line_ready.emit(line)
+                if log_fp:
+                    try:
+                        log_fp.write(line)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        finally:
+            if log_fp:
+                try:
+                    log_fp.close()
+                except Exception:
+                    pass
+            self.finished_reading.emit()
+
+
+class TaskService(QObject):
+    """
+    任务服务。
+
+    信号：
+    - state_changed(TaskState)
+    - log_line(str)            -- 实时日志行
+    - event_added(dict)        -- 关键事件
+    - task_started(TaskRecord)
+    - task_finished(TaskRecord)
+    - takeover_requested(str)  -- 接管请求
+    - stuck_detected()         -- 疑似卡住
+    """
+
+    state_changed = Signal(object)      # TaskState
+    log_line = Signal(str)
+    event_added = Signal(dict)
+    task_started = Signal(object)       # TaskRecord
+    task_finished = Signal(object)      # TaskRecord
+    takeover_requested = Signal(str)    # reason
+    stuck_detected = Signal()
+
+    # 无输出超时判定（秒）
+    STUCK_TIMEOUT_S = 120
+    # 终止后等待进程退出的超时（毫秒）
+    TERMINATE_WAIT_MS = 3000
+
+    def __init__(self, config_service=None, history_service=None, parent=None):
+        super().__init__(parent)
+        self._config = config_service
+        self._history = history_service
+        self._state = TaskState.IDLE
+        self._process: Optional[subprocess.Popen] = None
+        self._current_record: Optional[TaskRecord] = None
+        self._reader: Optional[_LogReaderThread] = None
+        self._finishing = False   # 防止 _finish_task 重入
+
+        # 卡住检测定时器
+        self._stuck_timer = QTimer(self)
+        self._stuck_timer.setSingleShot(True)
+        self._stuck_timer.timeout.connect(self._on_stuck_timeout)
+        self._last_output_time: float = 0.0
+
+        # 进程结束轮询（200ms）
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_process)
+
+    # ---------- 状态 ----------
+
+    @property
+    def state(self) -> TaskState:
+        return self._state
+
+    @property
+    def current_record(self) -> Optional[TaskRecord]:
+        return self._current_record
+
+    def _set_state(self, state: TaskState):
+        self._state = state
+        self.state_changed.emit(state)
+
+    # ---------- 启动任务 ----------
+
+    def start_task(self, task_text: str) -> bool:
+        """
+        启动任务子进程。
+        返回 True 表示已成功启动子进程，False 表示失败。
+        """
+        idle_states = {TaskState.IDLE, TaskState.COMPLETED,
+                       TaskState.FAILED, TaskState.CANCELLED}
+        if self._state not in idle_states:
+            return False
+
+        if not self._config:
+            return False
+
+        args = self._config.build_command_args(task_text)
+        env = self._build_env()
+
+        # 构建日志文件路径
+        log_dir = Path("gui_history") / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        task_id = str(uuid.uuid4())[:8]
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        log_file = log_dir / f"{ts}_{task_id}.log"
+
+        record = TaskRecord(
+            task_id=task_id,
+            task_text=task_text,
+            start_time=time.time(),
+            state=TaskState.STARTING,
+            device_id=self._config.get("OPEN_AUTOGLM_DEVICE_ID"),
+            model=self._config.get("OPEN_AUTOGLM_MODEL"),
+            base_url=self._config.get("OPEN_AUTOGLM_BASE_URL"),
+            max_steps=self._config.get("OPEN_AUTOGLM_MAX_STEPS"),
+            log_file=str(log_file),
+        )
+        self._current_record = record
+        self._finishing = False
+        self._set_state(TaskState.STARTING)
+        self._add_event("task_start", f"任务启动: {task_text}")
+
+        try:
+            self._process = subprocess.Popen(
+                args,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                cwd=str(Path(__file__).parent.parent.parent),
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            )
+        except Exception as e:
+            self._add_event("start_error", f"子进程启动失败: {e}")
+            record.state = TaskState.FAILED
+            record.error_summary = str(e)
+            record.end_time = time.time()
+            self._set_state(TaskState.FAILED)
+            self.task_finished.emit(record)
+            self._save_history()
+            return False
+
+        self._add_event("process_started", f"子进程已启动，PID={self._process.pid}")
+        self._set_state(TaskState.RUNNING)
+        record.state = TaskState.RUNNING
+        self.task_started.emit(record)
+
+        # 启动日志读取线程
+        self._reader = _LogReaderThread(self._process, log_file)
+        self._reader.line_ready.connect(self._on_log_line)
+        self._reader.finished_reading.connect(self._on_reader_finished)
+        self._reader.start()
+
+        # 启动卡住检测
+        self._last_output_time = time.time()
+        self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
+
+        # 启动进程结束轮询
+        self._poll_timer.start(200)
+
+        return True
+
+    def _build_env(self) -> dict:
+        """构建子进程环境变量（继承当前进程环境）"""
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUNBUFFERED"] = "1"
+        return env
+
+    # ---------- 停止/暂停/恢复 ----------
+
+    def stop_task(self):
+        """用户主动停止任务（优雅终止 -> 超时强杀）"""
+        if self._state not in (TaskState.RUNNING, TaskState.PAUSED, TaskState.STARTING):
+            return
+        self._set_state(TaskState.STOPPING)
+        self._add_event("user_stop", "用户终止任务")
+        self._terminate_process()
+
+    def pause_task(self, reason: str = "用户暂停"):
+        """暂停任务（逻辑暂停，进程继续运行但 GUI 标记暂停态）"""
+        if self._state != TaskState.RUNNING:
+            return
+        self._set_state(TaskState.PAUSED)
+        self._add_event("user_pause", f"任务暂停: {reason}")
+        # 暂停时停止卡住检测
+        self._stuck_timer.stop()
+
+    def resume_task(self):
+        """恢复任务"""
+        if self._state != TaskState.PAUSED:
+            return
+        self._set_state(TaskState.RUNNING)
+        self._add_event("user_resume", "任务恢复执行")
+        # 重启卡住检测
+        self._last_output_time = time.time()
+        self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
+
+    def request_takeover(self, reason: str = "人工接管"):
+        """触发人工接管：暂停任务并发送接管信号"""
+        if self._state == TaskState.RUNNING:
+            self.pause_task(reason)
+            self._add_event("takeover_request", f"接管请求: {reason}")
+            self.takeover_requested.emit(reason)
+
+    # ---------- 内部事件处理 ----------
+
+    def _on_log_line(self, line: str):
+        """收到日志行"""
+        self._last_output_time = time.time()
+        # 重置卡住检测（仅在 running 态）
+        if self._state == TaskState.RUNNING:
+            self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
+
+        self.log_line.emit(line)
+        self._infer_events_from_log(line)
+
+    def _infer_events_from_log(self, line: str):
+        """从日志内容推断高层事件（基于关键字匹配）"""
+        lower = line.lower()
+        triggers = [
+            ("设备检查",        "device_check",   "设备检查开始"),
+            ("checking system", "device_check",   "设备检查开始"),
+            ("device connected","device_connected","设备已连接"),
+            ("设备已连接",      "device_connected","设备已连接"),
+            ("api",             "api_check",      "API 检查"),
+            ("agent start",     "agent_start",    "Agent 开始执行"),
+            ("step ",           "agent_step",     None),
+            ("task completed",  "task_complete",  "任务完成"),
+            ("任务完成",        "task_complete",  "任务完成"),
+            ("error",           "error",          None),
+            ("错误",            "error",          None),
+            ("traceback",       "error",          None),
+            ("takeover",        "takeover",       "检测到接管请求"),
+            ("接管",            "takeover",       "检测到接管请求"),
+        ]
+        for keyword, evt_type, label in triggers:
+            if keyword in lower:
+                if evt_type == "agent_step":
+                    return
+                if evt_type == "error":
+                    if self._current_record:
+                        self._current_record.error_summary = line.strip()[:200]
+                    self._add_event(evt_type, line.strip()[:200])
+                    return
+                if evt_type == "takeover":
+                    self.request_takeover(label or line.strip()[:80])
+                    return
+                if label:
+                    self._add_event(evt_type, label)
+                return
+
+    def _on_reader_finished(self):
+        """日志读取线程结束时触发进程收尾"""
+        # 等待 reader 线程完全退出再清理引用
+        if self._reader:
+            self._reader.wait(2000)
+        self._poll_process(force=True)
+
+    def _poll_process(self, force: bool = False):
+        """轮询子进程是否结束（防重入）"""
+        if self._process is None:
+            self._poll_timer.stop()
+            return
+
+        ret = self._process.poll()
+        if ret is None and not force:
+            return
+
+        # 进程已退出，防止重入
+        if self._finishing:
+            return
+        self._finish_task(ret)
+
+    def _finish_task(self, ret: Optional[int]):
+        """统一收尾：停止定时器、清理引用、更新记录、发出信号。防重入。"""
+        if self._finishing:
+            return
+        self._finishing = True
+
+        self._poll_timer.stop()
+        self._stuck_timer.stop()
+
+        # 确保进程已完全退出，获取真实退出码
+        if self._process is not None:
+            if ret is None:
+                try:
+                    self._process.wait(timeout=2)
+                    ret = self._process.returncode
+                except subprocess.TimeoutExpired:
+                    self._process.kill()
+                    ret = self._process.wait()
+            self._process = None
+
+        # 清理 reader 引用
+        self._reader = None
+
+        exit_code = ret if ret is not None else -1
+        record = self._current_record
+        if record:
+            record.end_time = time.time()
+            record.exit_code = exit_code
+
+            if self._state == TaskState.STOPPING:
+                record.state = TaskState.CANCELLED
+                self._set_state(TaskState.CANCELLED)
+                self._add_event("cancelled", "任务已取消")
+            elif exit_code == 0:
+                record.state = TaskState.COMPLETED
+                self._set_state(TaskState.COMPLETED)
+                self._add_event("task_complete", f"任务完成，耗时 {record.duration_str}")
+            else:
+                record.state = TaskState.FAILED
+                self._set_state(TaskState.FAILED)
+                self._add_event("task_failed", f"任务失败，退出码 {exit_code}")
+
+            self.task_finished.emit(record)
+            self._save_history()
+
+    def _terminate_process(self):
+        """
+        三阶段终止：
+        1. SIGTERM / terminate()
+        2. 等待 TERMINATE_WAIT_MS
+        3. 超时后 SIGKILL / kill()
+        """
+        if self._process is None:
+            return
+
+        # 阶段 1：优雅终止
+        try:
+            if sys.platform == "win32":
+                self._process.terminate()
+            else:
+                try:
+                    os.killpg(os.getpgid(self._process.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    self._process.terminate()
+        except Exception:
+            pass
+
+        # 阶段 2：等待（非阻塞，通过 QTimer 延迟强杀）
+        QTimer.singleShot(self.TERMINATE_WAIT_MS, self._force_kill_process)
+
+    def _force_kill_process(self):
+        """若进程仍未退出，强制 SIGKILL"""
+        if self._process is None:
+            return
+        if self._process.poll() is not None:
+            return  # 已自然退出
+        try:
+            self._process.kill()
+        except Exception:
+            pass
+
+    def _on_stuck_timeout(self):
+        """超时无输出，认为卡住"""
+        self._add_event("stuck_detected", f"{self.STUCK_TIMEOUT_S}s 无输出，疑似卡住")
+        self.stuck_detected.emit()
+
+    def _add_event(self, event_type: str, message: str):
+        """记录关键事件"""
+        evt = {
+            "time": time.time(),
+            "time_str": time.strftime("%H:%M:%S"),
+            "type": event_type,
+            "message": message,
+        }
+        if self._current_record:
+            self._current_record.events.append(evt)
+        self.event_added.emit(evt)
+
+    def _save_history(self):
+        """保存任务历史"""
+        if self._history and self._current_record:
+            self._history.save_record(self._current_record)
+
+    # ---------- 应用退出时的阻塞清理 ----------
+
+    def shutdown(self, timeout_ms: int = 5000):
+        """
+        应用退出时调用。阻塞等待子进程与 reader 线程完全结束。
+        """
+        # 先发停止信号
+        if self._state in (TaskState.RUNNING, TaskState.PAUSED, TaskState.STARTING):
+            self.stop_task()
+
+        # 强杀进程（不等优雅超时）
+        if self._process:
+            try:
+                self._process.kill()
+            except Exception:
+                pass
+            try:
+                self._process.wait(timeout=3)
+            except Exception:
+                pass
+            self._process = None
+
+        # 等待 reader 线程
+        if self._reader and self._reader.isRunning():
+            self._reader.wait(timeout_ms)
+        self._reader = None
+
+        self._poll_timer.stop()
+        self._stuck_timer.stop()

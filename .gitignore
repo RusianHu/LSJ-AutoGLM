@@ -70,3 +70,7 @@ app_package_name.py
 AGENTS.md
 .venv
 .ace-tool/
+
+# GUI 运行时产生的历史数据与截图（本地保留，不提交）
+gui_history/
+docs/gui_screenshot.png
