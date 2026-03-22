@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.styles.buttons import btn_primary
+from gui.theme.styles.lists import list_default
 
 
 class _DiagWorker(QThread):
@@ -219,17 +220,8 @@ class DiagnosticsPage(QWidget):
         root.addWidget(self._summary_lbl)
 
     def _result_list_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QListWidget {"
-            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; padding:4px;"
-            "}"
-            "QListWidget::item {"
-            f"padding:8px 12px; border-radius:4px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
-            "}"
-            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
-        )
+        """诊断结果列表样式（委托至 styles/lists.py）。"""
+        return list_default(self._theme_tokens)
 
     def _summary_style(self, state: str) -> str:
         v = self._theme_vars or {}
@@ -259,21 +251,35 @@ class DiagnosticsPage(QWidget):
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
         新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        缓存 tokens 后按三段式刷新。
         """
         self._theme_tokens = tokens
-        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+        self._theme_mode = tokens.mode
+        self._theme_vars = tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
-    def on_theme_changed(self, theme: str, theme_vars: dict):
-        self._theme_mode = theme
-        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
-            self._theme_tokens = resolve_theme_tokens(theme)
-        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
-        self._apply_action_button_styles()
+    def refresh_theme_surfaces(self) -> None:
+        """刷新静态外观：列表、摘要区背景。"""
+        if self._theme_tokens is None:
+            return
         if hasattr(self, "_result_list"):
             self._result_list.setStyleSheet(self._result_list_style())
         if hasattr(self, "_summary_lbl"):
             self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
+
+    def refresh_theme_states(self) -> None:
+        """刷新动态状态：按钮样式。"""
+        self._apply_action_button_styles()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
+        self._theme_mode = theme
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
     def _on_run(self):
         if self._worker and self._worker.isRunning():

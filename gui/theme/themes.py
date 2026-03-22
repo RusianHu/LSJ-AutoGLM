@@ -8,7 +8,109 @@ gui/theme/themes.py - 内置主题定义
   - 未来可扩展品牌主题、高对比度主题
 """
 
-from gui.theme.tokens import ThemeTokens
+from gui.theme.tokens import ComponentTokens, ThemeTokens
+
+
+def _build_dark_component_tokens() -> ComponentTokens:
+    """构建暗色主题组件级令牌。"""
+    return ComponentTokens(
+        # 按钮
+        btn_primary_bg="#4f8cff",
+        btn_primary_text="#ffffff",
+        btn_primary_border="#4f8cff",
+        btn_secondary_bg="#21262d",
+        btn_secondary_text="#d7dee7",
+        btn_secondary_border="#303b4a",
+        btn_disabled_bg="#1b2432",
+        btn_disabled_text="#66778d",
+        btn_disabled_border="#303b4a",
+        # 输入框
+        input_bg="#161b22",
+        input_text="#d7dee7",
+        input_border="#303b4a",
+        input_focus_border="#4f8cff",
+        input_placeholder="#66778d",
+        input_disabled_bg="#1b2432",
+        # 列表
+        list_bg="#161b22",
+        list_item_text="#d7dee7",
+        list_item_selected_bg="rgba(79, 140, 255, 0.16)",
+        list_item_hover_bg="#1b2432",
+        list_console_bg="#0a0f18",
+        # 卡片/面板
+        card_bg="#161b22",
+        card_border="#303b4a",
+        card_elevated_bg="#1b2432",
+        # 横幅
+        banner_info_bg="rgba(79, 140, 255, 0.16)",
+        banner_info_border="#4f8cff",
+        banner_info_text="#4f8cff",
+        banner_success_bg="#0f2d1a",
+        banner_success_border="#1f6d3c",
+        banner_success_text="#3fb950",
+        banner_warning_bg="#3d2800",
+        banner_warning_border="#6e4800",
+        banner_warning_text="#e3b341",
+        banner_error_bg="#3d1a1a",
+        banner_error_border="#8f2d2b",
+        banner_error_text="#f85149",
+        # 对话框
+        dialog_bg="#161b22",
+        dialog_border="#303b4a",
+        dialog_title_text="#d7dee7",
+        dialog_body_text="#9ba7b4",
+    )
+
+
+def _build_light_component_tokens() -> ComponentTokens:
+    """构建浅色主题组件级令牌。"""
+    return ComponentTokens(
+        # 按钮
+        btn_primary_bg="#2563eb",
+        btn_primary_text="#ffffff",
+        btn_primary_border="#2563eb",
+        btn_secondary_bg="#eef2f7",
+        btn_secondary_text="#18212f",
+        btn_secondary_border="#d5deea",
+        btn_disabled_bg="#eef3f9",
+        btn_disabled_text="#7b8aa0",
+        btn_disabled_border="#d5deea",
+        # 输入框
+        input_bg="#ffffff",
+        input_text="#18212f",
+        input_border="#d5deea",
+        input_focus_border="#2563eb",
+        input_placeholder="#7b8aa0",
+        input_disabled_bg="#eef3f9",
+        # 列表
+        list_bg="#ffffff",
+        list_item_text="#18212f",
+        list_item_selected_bg="rgba(37, 99, 235, 0.12)",
+        list_item_hover_bg="#eef3f9",
+        list_console_bg="#f8fbff",
+        # 卡片/面板
+        card_bg="#ffffff",
+        card_border="#d5deea",
+        card_elevated_bg="#eef3f9",
+        # 横幅
+        banner_info_bg="rgba(37, 99, 235, 0.12)",
+        banner_info_border="#2563eb",
+        banner_info_text="#2563eb",
+        banner_success_bg="#dcfce7",
+        banner_success_border="#16a34a",
+        banner_success_text="#166534",
+        banner_warning_bg="#fef3c0",
+        banner_warning_border="#c28b00",
+        banner_warning_text="#92400e",
+        banner_error_bg="#fee2e5",
+        banner_error_border="#c9525a",
+        banner_error_text="#b91c1c",
+        # 对话框
+        dialog_bg="#ffffff",
+        dialog_border="#d5deea",
+        dialog_title_text="#18212f",
+        dialog_body_text="#526273",
+    )
 
 
 def build_dark_theme_tokens() -> ThemeTokens:
@@ -51,6 +153,8 @@ def build_dark_theme_tokens() -> ThemeTokens:
         nav_text="#a9b5c7",
         nav_text_hover="#e2e8f0",
         nav_hover_bg="rgba(255,255,255,0.06)",
+        # 组件级令牌
+        comp=_build_dark_component_tokens(),
     )
 
 
@@ -94,6 +198,8 @@ def build_light_theme_tokens() -> ThemeTokens:
         nav_text="#60708a",
         nav_text_hover="#1e2a3a",
         nav_hover_bg="rgba(37, 99, 235, 0.08)",
+        # 组件级令牌
+        comp=_build_light_component_tokens(),
     )
 
 

@@ -9,10 +9,12 @@ gui/theme/component_registry.py - 组件样式注册中心
   button.primary   button.secondary  button.subtle
   button.success   button.warning    button.danger
   button.ghost
-  input.default    input.readonly    input.search
-  list.default     list.console      list.event
-  banner.info      banner.success    banner.warning   banner.error
+  input.default    input.readonly    input.search    input.invalid   input.success
+  list.default     list.console      list.event      list.side
+  banner.info      banner.success    banner.warning  banner.error
   dialog.surface   dialog.message_box
+  card.default     card.elevated     card.outlined   card.console
+  log.console
 
 尺寸后缀（按钮）：
   .sm  .md（默认）  .lg  .compact
@@ -29,7 +31,12 @@ from gui.theme.styles import (
     banner_info, banner_success, banner_warning, banner_error,
     dialog_surface, dialog_message_box,
 )
-from gui.theme.styles.lists import list_event
+from gui.theme.styles.inputs import input_invalid, input_success as input_success_style
+from gui.theme.styles.lists import list_event, list_side
+from gui.theme.styles.logs import log_console
+from gui.theme.styles.cards import (
+    card_default, card_elevated, card_outlined, card_console,
+)
 
 # 类型别名
 StyleFactory = Callable[[ThemeTokens], str]
@@ -74,26 +81,29 @@ class ComponentStyleRegistry:
             tokens: 当前 ThemeTokens
 
         Returns:
-            QSS 字符串，未注册时返回空字符串。
+            QSS 字符串，未找到时返回空字符串并打印警告。
         """
         factory = self._factories.get(name)
         if factory is None:
+            import logging
+            logging.getLogger(__name__).warning(
+                "ComponentStyleRegistry: 未注册的样式 '%s'", name
+            )
             return ""
         return factory(tokens)
 
     def has(self, name: str) -> bool:
-        """是否注册了指定语义名称。"""
+        """检查指定语义名称是否已注册。"""
         return name in self._factories
 
-    def names(self) -> list[str]:
-        """所有已注册的语义名称列表。"""
-        return list(self._factories.keys())
+    def registered_names(self) -> list[str]:
+        """返回所有已注册的语义名称列表。"""
+        return sorted(self._factories.keys())
 
-    # ---------- 内部：注册内置样式 ----------
-
-    def _register_defaults(self):
+    def _register_defaults(self) -> None:
         """注册所有内置组件样式。"""
-        # 按钮 - md（默认尺寸）
+
+        # ---------- 按钮 - md（默认） ----------
         self._factories["button.primary"]   = btn_primary
         self._factories["button.secondary"] = btn_secondary
         self._factories["button.subtle"]    = btn_subtle
@@ -106,40 +116,51 @@ class ComponentStyleRegistry:
         self._factories["button.primary.sm"]   = lambda t: btn_primary(t, size="sm")
         self._factories["button.secondary.sm"] = lambda t: btn_secondary(t, size="sm")
         self._factories["button.subtle.sm"]    = lambda t: btn_subtle(t, size="sm")
-        self._factories["button.success.sm"]   = lambda t: btn_success(t, size="sm")
         self._factories["button.danger.sm"]    = lambda t: btn_danger(t, size="sm")
 
         # 按钮 - compact
         self._factories["button.primary.compact"]   = lambda t: btn_primary(t, size="compact")
         self._factories["button.secondary.compact"] = lambda t: btn_secondary(t, size="compact")
         self._factories["button.subtle.compact"]    = lambda t: btn_subtle(t, size="compact")
-        self._factories["button.success.compact"]   = lambda t: btn_success(t, size="compact")
         self._factories["button.danger.compact"]    = lambda t: btn_danger(t, size="compact")
         self._factories["button.warning.compact"]   = lambda t: btn_warning(t, size="compact")
+        self._factories["button.success.compact"]   = lambda t: btn_success(t, size="compact")
 
         # 按钮 - lg
         self._factories["button.primary.lg"]   = lambda t: btn_primary(t, size="lg")
         self._factories["button.danger.lg"]    = lambda t: btn_danger(t, size="lg")
 
-        # 输入框
+        # ---------- 输入框 ----------
         self._factories["input.default"]  = input_default
         self._factories["input.readonly"] = input_readonly
         self._factories["input.search"]   = input_search
+        self._factories["input.invalid"]  = input_invalid
+        self._factories["input.success"]  = input_success_style
 
-        # 列表
+        # ---------- 列表 ----------
         self._factories["list.default"] = list_default
         self._factories["list.console"] = list_console
         self._factories["list.event"]   = list_event
+        self._factories["list.side"]    = list_side
 
-        # 横幅
+        # ---------- 横幅 ----------
         self._factories["banner.info"]    = banner_info
         self._factories["banner.success"] = banner_success
         self._factories["banner.warning"] = banner_warning
         self._factories["banner.error"]   = banner_error
 
-        # 对话框
+        # ---------- 对话框 ----------
         self._factories["dialog.surface"]     = dialog_surface
         self._factories["dialog.message_box"] = dialog_message_box
+
+        # ---------- 日志区 ----------
+        self._factories["log.console"] = log_console
+
+        # ---------- 卡片/面板 ----------
+        self._factories["card.default"]  = card_default
+        self._factories["card.elevated"] = card_elevated
+        self._factories["card.outlined"] = card_outlined
+        self._factories["card.console"]  = card_console
 
 
 # 模块级默认注册表，供全局直接导入使用

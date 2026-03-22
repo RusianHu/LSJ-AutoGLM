@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """设备页 - ADB 检查、连接管理、设备切换"""
 
+import html
 import io
 import random
 import secrets
@@ -29,12 +30,16 @@ from PySide6.QtWidgets import (
 from gui.services.device_service import DeviceStatus
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
+from gui.theme.contracts import ThemeAwareDialog
 from gui.theme.styles.buttons import (
     btn_primary,
     btn_subtle,
     btn_danger,
     btn_success,
 )
+from gui.theme.styles.dialogs import dialog_surface
+from gui.theme.styles.lists import list_default
+from gui.theme.styles.logs import log_console
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +91,7 @@ class _PairWatcher(QThread):
             self.timed_out.emit()
 
 
-class QrCodeScanDialog(QDialog):
+class QrCodeScanDialog(ThemeAwareDialog):
     """
     PC 端生成 ADB 无线调试配对二维码，手机扫描后完成配对。
 
@@ -99,47 +104,27 @@ class QrCodeScanDialog(QDialog):
       3. 手机自动完成配对，PC 端会检测到新设备
     """
 
-    _DARK_STYLE = """
-        QDialog { background:#0d1117; color:#c9d1d9; }
-        QLabel  { color:#c9d1d9; }
-        QPushButton {
-            background-color:#21262d; border:1px solid #30363d;
-            border-radius:6px; color:#c9d1d9;
-            padding:6px 16px; font-size:13px;
-        }
-        QPushButton:hover { background-color:#30363d; }
-        QFrame#card {
-            background:#161b22; border:1px solid #30363d; border-radius:8px;
-        }
-    """
-    _LIGHT_STYLE = """
-        QDialog { background:#f4f7fb; color:#18212f; }
-        QLabel  { color:#18212f; }
-        QPushButton {
-            background-color:#eef2f7; border:1px solid #d5deea;
-            border-radius:6px; color:#18212f;
-            padding:6px 16px; font-size:13px;
-        }
-        QPushButton:hover { background-color:#eef3f9; border-color:#a9b6c7; }
-        QFrame#card {
-            background:#ffffff; border:1px solid #d5deea; border-radius:8px;
-        }
-    """
-
-    def __init__(self, known_device_ids: set, parent=None, theme: str = "dark"):
+    def __init__(self, known_device_ids: set, parent=None, theme: str = "dark", theme_manager=None):
         super().__init__(parent)
         self._known_ids = known_device_ids
         self._watcher: _PairWatcher | None = None
         self._service_name = self._rand_name()
         self._password = self._rand_password()
         self._theme_mode = theme
-        self._theme_tokens = resolve_theme_tokens(self._theme_mode)
+        self._status_text = "等待手机扫描..."
+        self._status_level = "muted"
+        self._qr_error_text = ""
+        self._tokens = resolve_theme_tokens(self._theme_mode)
         self.setWindowTitle("二维码配对设备")
         self.setMinimumWidth(420)
-        self.setStyleSheet(self._LIGHT_STYLE if theme == "light" else self._DARK_STYLE)
         self._build_ui()
         self._generate_qr()
         self._start_watcher()
+        if theme_manager is not None:
+            self.bind_theme_manager(theme_manager)
+        else:
+            # 初始应用主题
+            self.apply_theme_tokens(self._tokens)
 
     # ------------------------------------------------------------------
     # 随机凭据生成
@@ -154,6 +139,51 @@ class QrCodeScanDialog(QDialog):
         return "".join(str(secrets.randbelow(10)) for _ in range(length))
 
     # ------------------------------------------------------------------
+    # ThemeAware 协议
+    # ------------------------------------------------------------------
+
+    def refresh_theme_surfaces(self) -> None:
+        """刷新对话框背景和基础样式。"""
+        if self._tokens is None:
+            return
+        t = self._tokens
+        self.setStyleSheet(dialog_surface(t))
+        muted = t.text_secondary
+        countdown = t.text_muted
+        title_color = t.text_primary
+        card_style = (
+            f"background:{t.bg_elevated}; border:1px solid {t.border}; border-radius:8px;"
+        )
+        qr_style = "background:#ffffff; border-radius:8px; padding:8px;"
+        if self._qr_error_text:
+            qr_style = (
+                f"background:{t.bg_elevated}; color:{t.danger}; "
+                "border-radius:8px; padding:8px; font-size:11px;"
+            )
+        if hasattr(self, "_title_lbl"):
+            self._title_lbl.setStyleSheet(
+                f"font-size:15px; font-weight:bold; color:{title_color};"
+            )
+        if hasattr(self, "_steps_frame"):
+            self._steps_frame.setStyleSheet(card_style)
+        for lbl in getattr(self, "_step_labels", []):
+            lbl.setStyleSheet(f"color:{muted}; font-size:12px;")
+        if hasattr(self, "_qr_label"):
+            self._qr_label.setStyleSheet(qr_style)
+            if self._qr_error_text:
+                self._qr_label.setText(self._qr_error_text)
+        if hasattr(self, "_countdown_lbl"):
+            self._countdown_lbl.setStyleSheet(f"color:{countdown}; font-size:11px;")
+        self._render_status()
+
+    def refresh_theme_states(self) -> None:
+        """刷新按钮等动态状态。"""
+        if self._tokens is None:
+            return
+        if hasattr(self, "_close_btn"):
+            self._close_btn.setStyleSheet(btn_subtle(self._tokens))
+
+    # ------------------------------------------------------------------
     # UI 构建
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -161,38 +191,31 @@ class QrCodeScanDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
-        title_color = "#18212f" if self._theme_mode == "light" else "#c9d1d9"
-        muted_color = "#526273" if self._theme_mode == "light" else "#8b949e"
-        countdown_color = "#7b8aa0" if self._theme_mode == "light" else "#484f58"
-
-        title = QLabel("使用手机扫描下方二维码配对")
-        title.setStyleSheet(f"font-size:15px; font-weight:bold; color:{title_color};")
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
+        self._title_lbl = QLabel("使用手机扫描下方二维码配对")
+        self._title_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._title_lbl)
 
         # 步骤说明
-        steps_frame = QFrame()
-        steps_frame.setObjectName("card")
-        sf_layout = QVBoxLayout(steps_frame)
+        self._steps_frame = QFrame()
+        self._steps_frame.setObjectName("card")
+        sf_layout = QVBoxLayout(self._steps_frame)
         sf_layout.setContentsMargins(12, 10, 12, 10)
         sf_layout.setSpacing(3)
+        self._step_labels: list[QLabel] = []
         for step in [
             "1. 手机进入「设置」→「开发者选项」→「无线调试」",
             "2. 点击「使用二维码配对设备」，打开摄像头扫描框",
             "3. 用手机扫描下方二维码，等待配对完成",
         ]:
             lbl = QLabel(step)
-            lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
+            self._step_labels.append(lbl)
             sf_layout.addWidget(lbl)
-        layout.addWidget(steps_frame)
+        layout.addWidget(self._steps_frame)
 
         # 二维码显示区
         self._qr_label = QLabel()
         self._qr_label.setAlignment(Qt.AlignCenter)
         self._qr_label.setFixedSize(260, 260)
-        self._qr_label.setStyleSheet(
-            "background:#ffffff; border-radius:8px; padding:8px;"
-        )
         qr_wrapper = QHBoxLayout()
         qr_wrapper.addStretch()
         qr_wrapper.addWidget(self._qr_label)
@@ -200,16 +223,14 @@ class QrCodeScanDialog(QDialog):
         layout.addLayout(qr_wrapper)
 
         # 状态标签
-        self._status_lbl = QLabel("等待手机扫描...")
+        self._status_lbl = QLabel(self._status_text)
         self._status_lbl.setAlignment(Qt.AlignCenter)
-        self._status_lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
         self._status_lbl.setWordWrap(True)
         layout.addWidget(self._status_lbl)
 
         # 倒计时标签
         self._countdown_lbl = QLabel("")
         self._countdown_lbl.setAlignment(Qt.AlignCenter)
-        self._countdown_lbl.setStyleSheet(f"color:{countdown_color}; font-size:11px;")
         layout.addWidget(self._countdown_lbl)
 
         # 关闭按钮
@@ -257,13 +278,9 @@ class QrCodeScanDialog(QDialog):
             )
             self._qr_label.setPixmap(pixmap)
         except Exception as e:
-            error_bg = "#ffffff" if self._theme_mode == "light" else "#161b22"
-            error_color = "#b91c1c" if self._theme_mode == "light" else "#f85149"
-            self._qr_label.setText(f"二维码生成失败:\n{e}")
-            self._qr_label.setStyleSheet(
-                f"background:{error_bg}; color:{error_color}; font-size:11px;"
-                "border-radius:8px; padding:8px;"
-            )
+            self._qr_error_text = f"二维码生成失败:\n{e}"
+            self._qr_label.setPixmap(QPixmap())
+            self.refresh_theme_surfaces()
 
     # ------------------------------------------------------------------
     # 后台监听新设备
@@ -276,9 +293,9 @@ class QrCodeScanDialog(QDialog):
 
     def _on_device_found(self, device_id: str):
         self._timer.stop()
-        self._status_lbl.setText(
-            f"<span style='color:#3fb950'>配对成功！检测到新设备: {device_id}</span>"
-        )
+        self._status_text = f"配对成功！检测到新设备: {device_id}"
+        self._status_level = "success"
+        self._render_status()
         self._countdown_lbl.setText("")
         self._close_btn.setText("完成")
         # 记录成功的设备 ID 供外部读取
@@ -286,10 +303,9 @@ class QrCodeScanDialog(QDialog):
 
     def _on_timed_out(self):
         self._timer.stop()
-        self._status_lbl.setText(
-            "<span style='color:#e3b341'>等待超时，请重试。"
-            "确认手机与电脑在同一局域网，且无线调试已开启。</span>"
-        )
+        self._status_text = "等待超时，请重试。确认手机与电脑在同一局域网，且无线调试已开启。"
+        self._status_level = "warning"
+        self._render_status()
         self._countdown_lbl.setText("")
 
     def _on_tick(self):
@@ -314,6 +330,19 @@ class QrCodeScanDialog(QDialog):
         self._cleanup()
         super().closeEvent(event)
 
+    def _render_status(self) -> None:
+        if not hasattr(self, "_status_lbl") or self._tokens is None:
+            return
+        color_map = {
+            "muted": self._tokens.text_secondary,
+            "success": self._tokens.success,
+            "warning": self._tokens.warning,
+            "danger": self._tokens.danger,
+        }
+        color = color_map.get(self._status_level, self._tokens.text_secondary)
+        self._status_lbl.setStyleSheet(f"color:{color}; font-size:12px;")
+        self._status_lbl.setText(self._status_text)
+
     @property
     def paired_device_id(self) -> str:
         return getattr(self, "_paired_device_id", "")
@@ -330,9 +359,9 @@ class QrCodeScanDialog(QDialog):
 # 二维码配对对话框（配对码手动输入方式，保留）
 # ---------------------------------------------------------------------------
 
-class QrPairDialog(QDialog):
+class QrPairDialog(ThemeAwareDialog):
     """
-    Android 11+ 无线调试二维码配对对话框。
+    Android 11+ 无线调试二维码配对对话框（配对码手动输入方式）。
 
     使用步骤（手机端）：
       1. 手机 设置 -> 开发者选项 -> 无线调试 -> 使用二维码配对设备
@@ -342,118 +371,73 @@ class QrPairDialog(QDialog):
       5. 配对成功后，再用 TCP/IP 连接区的「连接」按钮连接常规端口（通常显示在无线调试页）
     """
 
-    _DARK_STYLE = """
-        QDialog {
-            background: #0d1117;
-            color: #c9d1d9;
-        }
-        QLabel {
-            color: #c9d1d9;
-        }
-        QLineEdit {
-            background: #161b22;
-            border: 1px solid #30363d;
-            border-radius: 6px;
-            color: #c9d1d9;
-            padding: 6px 10px;
-            font-size: 13px;
-        }
-        QLineEdit:focus {
-            border-color: #1f6feb;
-        }
-        QPushButton {
-            background-color: #21262d;
-            border: 1px solid #30363d;
-            border-radius: 6px;
-            color: #c9d1d9;
-            padding: 6px 16px;
-            font-size: 13px;
-        }
-        QPushButton:hover {
-            background-color: #30363d;
-        }
-        QFrame#divider {
-            background: #21262d;
-        }
-    """
-    _LIGHT_STYLE = """
-        QDialog {
-            background: #f4f7fb;
-            color: #18212f;
-        }
-        QLabel {
-            color: #18212f;
-        }
-        QLineEdit {
-            background: #ffffff;
-            border: 1px solid #d5deea;
-            border-radius: 6px;
-            color: #18212f;
-            padding: 6px 10px;
-            font-size: 13px;
-        }
-        QLineEdit:focus {
-            border-color: #2563eb;
-        }
-        QPushButton {
-            background-color: #eef2f7;
-            border: 1px solid #d5deea;
-            border-radius: 6px;
-            color: #18212f;
-            padding: 6px 16px;
-            font-size: 13px;
-        }
-        QPushButton:hover {
-            background-color: #eef3f9;
-            border-color: #a9b6c7;
-        }
-        QFrame#divider {
-            background: #d5deea;
-        }
-    """
-
-    def __init__(self, parent=None, theme: str = "dark"):
+    def __init__(self, parent=None, theme: str = "dark", theme_manager=None):
         super().__init__(parent)
         self._theme_mode = theme
-        self._theme_tokens = resolve_theme_tokens(self._theme_mode)
+        self._status_text = ""
+        self._status_level = "muted"
+        self._tokens = resolve_theme_tokens(self._theme_mode)
         self.setWindowTitle("使用二维码配对设备")
         self.setMinimumWidth(460)
-        self.setStyleSheet(self._LIGHT_STYLE if theme == "light" else self._DARK_STYLE)
         self._build_ui()
+        if theme_manager is not None:
+            self.bind_theme_manager(theme_manager)
+        else:
+            # 初始应用主题
+            self.apply_theme_tokens(self._tokens)
+
+    # ------------------------------------------------------------------
+    # ThemeAware 协议
+    # ------------------------------------------------------------------
+
+    def refresh_theme_surfaces(self) -> None:
+        """刷新对话框背景和基础样式。"""
+        if self._tokens is None:
+            return
+        t = self._tokens
+        self.setStyleSheet(dialog_surface(t))
+        card_style = f"QFrame {{ background: {t.bg_elevated}; border: 1px solid {t.border}; border-radius: 8px; }}"
+        muted = t.text_secondary
+        title = t.text_primary
+        if hasattr(self, "_title_lbl"):
+            self._title_lbl.setStyleSheet(f"color:{title}; font-size:16px; font-weight:bold;")
+        if hasattr(self, "_steps_frame"):
+            self._steps_frame.setStyleSheet(card_style)
+        if hasattr(self, "_steps_title_lbl"):
+            self._steps_title_lbl.setStyleSheet(f"color:{title}; font-size:13px; font-weight:bold;")
+        for lbl in getattr(self, "_step_labels", []):
+            lbl.setStyleSheet(f"color:{muted}; font-size:12px;")
+        if hasattr(self, "_status_lbl"):
+            self._render_status()
+
+    def refresh_theme_states(self) -> None:
+        """刷新按钮等动态状态。"""
+        if self._tokens is None:
+            return
+        if hasattr(self, "_cancel_btn"):
+            self._cancel_btn.setStyleSheet(btn_subtle(self._tokens))
+        if hasattr(self, "_pair_btn"):
+            self._pair_btn.setStyleSheet(btn_primary(self._tokens))
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
-        title_color = "#18212f" if self._theme_mode == "light" else "#c9d1d9"
-        muted_color = "#526273" if self._theme_mode == "light" else "#8b949e"
-        card_bg = "#ffffff" if self._theme_mode == "light" else "#161b22"
-        card_border = "#d5deea" if self._theme_mode == "light" else "#30363d"
-
         # 标题
-        title = QLabel("二维码配对 (Android 11+)")
-        title.setStyleSheet(f"font-size:16px; font-weight:bold; color:{title_color};")
-        layout.addWidget(title)
+        self._title_lbl = QLabel("二维码配对 (Android 11+)")
+        layout.addWidget(self._title_lbl)
 
         # 操作说明卡片
-        steps_frame = QFrame()
-        steps_frame.setStyleSheet(f"""
-            QFrame {{
-                background: {card_bg};
-                border: 1px solid {card_border};
-                border-radius: 8px;
-            }}
-            QLabel {{ color: {muted_color}; font-size: 12px; }}
-        """)
-        steps_layout = QVBoxLayout(steps_frame)
+        self._steps_frame = QFrame()
+        steps_layout = QVBoxLayout(self._steps_frame)
         steps_layout.setContentsMargins(14, 12, 14, 12)
         steps_layout.setSpacing(4)
 
-        steps_title = QLabel("手机操作步骤：")
-        steps_title.setStyleSheet(f"color:{title_color}; font-size:13px; font-weight:bold;")
-        steps_layout.addWidget(steps_title)
+        self._steps_title_lbl = QLabel("手机操作步骤：")
+        steps_layout.addWidget(self._steps_title_lbl)
 
+        self._step_labels: list[QLabel] = []
         steps_text = [
             "1. 手机进入 「设置」→「开发者选项」→「无线调试」",
             "2. 点击「使用二维码配对设备」，手机将显示二维码",
@@ -465,11 +449,11 @@ class QrPairDialog(QDialog):
         ]
         for step in steps_text:
             lbl = QLabel(step)
-            lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
             lbl.setWordWrap(True)
+            self._step_labels.append(lbl)
             steps_layout.addWidget(lbl)
 
-        layout.addWidget(steps_frame)
+        layout.addWidget(self._steps_frame)
 
         # 分割线
         divider = QFrame()
@@ -511,7 +495,6 @@ class QrPairDialog(QDialog):
         # 状态标签
         self._status_lbl = QLabel("")
         self._status_lbl.setWordWrap(True)
-        self._status_lbl.setStyleSheet(f"font-size:12px; color:{muted_color};")
         layout.addWidget(self._status_lbl)
 
         # 按钮行
@@ -548,8 +531,22 @@ class QrPairDialog(QDialog):
         self.accept()
 
     def _set_status(self, msg: str, error: bool = False):
-        color = "#f85149" if error else "#3fb950"
-        self._status_lbl.setText(f"<span style='color:{color}'>{msg}</span>")
+        self._status_text = msg
+        self._status_level = "danger" if error else "success"
+        self._render_status()
+
+    def _render_status(self) -> None:
+        if not hasattr(self, "_status_lbl") or self._tokens is None:
+            return
+        color_map = {
+            "muted": self._tokens.text_secondary,
+            "success": self._tokens.success,
+            "warning": self._tokens.warning,
+            "danger": self._tokens.danger,
+        }
+        color = color_map.get(self._status_level, self._tokens.text_secondary)
+        self._status_lbl.setStyleSheet(f"font-size:12px; color:{color};")
+        self._status_lbl.setText(html.escape(self._status_text))
 
     @property
     def pair_address(self) -> str:
@@ -567,6 +564,7 @@ class DevicePage(QWidget):
         super().__init__(parent)
         self._services = services
         self._device = services.get("device")
+        self._theme_manager = services.get("theme_manager")
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
@@ -725,26 +723,12 @@ class DevicePage(QWidget):
         root.addStretch(1)
 
     def _device_list_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QListWidget {"
-            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; padding:4px;"
-            "}"
-            "QListWidget::item { padding:8px 12px; border-radius:6px; }"
-            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
-            f"QListWidget::item:hover {{ background:{v.get('accent_soft', 'rgba(79, 140, 255, 0.16)')}; }}"
-        )
+        """设备列表样式（委托至 styles/lists.py）。"""
+        return list_default(self._theme_tokens)
 
     def _detail_log_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QPlainTextEdit {"
-            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-            f"border-radius:8px; color:{v.get('text_secondary', '#8b949e')}; font-size:12px; padding:6px;"
-            "font-family:'Consolas',monospace;"
-            "}"
-        )
+        """设备操作日志样式（委托至 styles/logs.py）。"""
+        return log_console(self._theme_tokens)
 
     def _apply_action_button_styles(self):
         btn_styles = (
@@ -782,23 +766,35 @@ class DevicePage(QWidget):
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
         新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        缓存 tokens 后按三段式刷新。
         """
         self._theme_tokens = tokens
-        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+        self._theme_mode = tokens.mode
+        self._theme_vars = tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
-    def on_theme_changed(self, theme: str, theme_vars: dict):
-        self._theme_mode = theme
-        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
-            self._theme_tokens = resolve_theme_tokens(theme)
-        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
-
-        self._apply_action_button_styles()
-
+    def refresh_theme_surfaces(self) -> None:
+        """刷新静态外观：列表、日志区背景。"""
+        if self._theme_tokens is None:
+            return
         if hasattr(self, '_device_list'):
             self._device_list.setStyleSheet(self._device_list_style())
         if hasattr(self, '_detail_log'):
             self._detail_log.setStyleSheet(self._detail_log_style())
+
+    def refresh_theme_states(self) -> None:
+        """刷新动态状态：按钮样式。"""
+        self._apply_action_button_styles()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
+        self._theme_mode = theme
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
     def _connect_signals(self):
         if self._device:
@@ -908,7 +904,12 @@ class DevicePage(QWidget):
             known_ids = {d.device_id for d in self._device.devices}
 
         self._log("正在生成配对二维码，请用手机扫描...")
-        dlg = QrCodeScanDialog(known_ids, parent=self, theme=self._theme_mode)
+        dlg = QrCodeScanDialog(
+            known_ids,
+            parent=self,
+            theme=self._theme_mode,
+            theme_manager=self._theme_manager,
+        )
         dlg.exec()
 
         paired_id = dlg.paired_device_id
@@ -926,7 +927,7 @@ class DevicePage(QWidget):
 
     def _on_qr_pair(self):
         """打开配对码手动输入对话框，执行 adb pair（备用方式）"""
-        dlg = QrPairDialog(self, theme=self._theme_mode)
+        dlg = QrPairDialog(self, theme=self._theme_mode, theme_manager=self._theme_manager)
         if dlg.exec() != QrPairDialog.DialogCode.Accepted:
             return
         addr = dlg.pair_address

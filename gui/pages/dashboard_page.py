@@ -45,6 +45,8 @@ from gui.theme.styles.buttons import (
     btn_success,
     btn_subtle,
 )
+from gui.theme.styles.lists import list_event
+from gui.theme.styles.logs import log_console
 
 
 # 任务状态 -> (显示文字, 颜色)
@@ -433,16 +435,18 @@ class DashboardPage(QWidget):
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
         新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        缓存 tokens 后按三段式刷新。
         """
         self._theme_tokens = tokens
-        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+        self._theme_mode = tokens.mode
+        self._theme_vars = tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
-    def on_theme_changed(self, theme: str, theme_vars: dict):
-        self._theme_mode = theme
-        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
-            self._theme_tokens = resolve_theme_tokens(theme)
-        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
+    def refresh_theme_surfaces(self) -> None:
+        """刷新静态外观：工具栏、状态栏、列表、日志区、镜像区背景。"""
+        if self._theme_tokens is None:
+            return
         v = self._theme_vars
 
         # 工具栏与状态栏仍由全局 role 选择器控制容器外观；
@@ -457,11 +461,6 @@ class DashboardPage(QWidget):
                 widget.style().unpolish(widget)
                 widget.style().polish(widget)
                 widget.update()
-
-        self._apply_action_button_styles()
-
-        if hasattr(self, "_channel_combo"):
-            self._channel_combo.setStyleSheet(self._channel_combo_style(v))
 
         if hasattr(self, "_mirror_container"):
             self._mirror_container.setStyleSheet(
@@ -487,24 +486,9 @@ class DashboardPage(QWidget):
                 f"border-radius:8px; padding:6px;"
             )
         if hasattr(self, "_log_view"):
-            self._log_view.setStyleSheet(
-                "QPlainTextEdit {"
-                f"background:{v.get('bg_console', '#0a0f18')}; color:{v.get('text_primary', '#c9d1d9')};"
-                f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
-                "font-family:'Consolas','Courier New',monospace; font-size:12px; padding:8px;"
-                "}"
-            )
+            self._log_view.setStyleSheet(log_console(self._theme_tokens))
         if hasattr(self, "_event_list"):
-            self._event_list.setStyleSheet(
-                "QListWidget {"
-                f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-                f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
-                "}"
-                "QListWidget::item {"
-                f"padding:4px 8px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
-                "}"
-                f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
-            )
+            self._event_list.setStyleSheet(list_event(self._theme_tokens))
         if hasattr(self, "_result_lbl"):
             self._result_lbl.setStyleSheet(
                 self._summary_style(self._last_result_color or v.get("text_secondary", "#526273"))
@@ -513,6 +497,24 @@ class DashboardPage(QWidget):
         self._set_task_status(*self._last_task_status)
         self._set_device_status(*self._last_device_status)
         self._set_mirror_status(*self._last_mirror_status)
+
+    def refresh_theme_states(self) -> None:
+        """刷新动态状态：按钮样式、渠道下拉框。"""
+        if self._theme_tokens is None:
+            return
+        v = self._theme_vars
+        self._apply_action_button_styles()
+        if hasattr(self, "_channel_combo"):
+            self._channel_combo.setStyleSheet(self._channel_combo_style(v))
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
+        self._theme_mode = theme
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
     # ================================================================
     # 信号连接

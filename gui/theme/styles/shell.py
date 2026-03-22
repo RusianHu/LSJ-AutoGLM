@@ -12,9 +12,10 @@ gui/theme/styles/shell.py - 壳层全局 QSS 生成
   - QSplitter
   - QComboBox
   - 输入框（全局 fallback）
-  - 基础按钮 fallback（variant 模式）
+  - 基础按钮 fallback（无 variant）
 
 不在这里的：
+  - variant 按钮样式（由 styles/buttons.py + ComponentStyleRegistry 处理）
   - 复杂业务按钮的局部样式（由 styles/buttons.py 处理）
   - 对话框业务区域（由 styles/dialogs.py 处理）
   - 横幅（由 styles/banners.py 处理）
@@ -199,7 +200,8 @@ def shell_global_qss(t: ThemeTokens) -> str:
             selection-color: {t.accent};
         }}
 
-        /* ====== 按钮 fallback（variant 属性模式，全局匹配）====== */
+        /* ====== 按钮基础 fallback（仅保留无任何 setStyleSheet 覆盖时的默认外观）====== */
+        /* variant 语义按钮应使用 ComponentStyleRegistry 或直接调用 styles/buttons.py 函数 */
         QPushButton {{
             background-color: {t.bg_btn};
             border: 1px solid {t.border};
@@ -219,50 +221,5 @@ def shell_global_qss(t: ThemeTokens) -> str:
             background-color: {t.bg_elevated};
             color: {t.text_muted};
             border-color: {t.border};
-        }}
-        QPushButton[variant="primary"] {{
-            background-color: {t.accent};
-            border-color: {t.accent};
-            color: #ffffff;
-            font-weight: 600;
-        }}
-        QPushButton[variant="primary"]:hover {{
-            background-color: {t.accent_hover};
-            border-color: {t.accent_hover};
-        }}
-        QPushButton[variant="primary"]:disabled {{
-            background-color: {t.bg_elevated};
-            border-color: {t.border};
-            color: {t.text_muted};
-        }}
-        QPushButton[variant="danger"] {{
-            background-color: {t.danger_bg};
-            border-color: {t.danger_border};
-            color: {t.danger};
-            font-weight: 600;
-        }}
-        QPushButton[variant="danger"]:hover {{
-            background-color: {t.danger_bg};
-            border-color: {t.danger};
-        }}
-        QPushButton[variant="danger"]:disabled {{
-            background-color: {t.bg_elevated};
-            border-color: {t.border};
-            color: {t.text_muted};
-        }}
-        QPushButton[variant="warning"] {{
-            background-color: {t.warning_bg};
-            border-color: {t.warning_border};
-            color: {t.warning};
-            font-weight: 600;
-        }}
-        QPushButton[variant="warning"]:hover {{
-            background-color: {t.warning_bg};
-            border-color: {t.warning};
-        }}
-        QPushButton[variant="warning"]:disabled {{
-            background-color: {t.bg_elevated};
-            border-color: {t.border};
-            color: {t.text_muted};
         }}
     """

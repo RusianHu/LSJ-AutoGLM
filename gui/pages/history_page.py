@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.styles.buttons import btn_danger, btn_subtle
+from gui.theme.styles.lists import list_console, list_event
+from gui.theme.styles.logs import log_console
 
 
 STATE_COLOR = {
@@ -182,41 +184,16 @@ class HistoryPage(QWidget):
         return w
 
     def _console_list_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QListWidget {"
-            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
-            "}"
-            "QListWidget::item {"
-            f"padding:8px 10px; border-radius:4px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
-            "}"
-            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
-            f"QListWidget::item:hover {{ background:{v.get('accent_soft', 'rgba(79, 140, 255, 0.16)')}; }}"
-        )
+        """任务历史列表样式（委托至 styles/lists.py）。"""
+        return list_console(self._theme_tokens)
 
     def _event_list_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QListWidget {"
-            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
-            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
-            "}"
-            "QListWidget::item {"
-            f"padding:5px 8px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
-            "}"
-            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
-        )
+        """事件列表样式（委托至 styles/lists.py）。"""
+        return list_event(self._theme_tokens)
 
     def _log_view_style(self) -> str:
-        v = self._theme_vars or {}
-        return (
-            "QPlainTextEdit {"
-            f"background:{v.get('bg_console', '#0a0f18')}; color:{v.get('text_primary', '#c9d1d9')};"
-            f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
-            "font-family:'Consolas','Courier New',monospace; font-size:12px; padding:8px;"
-            "}"
-        )
+        """日志查看区样式（委托至 styles/logs.py）。"""
+        return log_console(self._theme_tokens)
 
     def _apply_action_button_styles(self):
         for btn, style in (
@@ -230,23 +207,37 @@ class HistoryPage(QWidget):
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
         新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        缓存 tokens 后按三段式刷新。
         """
         self._theme_tokens = tokens
-        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+        self._theme_mode = tokens.mode
+        self._theme_vars = tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
-    def on_theme_changed(self, theme: str, theme_vars: dict):
-        self._theme_mode = theme
-        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
-            self._theme_tokens = resolve_theme_tokens(theme)
-        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
-        self._apply_action_button_styles()
+    def refresh_theme_surfaces(self) -> None:
+        """刷新静态外观：列表、日志区背景。"""
+        if self._theme_tokens is None:
+            return
         if hasattr(self, "_task_list"):
             self._task_list.setStyleSheet(self._console_list_style())
         if hasattr(self, "_log_view"):
             self._log_view.setStyleSheet(self._log_view_style())
         if hasattr(self, "_event_list"):
             self._event_list.setStyleSheet(self._event_list_style())
+
+    def refresh_theme_states(self) -> None:
+        """刷新动态状态：按钮样式。"""
+        self._apply_action_button_styles()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
+        self._theme_mode = theme
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
     def _connect_signals(self):
         if self._history:

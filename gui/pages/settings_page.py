@@ -310,22 +310,34 @@ class SettingsPage(QWidget):
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
         新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        缓存 tokens 后按三段式刷新。
         """
         self._theme_tokens = tokens
-        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+        self._theme_mode = tokens.mode
+        self._theme_vars = tokens.to_legacy_dict()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
+
+    def refresh_theme_surfaces(self) -> None:
+        """刷新静态外观：横幅、主题提示。"""
+        if self._theme_tokens is None:
+            return
+        if self._last_banner_state and self._validate_banner.isVisible():
+            self._show_banner(*self._last_banner_state)
+        self._update_theme_hint()
+
+    def refresh_theme_states(self) -> None:
+        """刷新动态状态：按钮样式。"""
+        self._apply_action_button_styles()
 
     def on_theme_changed(self, theme: str, theme_vars: dict):
+        """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
         self._theme_mode = theme
         if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
             self._theme_tokens = resolve_theme_tokens(theme)
         self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
-
-        self._apply_action_button_styles()
-
-        if self._last_banner_state and self._validate_banner.isVisible():
-            self._show_banner(*self._last_banner_state)
-        self._update_theme_hint()
+        self.refresh_theme_surfaces()
+        self.refresh_theme_states()
 
     def _load_theme_combo(self):
         """将配置中的主题值同步到 ComboBox 显示"""

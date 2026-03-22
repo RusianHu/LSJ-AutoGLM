@@ -11,8 +11,9 @@ gui/theme/contracts.py - 主题感知接口协议
 不再自行决定主题 QSS 拼接细节。
 """
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QWidget, QDialog
 
 from gui.theme.tokens import ThemeTokens
@@ -73,17 +74,53 @@ class ThemeAwareDialog(QDialog):
     支持主题感知的 Dialog 基类。
 
     子类应重写 refresh_theme_surfaces / refresh_theme_states。
+    如需在对话框打开期间跟随主题变化，可调用 bind_theme_manager()。
     """
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._tokens: ThemeTokens | None = None
+        self._theme_manager: Any | None = None
 
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """接收并缓存 tokens，然后触发完整刷新。"""
         self._tokens = tokens
         self.refresh_theme_surfaces()
         self.refresh_theme_states()
+
+    def bind_theme_manager(self, theme_manager: Any | None) -> None:
+        """
+        绑定 ThemeManager，使对话框在显示期间跟随主题变化。
+        绑定后会立即推送当前 tokens。
+        """
+        if theme_manager is self._theme_manager:
+            return
+        self._unbind_theme_manager()
+        self._theme_manager = theme_manager
+        if self._theme_manager is None:
+            return
+        self._theme_manager.theme_changed.connect(self.apply_theme_tokens)
+        self.apply_theme_tokens(self._theme_manager.get_tokens())
+
+    def _unbind_theme_manager(self) -> None:
+        """解绑 ThemeManager 广播，避免关闭后的冗余更新。"""
+        if self._theme_manager is None:
+            return
+        try:
+            self._theme_manager.theme_changed.disconnect(self.apply_theme_tokens)
+        except (RuntimeError, TypeError):
+            pass
+        self._theme_manager = None
+
+    def done(self, result: int) -> None:
+        """对话框结束时自动解绑主题广播。"""
+        self._unbind_theme_manager()
+        super().done(result)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """窗口关闭时自动解绑主题广播。"""
+        self._unbind_theme_manager()
+        super().closeEvent(event)
 
     def refresh_theme_surfaces(self) -> None:
         """刷新静态外观，子类重写。"""
