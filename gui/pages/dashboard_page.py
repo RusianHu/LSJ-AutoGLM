@@ -11,7 +11,7 @@
 import os
 import time
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QPixmap, QTextCursor
 from gui.widgets.mirror_label import MirrorLabel
 from PySide6.QtWidgets import (
@@ -34,6 +34,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.services.readiness_service import (
+    collect_blocking_labels,
+    run_readiness_checks,
+    summarize_readiness,
+)
 from gui.services.task_service import TaskState
 from gui.services.mirror_service import MirrorMode, MirrorState
 from gui.theme.tokens import ThemeTokens
@@ -71,6 +76,27 @@ MIRROR_STATE_DISPLAY = {
 }
 
 
+class _ReadinessWorker(QThread):
+    """后台执行启动环境检查，避免阻塞工作台页面。"""
+
+    results_ready = Signal(object)  # list[ReadinessCheckResult]
+
+    def __init__(self, config_service=None, device_id: str = ""):
+        super().__init__()
+        self._config = config_service
+        self._device_id = device_id
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        results = run_readiness_checks(self._config, device_id=self._device_id)
+        if self._stop_requested:
+            return
+        self.results_ready.emit(results)
+
+
 class DashboardPage(QWidget):
     """工作台页面"""
 
@@ -88,6 +114,13 @@ class DashboardPage(QWidget):
         self._last_device_status = ("未检测", "#8b949e")
         self._last_mirror_status = ("未启动", "#8b949e")
         self._last_result_color = ""
+        self._last_readiness_state = ("正在检查启动环境...", "info")
+        self._last_readiness_tooltip = "启动环境检查尚未开始"
+        self._readiness_results = []
+        self._readiness_summary = None
+        self._readiness_worker = None
+        self._pending_readiness_refresh = False
+        self._last_readiness_check_at = 0.0
 
         self._mirror_label: MirrorLabel = None   # ADB 截图降级时的图片显示
         self._mirror_container: QWidget = None
@@ -98,6 +131,9 @@ class DashboardPage(QWidget):
         self._mirror_debug_enabled = self._is_truthy(
             os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
         )
+        self._readiness_refresh_timer = QTimer(self)
+        self._readiness_refresh_timer.setSingleShot(True)
+        self._readiness_refresh_timer.timeout.connect(self._run_readiness_check)
 
         self._build_ui()
         self._apply_action_button_styles()
@@ -107,6 +143,25 @@ class DashboardPage(QWidget):
         # 初始化时同步已选中设备的 device_id 到镜像控件
         if self._device and self._device.selected_device and self._mirror_label:
             self._mirror_label.set_device_id(self._device.selected_device.device_id)
+        QTimer.singleShot(500, lambda: self._schedule_readiness_check(0))
+
+    def _current_device_id(self) -> str:
+        if self._device and self._device.selected_device:
+            return (self._device.selected_device.device_id or "").strip()
+
+        if self._config:
+            configured = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+            if configured:
+                return configured
+
+        if self._device and self._device.devices:
+            from gui.services.device_service import DeviceStatus
+
+            for info in self._device.devices:
+                if info.status == DeviceStatus.CONNECTED:
+                    return (info.device_id or "").strip()
+
+        return ""
 
     # ================================================================
     # UI 构建
@@ -122,6 +177,9 @@ class DashboardPage(QWidget):
 
         # 状态条
         root.addWidget(self._build_status_bar())
+
+        # 低侵入环境摘要条
+        root.addWidget(self._build_readiness_bar())
 
         # 主内容区（双主区 Splitter）
         splitter = QSplitter(Qt.Horizontal)
@@ -237,6 +295,127 @@ class DashboardPage(QWidget):
         sep.setFixedHeight(16)
         sep.setStyleSheet("")
         return sep
+
+    def _build_readiness_bar(self) -> QWidget:
+        bar = QFrame()
+        self._readiness_bar = bar
+        bar.setObjectName("DashboardReadinessBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 8, 16, 8)
+        layout.setSpacing(10)
+
+        self._readiness_text_lbl = QLabel(self._last_readiness_state[0])
+        self._readiness_text_lbl.setObjectName("DashboardReadinessText")
+        self._readiness_text_lbl.setWordWrap(True)
+        layout.addWidget(self._readiness_text_lbl, 1)
+
+        self._btn_open_diag = QPushButton("查看诊断")
+        self._btn_open_diag.setProperty("variant", "subtle")
+        self._btn_open_diag.setFixedHeight(28)
+        self._btn_open_diag.clicked.connect(self._open_diagnostics_page)
+        layout.addWidget(self._btn_open_diag)
+
+        self._btn_readiness_refresh = QPushButton("重新检查")
+        self._btn_readiness_refresh.setProperty("variant", "subtle")
+        self._btn_readiness_refresh.setFixedHeight(28)
+        self._btn_readiness_refresh.clicked.connect(lambda: self._schedule_readiness_check(0))
+        layout.addWidget(self._btn_readiness_refresh)
+
+        self._set_readiness_state(*self._last_readiness_state, tooltip=self._last_readiness_tooltip)
+        return bar
+
+    def _readiness_bar_style(self, semantic: str) -> str:
+        v = self._theme_vars or {}
+        if semantic == "success":
+            bg = v.get("success_bg", "#0f2d1a")
+            border = v.get("success_border", "#3fb95040")
+            text = v.get("success", "#3fb950")
+        elif semantic == "error":
+            bg = v.get("danger_bg", "#3d1a1a")
+            border = v.get("danger_border", "#8f2d2b")
+            text = v.get("danger", "#f85149")
+        elif semantic == "warning":
+            bg = v.get("warning_bg", "#3d2800")
+            border = v.get("warning_border", "#6e4800")
+            text = v.get("warning", "#e3b341")
+        else:
+            bg = v.get("bg_secondary", "#161b22")
+            border = v.get("border", "#30363d")
+            text = v.get("text_secondary", "#8b949e")
+        return (
+            f"QFrame#DashboardReadinessBar {{ background:{bg}; border-bottom:1px solid {border}; }}"
+            f"QLabel#DashboardReadinessText {{ color:{text}; font-size:12px; }}"
+        )
+
+    def _set_readiness_state(self, text: str, semantic: str = "info", tooltip: str = ""):
+        self._last_readiness_state = (text, semantic)
+        self._last_readiness_tooltip = tooltip or text
+        if hasattr(self, "_readiness_text_lbl"):
+            self._readiness_text_lbl.setText(text)
+            self._readiness_text_lbl.setToolTip(self._last_readiness_tooltip)
+        if hasattr(self, "_readiness_bar"):
+            self._readiness_bar.setToolTip(self._last_readiness_tooltip)
+            self._readiness_bar.setStyleSheet(self._readiness_bar_style(semantic))
+
+    def _schedule_readiness_check(self, delay_ms: int = 300):
+        if self._readiness_worker and self._readiness_worker.isRunning():
+            self._pending_readiness_refresh = True
+            return
+        self._readiness_refresh_timer.start(max(0, delay_ms))
+
+    def _run_readiness_check(self):
+        if self._readiness_worker and self._readiness_worker.isRunning():
+            self._pending_readiness_refresh = True
+            return
+        self._pending_readiness_refresh = False
+        self._set_readiness_state("正在检查启动环境...", "info", "正在执行启动环境检查")
+        if hasattr(self, "_btn_readiness_refresh"):
+            self._btn_readiness_refresh.setEnabled(False)
+        device_id = self._current_device_id()
+        self._readiness_worker = _ReadinessWorker(self._config, device_id=device_id)
+        self._readiness_worker.results_ready.connect(self._on_readiness_results)
+        self._readiness_worker.finished.connect(self._on_readiness_worker_finished)
+        self._readiness_worker.start()
+
+    def _on_readiness_results(self, results):
+        self._readiness_results = results or []
+        self._last_readiness_check_at = time.monotonic()
+        if not self._readiness_results:
+            self._readiness_summary = None
+            self._set_readiness_state("启动环境检查未返回结果", "warning")
+            return
+
+        self._readiness_summary = summarize_readiness(self._readiness_results)
+        summary_text = f"{self._readiness_summary.title} · {self._readiness_summary.detail}"
+        tooltip = summary_text
+        if self._readiness_summary.action_hint:
+            tooltip += f"\n{self._readiness_summary.action_hint}"
+        self._set_readiness_state(summary_text, self._readiness_summary.semantic, tooltip)
+
+    def _on_readiness_worker_finished(self):
+        if hasattr(self, "_btn_readiness_refresh"):
+            self._btn_readiness_refresh.setEnabled(True)
+        if self._readiness_worker:
+            self._readiness_worker.deleteLater()
+            self._readiness_worker = None
+        if self._pending_readiness_refresh:
+            self._pending_readiness_refresh = False
+            self._schedule_readiness_check(350)
+
+    def _open_diagnostics_page(self):
+        navigator = self._services.get("navigate_to_page")
+        if callable(navigator):
+            navigator("diag")
+            return
+
+        main_window = self.window()
+        if hasattr(main_window, "switch_page"):
+            main_window.switch_page("diag")
+            return
+        if hasattr(main_window, "_nav_buttons") and "diag" in getattr(main_window, "_nav_buttons", {}):
+            main_window._nav_buttons["diag"].setChecked(True)
+        if hasattr(main_window, "_switch_page"):
+            main_window._switch_page("diag")
 
     # ----------------------------------------------------------------
     # 主区 A：设备与镜像
@@ -479,6 +658,8 @@ class DashboardPage(QWidget):
             self._device_info_lbl.setStyleSheet(
                 f"color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:4px;"
             )
+        if hasattr(self, "_readiness_bar"):
+            self._readiness_bar.setStyleSheet(self._readiness_bar_style(self._last_readiness_state[1]))
         if hasattr(self, "_takeover_banner"):
             self._takeover_banner.setStyleSheet(
                 f"background:{v.get('warning_bg', '#3d2800')}; color:{v.get('warning', '#e3b341')}; "
@@ -541,6 +722,7 @@ class DashboardPage(QWidget):
         # 配置变化时同步渠道下拉框（例如设置页保存后）
         if self._config:
             self._config.config_changed.connect(self._sync_channel_combo)
+            self._config.config_changed.connect(lambda: self._schedule_readiness_check(300))
 
     # ================================================================
     # 渠道切换
@@ -617,6 +799,35 @@ class DashboardPage(QWidget):
         if not text:
             self._task_input.setFocus()
             return
+
+        if not self._readiness_results:
+            self._set_readiness_state(
+                "正在检查启动环境，请稍候片刻再开始任务。",
+                "info",
+                "启动环境检查仍在进行或尚未开始，请稍后重试。",
+            )
+            self._schedule_readiness_check(0)
+            return
+
+        blocking_labels = collect_blocking_labels(self._readiness_results)
+        if blocking_labels:
+            warning_text = f"启动前仍有关键项未就绪：{blocking_labels}"
+            self._set_readiness_state(
+                warning_text,
+                "error",
+                warning_text + "\n建议先查看诊断页并完成必要配置。",
+            )
+            msg = QMessageBox(self)
+            msg.setWindowTitle("启动前检查未通过")
+            msg.setText(f"当前仍有关键项未就绪：{blocking_labels}")
+            msg.setInformativeText("建议先查看“诊断”页详情，补齐设备连接、API 配置或依赖项后再开始任务。")
+            btn_diag = msg.addButton("查看诊断", QMessageBox.ActionRole)
+            msg.addButton("取消", QMessageBox.RejectRole)
+            msg.exec()
+            if msg.clickedButton() == btn_diag:
+                self._open_diagnostics_page()
+            return
+
         if self._task:
             # 清空上次日志
             self._log_view.clear()
@@ -626,7 +837,7 @@ class DashboardPage(QWidget):
             self._result_lbl.setStyleSheet(
                 self._summary_style(self._theme_vars.get("text_secondary", "#526273"))
             )
-            self._task.start_task(text)
+            self._task.start_task(text, device_id_override=self._current_device_id())
 
     def _on_stop(self):
         if self._task:
@@ -655,15 +866,7 @@ class DashboardPage(QWidget):
         if self._mirror.is_running:
             self._mirror.stop()
         else:
-            device_id = ""
-            if self._device and self._device.selected_device:
-                device_id = self._device.selected_device.device_id
-            elif self._config:
-                device_id = self._config.get("OPEN_AUTOGLM_DEVICE_ID")
-            if not device_id:
-                # 尝试从设备列表取第一个
-                if self._device and self._device.devices:
-                    device_id = self._device.devices[0].device_id
+            device_id = self._current_device_id()
             if device_id:
                 embed_wid = None
                 embed_container_size = None
@@ -825,7 +1028,11 @@ class DashboardPage(QWidget):
         lines = [f"<b>{device_info.display_name}</b>"]
         conn_type = {"usb": "USB", "wifi": "WiFi"}.get(device_info.connection_type, "未知")
         lines.append(f"连接方式: {conn_type}")
-        kbd = "已安装" if device_info.adb_keyboard_installed else "未安装"
+        kbd = device_info.adb_keyboard_status or (
+            "ADB Keyboard 已启用" if device_info.adb_keyboard_enabled else "ADB Keyboard 未安装"
+        )
+        if kbd.startswith("ADB Keyboard "):
+            kbd = kbd[len("ADB Keyboard "):]
         lines.append(f"ADB Keyboard: {kbd}")
         self._device_info_lbl.setText("<br>".join(lines))
         self._device_info_lbl.setStyleSheet("font-size:12px; padding:4px;")
@@ -834,6 +1041,8 @@ class DashboardPage(QWidget):
             self._update_device_status(device_info.device_id, "#3fb950")
         else:
             self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
+
+        self._schedule_readiness_check(300)
 
     def _update_device_status(self, text: str, color: str):
         self._set_device_status(text, color)
@@ -1018,6 +1227,19 @@ class DashboardPage(QWidget):
         """页面激活时刷新状态"""
         self._sync_channel_combo()
         self._refresh_status_bar()
+        if (not self._readiness_results) or (time.monotonic() - self._last_readiness_check_at > 45):
+            self._schedule_readiness_check(0)
+
+    def shutdown(self):
+        if hasattr(self, "_readiness_refresh_timer"):
+            self._readiness_refresh_timer.stop()
+        if self._readiness_worker:
+            if self._readiness_worker.isRunning():
+                self._readiness_worker.request_stop()
+                self._readiness_worker.wait(15000)
+            if not self._readiness_worker.isRunning():
+                self._readiness_worker.deleteLater()
+                self._readiness_worker = None
 
     # ================================================================
     # 按钮样式
@@ -1042,6 +1264,8 @@ class DashboardPage(QWidget):
                 getattr(self, "_btn_mirror_toggle", None),
                 btn_danger(self._theme_tokens, size="compact") if mirror_running else btn_subtle(self._theme_tokens, size="compact"),
             ),
+            (getattr(self, "_btn_open_diag", None), btn_subtle(self._theme_tokens, size="compact")),
+            (getattr(self, "_btn_readiness_refresh", None), btn_subtle(self._theme_tokens, size="compact")),
         )
         for btn, style in btn_specs:
             if btn:

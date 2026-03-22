@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
 
         # 暴露给 services，让需要的服务可以访问
         self._services["theme_manager"] = self._theme_manager
+        self._services["navigate_to_page"] = self.switch_page
 
         self.setWindowTitle("LSJ AutoGLM")
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
@@ -196,6 +197,13 @@ class MainWindow(QMainWindow):
             # 通知页面已激活（可选刷新）
             if hasattr(page, "on_page_activated"):
                 page.on_page_activated()
+
+    def switch_page(self, key: str):
+        """公开页面切换入口，供页面内部按钮/服务回调用。"""
+        btn = self._nav_buttons.get(key)
+        if btn:
+            btn.setChecked(True)
+        self._switch_page(key)
 
     # ---------- 接管/卡住 弹窗 ----------
 

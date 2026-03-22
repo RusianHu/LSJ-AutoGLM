@@ -180,7 +180,7 @@ class TaskService(QObject):
 
     # ---------- 启动任务 ----------
 
-    def start_task(self, task_text: str) -> bool:
+    def start_task(self, task_text: str, device_id_override: str = "") -> bool:
         """
         启动任务子进程。
         返回 True 表示已成功启动子进程，False 表示失败。
@@ -193,7 +193,8 @@ class TaskService(QObject):
         if not self._config:
             return False
 
-        args = self._config.build_command_args(task_text)
+        effective_device_id = (device_id_override or self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+        args = self._config.build_command_args(task_text, device_id_override=effective_device_id)
         env = self._build_env()
 
         # 构建日志文件路径
@@ -208,7 +209,7 @@ class TaskService(QObject):
             task_text=task_text,
             start_time=time.time(),
             state=TaskState.STARTING,
-            device_id=self._config.get("OPEN_AUTOGLM_DEVICE_ID"),
+            device_id=effective_device_id,
             model=self._config.get("OPEN_AUTOGLM_MODEL"),
             base_url=self._config.get("OPEN_AUTOGLM_BASE_URL"),
             max_steps=self._config.get("OPEN_AUTOGLM_MAX_STEPS"),

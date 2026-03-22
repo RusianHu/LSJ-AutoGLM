@@ -564,6 +564,7 @@ class DevicePage(QWidget):
         super().__init__(parent)
         self._services = services
         self._device = services.get("device")
+        self._config = services.get("config")
         self._theme_manager = services.get("theme_manager")
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
@@ -849,7 +850,9 @@ class DevicePage(QWidget):
         device_id = item.data(Qt.UserRole)
         if device_id and self._device:
             self._device.select_device(device_id)
-            self._log(f"已选择设备: {device_id}")
+            if self._config:
+                self._config.set("OPEN_AUTOGLM_DEVICE_ID", device_id)
+            self._log(f"已选择当前设备: {device_id}")
             self._update_action_button_states()
 
     def _on_disconnect(self):
@@ -955,7 +958,7 @@ class DevicePage(QWidget):
             return
         if self._device:
             ok, msg = self._device.check_adb_keyboard(device_id)
-            color = "#3fb950" if ok else "#f85149"
+            color = "#3fb950" if ok else "#e3b341"
             self._kbd_status_lbl.setText(
                 f"<span style='color:{color}'>{msg}</span>"
             )

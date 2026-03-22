@@ -35,6 +35,8 @@ class DeviceInfo:
     model: str = ""
     android_version: str = ""
     adb_keyboard_installed: bool = False
+    adb_keyboard_enabled: bool = False
+    adb_keyboard_status: str = "ADB Keyboard 未安装"
 
     @property
     def display_name(self) -> str:
@@ -45,6 +47,61 @@ class DeviceInfo:
         if self.android_version:
             parts.append(f"Android {self.android_version}")
         return " | ".join(parts)
+
+
+ADB_KEYBOARD_PACKAGE = "com.android.adbkeyboard"
+ADB_KEYBOARD_IME = "com.android.adbkeyboard/.AdbIME"
+
+
+def _run_adb_shell(device_id: str, args: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["adb", "-s", device_id, "shell", *args],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def probe_adb_keyboard_status(device_id: str, timeout: int = 5) -> Tuple[bool, bool, str]:
+    """返回 (是否安装, 是否已启用/可直接切换, 状态文本)。"""
+    installed = False
+    enabled = False
+    current_ime = ""
+
+    try:
+        result = _run_adb_shell(
+            device_id,
+            ["pm", "list", "packages", ADB_KEYBOARD_PACKAGE],
+            timeout=timeout,
+        )
+        installed = ADB_KEYBOARD_PACKAGE in ((result.stdout or "") + (result.stderr or ""))
+    except Exception:
+        installed = False
+
+    try:
+        result = _run_adb_shell(device_id, ["ime", "list", "-s"], timeout=timeout)
+        ime_list = ((result.stdout or "") + (result.stderr or "")).strip()
+        enabled = ADB_KEYBOARD_IME in ime_list
+    except Exception:
+        enabled = False
+
+    try:
+        result = _run_adb_shell(
+            device_id,
+            ["settings", "get", "secure", "default_input_method"],
+            timeout=timeout,
+        )
+        current_ime = ((result.stdout or "") + (result.stderr or "")).strip()
+    except Exception:
+        current_ime = ""
+
+    if ADB_KEYBOARD_IME in current_ime:
+        return True, True, "ADB Keyboard 当前已启用"
+    if enabled:
+        return installed or True, True, "ADB Keyboard 已启用"
+    if installed:
+        return True, False, "ADB Keyboard 已安装但未启用"
+    return False, False, "ADB Keyboard 未安装"
 
 
 class _RefreshWorker(QThread):
@@ -131,12 +188,10 @@ class _RefreshWorker(QThread):
                 pass
 
         try:
-            r3 = subprocess.run(
-                ["adb", "-s", info.device_id, "shell",
-                 "pm", "list", "packages", "com.android.adbkeyboard"],
-                capture_output=True, text=True, timeout=5
-            )
-            info.adb_keyboard_installed = "com.android.adbkeyboard" in r3.stdout
+            installed, enabled, status = probe_adb_keyboard_status(info.device_id, timeout=5)
+            info.adb_keyboard_installed = installed
+            info.adb_keyboard_enabled = enabled
+            info.adb_keyboard_status = status
         except Exception:
             pass
 
@@ -166,15 +221,21 @@ class DeviceService(QObject):
         self._selected_device: Optional[DeviceInfo] = None
         self._adb_available: bool = False
         self._worker: Optional[_RefreshWorker] = None
+        self._stopping: bool = False
 
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self.refresh)
         self._poll_timer.start(self.POLL_INTERVAL_MS)
 
         # 启动时延迟 200ms 做第一次检查，避免阻塞主窗口初始化
-        QTimer.singleShot(200, self._initial_check)
+        self._initial_timer = QTimer(self)
+        self._initial_timer.setSingleShot(True)
+        self._initial_timer.timeout.connect(self._initial_check)
+        self._initial_timer.start(200)
 
     def _initial_check(self):
+        if self._stopping:
+            return
         self.check_adb()
         self.refresh()
 
@@ -219,6 +280,8 @@ class DeviceService(QObject):
 
     def refresh(self):
         """异步刷新设备列表（不阻塞 UI 线程）"""
+        if self._stopping:
+            return
         if not self._adb_available:
             self.check_adb()
             if not self._adb_available:
@@ -341,15 +404,17 @@ class DeviceService(QObject):
     # ---------- scrcpy 检查 ----------
 
     def check_scrcpy(self) -> Tuple[bool, str]:
-        path = shutil.which("scrcpy")
+        from gui.services.mirror_service import MirrorService
+
+        path = MirrorService.find_scrcpy()
         if path:
             try:
                 r = subprocess.run(
-                    ["scrcpy", "--version"],
+                    [path, "--version"],
                     capture_output=True, text=True, timeout=5
                 )
                 ver = r.stdout.strip().splitlines()[0] if r.stdout else "scrcpy"
-                return True, ver
+                return True, f"{ver} ({path})"
             except Exception:
                 return True, f"scrcpy: {path}"
         return False, "scrcpy 未找到"
@@ -358,15 +423,8 @@ class DeviceService(QObject):
 
     def check_adb_keyboard(self, device_id: str) -> Tuple[bool, str]:
         try:
-            r = subprocess.run(
-                ["adb", "-s", device_id, "shell",
-                 "pm", "list", "packages", "com.android.adbkeyboard"],
-                capture_output=True, text=True, timeout=10
-            )
-            installed = "com.android.adbkeyboard" in r.stdout
-            if installed:
-                return True, "ADB Keyboard 已安装"
-            return False, "ADB Keyboard 未安装"
+            _installed, enabled, status = probe_adb_keyboard_status(device_id, timeout=10)
+            return enabled, status
         except Exception as e:
             return False, str(e)
 
@@ -374,7 +432,10 @@ class DeviceService(QObject):
 
     def stop(self):
         """停止定时器与后台 worker，供应用退出时调用"""
+        self._stopping = True
         self._poll_timer.stop()
+        if hasattr(self, "_initial_timer"):
+            self._initial_timer.stop()
         if self._worker:
             if self._worker.isRunning():
                 self._worker.wait(3000)

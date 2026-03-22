@@ -474,9 +474,46 @@ class ConfigService(QObject):
             return False
         return True
 
+    def resolve_api_key(self) -> Tuple[str, str]:
+        """按运行时优先级解析当前实际生效的 API Key 与来源字段。"""
+        api_key = (self.get("OPEN_AUTOGLM_API_KEY") or "").strip()
+        if api_key:
+            return api_key, "OPEN_AUTOGLM_API_KEY"
+
+        base_url = (self.get("OPEN_AUTOGLM_BASE_URL") or "").strip().lower()
+        if "modelscope" in base_url:
+            primary = (self.get("OPEN_AUTOGLM_MODELSCOPE_API_KEY") or "").strip()
+            if primary:
+                return primary, "OPEN_AUTOGLM_MODELSCOPE_API_KEY"
+            backup = (self.get("OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY") or "").strip()
+            if backup:
+                return backup, "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY"
+        elif "bigmodel" in base_url:
+            zhipu_key = (self.get("OPEN_AUTOGLM_ZHIPU_API_KEY") or "").strip()
+            if zhipu_key:
+                return zhipu_key, "OPEN_AUTOGLM_ZHIPU_API_KEY"
+        elif "127.0.0.1" in base_url or "localhost" in base_url:
+            local_key = (self.get("OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY") or "").strip()
+            if local_key:
+                return local_key, "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY"
+        else:
+            newapi_key = (self.get("OPEN_AUTOGLM_NEWAPI_API_KEY") or "").strip()
+            if newapi_key:
+                return newapi_key, "OPEN_AUTOGLM_NEWAPI_API_KEY"
+
+        active = self.get_active_channel()
+        if active:
+            field_name = (active.get("api_key_field") or "").strip()
+            if field_name:
+                value = (self.get(field_name) or "").strip()
+                if value:
+                    return value, field_name
+
+        return "", ""
+
     # ---------- 构建命令行参数 ----------
 
-    def build_command_args(self, task_text: str) -> List[str]:
+    def build_command_args(self, task_text: str, device_id_override: str = "") -> List[str]:
         """构建启动 main.py 的命令行参数列表"""
         args = [sys.executable, "-u", "main.py"]
 
@@ -488,25 +525,11 @@ class ConfigService(QObject):
         if model:
             args += ["--model", model]
 
-        # API Key 优先级：
-        # 1. OPEN_AUTOGLM_API_KEY（通用）
-        # 2. 根据 Base URL 推断对应预设 Key
-        api_key = self.get("OPEN_AUTOGLM_API_KEY")
-        base_url_lower = base_url.lower()
-        if not api_key:
-            if "modelscope" in base_url_lower:
-                api_key = (self.get("OPEN_AUTOGLM_MODELSCOPE_API_KEY") or
-                           self.get("OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY"))
-            elif "bigmodel" in base_url_lower:
-                api_key = self.get("OPEN_AUTOGLM_ZHIPU_API_KEY")
-            elif "127.0.0.1" in base_url_lower or "localhost" in base_url_lower:
-                api_key = self.get("OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY")
-            else:
-                api_key = self.get("OPEN_AUTOGLM_NEWAPI_API_KEY")
+        api_key, _ = self.resolve_api_key()
         if api_key:
             args += ["--apikey", api_key]
 
-        device_id = self.get("OPEN_AUTOGLM_DEVICE_ID")
+        device_id = (device_id_override or self.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
         if device_id:
             args += ["--device-id", device_id]
 
