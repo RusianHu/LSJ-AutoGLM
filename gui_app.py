@@ -16,23 +16,43 @@ Open-AutoGLM GUI 启动入口
 
 import os
 import sys
-from pathlib import Path
+
+from gui.utils.runtime import (
+    GUI_TASK_RUNNER_FLAG,
+    app_root,
+    ensure_standard_streams,
+)
 
 # 确保 UTF-8 编码
 os.environ["PYTHONIOENCODING"] = "utf-8"
 if sys.platform == "win32":
     os.system("chcp 65001 >nul 2>&1")
 
-# 确保项目根目录在 sys.path 中
-ROOT = Path(__file__).parent.resolve()
+# 源码运行时为仓库根目录；单文件运行时为 exe 所在目录
+ROOT = app_root().resolve()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 切换工作目录到项目根（保证 main.py 子进程路径正确）
+# 统一工作目录，保证 .env / 历史日志 / 打包脚本等路径稳定
 os.chdir(ROOT)
 
 
+def _run_task_runner():
+    """单文件模式下的任务子进程入口。"""
+    ensure_standard_streams()
+    if len(sys.argv) > 1 and sys.argv[1] == GUI_TASK_RUNNER_FLAG:
+        sys.argv = [sys.argv[0], *sys.argv[2:]]
+
+    from main import main as cli_main
+
+    cli_main()
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == GUI_TASK_RUNNER_FLAG:
+        _run_task_runner()
+        return
+
     from PySide6.QtWidgets import QApplication
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QFont

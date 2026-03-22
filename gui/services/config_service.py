@@ -13,13 +13,14 @@
 
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, Signal
 
-_ENV_FILE = Path(".env")
+from gui.utils.runtime import build_task_subprocess_command, resolve_env_path
+
+_ENV_FILE = resolve_env_path()
 
 
 class ConfigService(QObject):
@@ -514,42 +515,42 @@ class ConfigService(QObject):
     # ---------- 构建命令行参数 ----------
 
     def build_command_args(self, task_text: str, device_id_override: str = "") -> List[str]:
-        """构建启动 main.py 的命令行参数列表"""
-        args = [sys.executable, "-u", "main.py"]
+        """构建任务子进程命令行参数列表。"""
+        cli_args: List[str] = []
 
         base_url = self.get("OPEN_AUTOGLM_BASE_URL")
         if base_url:
-            args += ["--base-url", base_url]
+            cli_args += ["--base-url", base_url]
 
         model = self.get("OPEN_AUTOGLM_MODEL")
         if model:
-            args += ["--model", model]
+            cli_args += ["--model", model]
 
         api_key, _ = self.resolve_api_key()
         if api_key:
-            args += ["--apikey", api_key]
+            cli_args += ["--apikey", api_key]
 
         device_id = (device_id_override or self.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
         if device_id:
-            args += ["--device-id", device_id]
+            cli_args += ["--device-id", device_id]
 
         max_steps = self.get("OPEN_AUTOGLM_MAX_STEPS", "100")
-        args += ["--max-steps", max_steps]
+        cli_args += ["--max-steps", max_steps]
 
         language = (self.get("OPEN_AUTOGLM_LANG", "cn") or "cn").strip().lower()
         if language == "zh":
             language = "cn"
-        args += ["--lang", language]
+        cli_args += ["--lang", language]
 
         # 第三方模型（非 AutoGLM 原生）提示词工程参数，与 launcher.py 保持一致
         if self._is_truthy(self.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")):
-            args.append("--thirdparty")
+            cli_args.append("--thirdparty")
             thinking_enabled = self._is_truthy(self.get("OPEN_AUTOGLM_THIRDPARTY_THINKING", "true"))
-            args.append("--thirdparty-thinking" if thinking_enabled else "--thirdparty-no-thinking")
+            cli_args.append("--thirdparty-thinking" if thinking_enabled else "--thirdparty-no-thinking")
 
             compress_image = self._is_truthy(self.get("OPEN_AUTOGLM_COMPRESS_IMAGE", "false"))
             if not compress_image:
-                args.append("--no-compress-image")
+                cli_args.append("--no-compress-image")
 
-        args.append(task_text)
-        return args
+        cli_args.append(task_text)
+        return build_task_subprocess_command(cli_args)

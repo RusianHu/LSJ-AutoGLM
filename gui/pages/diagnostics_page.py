@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
 
 from gui.services.readiness_service import (
     ReadinessCheckResult,
+    render_check_result,
+    render_summary,
     run_readiness_checks,
     summarize_readiness,
 )
@@ -62,9 +64,29 @@ class DiagnosticsPage(QWidget):
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
-        self._last_summary_state = ("点击「一键检查」开始诊断", "idle")
+        self._summary_kind = "idle"
+        self._last_summary_state = (self._t("page.diagnostics.status.idle"), "idle")
         self._build_ui()
         self._apply_action_button_styles()
+
+    # ------------------------------------------------------------------
+    # i18n 辅助
+    # ------------------------------------------------------------------
+
+    def _t(self, key: str, **params) -> str:
+        """便捷翻译方法；优先使用 services 中的 I18nManager，无则回退内置中文。"""
+        i18n = self._services.get("i18n")
+        if i18n is not None:
+            try:
+                return i18n.t(key, **params)
+            except Exception:
+                pass
+        from gui.i18n.locales.cn import CN
+        template = CN.get(key, f"[[{key}]]")
+        try:
+            return template.format(**params) if params else template
+        except Exception:
+            return template
 
     def _current_device_id(self) -> str:
         device_service = self._services.get("device")
@@ -81,22 +103,21 @@ class DiagnosticsPage(QWidget):
 
         # 标题行
         header = QHBoxLayout()
-        title = QLabel("系统诊断")
+        self._title_lbl = QLabel(self._t("page.diagnostics.title"))
+        title = self._title_lbl
         title.setProperty("role", "pageTitle")
         header.addWidget(title)
         header.addStretch(1)
 
-        self._btn_run = QPushButton("一键检查")
+        self._btn_run = QPushButton(self._t("page.diagnostics.btn.run"))
         self._btn_run.setProperty("variant", "primary")
         self._btn_run.clicked.connect(self._on_run)
         header.addWidget(self._btn_run)
         root.addLayout(header)
 
         # 说明
-        hint = QLabel(
-            "检查项包括：Python 版本、PySide6、ADB、设备连接、ADB Keyboard、scrcpy、openai 包、"
-            "main.py、API Base URL、API Key 与 API 连通性。"
-        )
+        hint = QLabel(self._t("page.diagnostics.description"))
+        self._hint_lbl = hint
         hint.setProperty("role", "subtle")
         hint.setStyleSheet("font-size:12px;")
         hint.setWordWrap(True)
@@ -108,7 +129,7 @@ class DiagnosticsPage(QWidget):
         root.addWidget(self._result_list, 1)
 
         # 摘要
-        self._summary_lbl = QLabel("点击「一键检查」开始诊断")
+        self._summary_lbl = QLabel(self._t("page.diagnostics.status.idle"))
         self._summary_lbl.setWordWrap(True)
         root.addWidget(self._summary_lbl)
 
@@ -186,7 +207,8 @@ class DiagnosticsPage(QWidget):
             self._worker = None
         self._last_results = []
         self._result_list.clear()
-        self._last_summary_state = ("诊断运行中...", "warning")
+        self._summary_kind = "running"
+        self._last_summary_state = (self._t("page.diagnostics.status.running"), "warning")
         self._summary_lbl.setText(self._last_summary_state[0])
         self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
         self._btn_run.setEnabled(False)
@@ -199,15 +221,17 @@ class DiagnosticsPage(QWidget):
 
     def _format_result_text(self, result: ReadinessCheckResult) -> str:
         if result.passed:
-            icon = "PASS"
+            icon = self._t("page.diagnostics.result.passed")
         elif result.blocking:
-            icon = "FAIL"
+            icon = self._t("page.diagnostics.result.failed")
         else:
-            icon = "WARN"
+            icon = self._t("page.diagnostics.result.warning")
 
-        lines = [f"  [{icon}]  {result.label}", f"         {result.detail}"]
-        if result.hint:
-            lines.append(f"         建议：{result.hint}")
+        label, detail, hint = render_check_result(result, self._t)
+        hint_prefix = self._t("page.diagnostics.hint_prefix")
+        lines = [f"  [{icon}]  {label}", f"         {detail}"]
+        if hint:
+            lines.append(f"         {hint_prefix}{hint}")
         return "\n".join(lines)
 
     def _result_color(self, result: ReadinessCheckResult) -> str:
@@ -227,16 +251,19 @@ class DiagnosticsPage(QWidget):
     def _on_all_done(self, results):
         self._btn_run.setEnabled(True)
         if not results:
-            self._last_summary_state = ("诊断已停止", "warning")
+            self._summary_kind = "stopped"
+            self._last_summary_state = (self._t("page.diagnostics.status.stopped"), "warning")
             self._summary_lbl.setText(self._last_summary_state[0])
             self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
             return
 
         summary = summarize_readiness(results)
         state = summary.semantic if summary.semantic in {"success", "warning", "error"} else "warning"
-        message = f"{summary.title}。{summary.detail}"
-        if summary.action_hint:
-            message += f"\n{summary.action_hint}"
+        title, detail, action_hint = render_summary(summary, self._t)
+        message = f"{title}。{detail}"
+        if action_hint:
+            message += f"\n{action_hint}"
+        self._summary_kind = "done"
         self._last_summary_state = (message, state)
         self._summary_lbl.setText(message)
         self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
@@ -254,6 +281,45 @@ class DiagnosticsPage(QWidget):
             if not self._worker.isRunning():
                 self._worker.deleteLater()
                 self._worker = None
+
+    # ------------------------------------------------------------------
+    # apply_i18n - 语言切换时由 PageI18nAdapter 调用
+    # ------------------------------------------------------------------
+
+    def apply_i18n(self, i18n_manager) -> None:
+        """语言切换后重绘所有静态文案。"""
+        self._title_lbl.setText(i18n_manager.t("page.diagnostics.title"))
+        self._hint_lbl.setText(i18n_manager.t("page.diagnostics.description"))
+        self._btn_run.setText(i18n_manager.t("page.diagnostics.btn.run"))
+
+        if self._last_results:
+            self._result_list.clear()
+            for result in self._last_results:
+                item = QListWidgetItem(self._format_result_text(result))
+                item.setForeground(QColor(self._result_color(result)))
+                self._result_list.addItem(item)
+            summary = summarize_readiness(self._last_results)
+            title, detail, action_hint = render_summary(summary, i18n_manager.t)
+            state = summary.semantic if summary.semantic in {"success", "warning", "error"} else "warning"
+            message = f"{title}。{detail}"
+            if action_hint:
+                message += f"\n{action_hint}"
+            self._last_summary_state = (message, state)
+            self._summary_lbl.setText(message)
+            self._summary_lbl.setStyleSheet(self._summary_style(state))
+            return
+
+        _kind = getattr(self, "_summary_kind", "idle")
+        state_text, state_sem = self._last_summary_state
+        if _kind == "running":
+            new_text = i18n_manager.t("page.diagnostics.status.running")
+        elif _kind == "stopped":
+            new_text = i18n_manager.t("page.diagnostics.status.stopped")
+        else:
+            new_text = i18n_manager.t("page.diagnostics.status.idle")
+        self._last_summary_state = (new_text, state_sem)
+        self._summary_lbl.setText(new_text)
+        self._summary_lbl.setStyleSheet(self._summary_style(state_sem))
 
     def on_page_activated(self):
         if not self._last_results and not (self._worker and self._worker.isRunning()):

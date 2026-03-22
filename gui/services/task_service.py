@@ -27,6 +27,8 @@ from typing import Callable, List, Optional
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from gui.utils.runtime import app_root
+
 
 class TaskState(Enum):
     """任务状态机"""
@@ -144,10 +146,11 @@ class TaskService(QObject):
     # 终止后等待进程退出的超时（毫秒）
     TERMINATE_WAIT_MS = 3000
 
-    def __init__(self, config_service=None, history_service=None, parent=None):
+    def __init__(self, config_service=None, history_service=None, i18n_service=None, parent=None):
         super().__init__(parent)
         self._config = config_service
         self._history = history_service
+        self._i18n = i18n_service  # I18nManager（可后期通过 set_i18n() 注入）
         self._state = TaskState.IDLE
         self._process: Optional[subprocess.Popen] = None
         self._current_record: Optional[TaskRecord] = None
@@ -218,7 +221,9 @@ class TaskService(QObject):
         self._current_record = record
         self._finishing = False
         self._set_state(TaskState.STARTING)
-        self._add_event("task_start", f"任务启动: {task_text}")
+        self._add_event("task_start", f"任务启动: {task_text}",
+                        message_key="event.task_start",
+                        message_params={"task_text": task_text})
 
         try:
             self._process = subprocess.Popen(
@@ -226,11 +231,13 @@ class TaskService(QObject):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=env,
-                cwd=str(Path(__file__).parent.parent.parent),
+                cwd=str(app_root()),
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
             )
         except Exception as e:
-            self._add_event("start_error", f"子进程启动失败: {e}")
+            self._add_event("start_error", f"子进程启动失败: {e}",
+                            message_key="event.process_start_error",
+                            message_params={"error": str(e)})
             record.state = TaskState.FAILED
             record.error_summary = str(e)
             record.end_time = time.time()
@@ -239,7 +246,9 @@ class TaskService(QObject):
             self._save_history()
             return False
 
-        self._add_event("process_started", f"子进程已启动，PID={self._process.pid}")
+        self._add_event("process_started", f"子进程已启动，PID={self._process.pid}",
+                        message_key="event.process_started",
+                        message_params={"pid": self._process.pid})
         self._set_state(TaskState.RUNNING)
         record.state = TaskState.RUNNING
         self.task_started.emit(record)
@@ -273,7 +282,8 @@ class TaskService(QObject):
         if self._state not in (TaskState.RUNNING, TaskState.PAUSED, TaskState.STARTING):
             return
         self._set_state(TaskState.STOPPING)
-        self._add_event("user_stop", "用户终止任务")
+        self._add_event("user_stop", "用户终止任务",
+                        message_key="event.user_stop", message_params={})
         self._terminate_process()
 
     def pause_task(self, reason: str = "用户暂停"):
@@ -281,7 +291,8 @@ class TaskService(QObject):
         if self._state != TaskState.RUNNING:
             return
         self._set_state(TaskState.PAUSED)
-        self._add_event("user_pause", f"任务暂停: {reason}")
+        self._add_event("user_pause", f"任务暂停: {reason}",
+                        message_key="event.user_pause", message_params={})
         # 暂停时停止卡住检测
         self._stuck_timer.stop()
 
@@ -290,7 +301,8 @@ class TaskService(QObject):
         if self._state != TaskState.PAUSED:
             return
         self._set_state(TaskState.RUNNING)
-        self._add_event("user_resume", "任务恢复执行")
+        self._add_event("user_resume", "任务恢复执行",
+                        message_key="event.user_resume", message_params={})
         # 重启卡住检测
         self._last_output_time = time.time()
         self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
@@ -299,7 +311,9 @@ class TaskService(QObject):
         """触发人工接管：暂停任务并发送接管信号"""
         if self._state == TaskState.RUNNING:
             self.pause_task(reason)
-            self._add_event("takeover_request", f"接管请求: {reason}")
+            self._add_event("takeover_request", f"接管请求: {reason}",
+                            message_key="event.takeover_request",
+                            message_params={"reason": reason})
             self.takeover_requested.emit(reason)
 
     # ---------- 内部事件处理 ----------
@@ -314,40 +328,56 @@ class TaskService(QObject):
         self.log_line.emit(line)
         self._infer_events_from_log(line)
 
+    def _translate_text(self, key: str, **params) -> str:
+        """Translate an event/helper key using injected i18n or CN fallback."""
+        i18n = getattr(self, "_i18n", None)
+        if i18n is not None:
+            try:
+                return i18n.t(key, **params)
+            except Exception:
+                pass
+        try:
+            from gui.i18n.locales.cn import CN
+            template = CN.get(key, f"[[{key}]]")
+            return template.format(**params) if params else template
+        except Exception:
+            return f"[[{key}]]"
+
     def _infer_events_from_log(self, line: str):
-        """从日志内容推断高层事件（基于关键字匹配）"""
-        lower = line.lower()
-        triggers = [
-            ("设备检查",        "device_check",   "设备检查开始"),
-            ("checking system", "device_check",   "设备检查开始"),
-            ("device connected","device_connected","设备已连接"),
-            ("设备已连接",      "device_connected","设备已连接"),
-            ("api",             "api_check",      "API 检查"),
-            ("agent start",     "agent_start",    "Agent 开始执行"),
-            ("step ",           "agent_step",     None),
-            ("task completed",  "task_complete",  "任务完成"),
-            ("任务完成",        "task_complete",  "任务完成"),
-            ("error",           "error",          None),
-            ("错误",            "error",          None),
-            ("traceback",       "error",          None),
-            ("takeover",        "takeover",       "检测到接管请求"),
-            ("接管",            "takeover",       "检测到接管请求"),
-        ]
-        for keyword, evt_type, label in triggers:
-            if keyword in lower:
-                if evt_type == "agent_step":
-                    return
-                if evt_type == "error":
-                    if self._current_record:
-                        self._current_record.error_summary = line.strip()[:200]
-                    self._add_event(evt_type, line.strip()[:200])
-                    return
-                if evt_type == "takeover":
-                    self.request_takeover(label or line.strip()[:80])
-                    return
-                if label:
-                    self._add_event(evt_type, label)
+        """从日志内容推断高层事件（基于关键字匹配）。"""
+        stripped = line.strip()
+        lower = stripped.lower()
+        triggers = (
+            {"keywords": ("设备检查", "checking system"), "event_type": "device_check", "message_key": "event.device_check"},
+            {"keywords": ("device connected", "设备已连接"), "event_type": "device_connected", "message_key": "event.device_connected"},
+            {"keywords": ("api",), "event_type": "api_check", "message_key": "event.api_check"},
+            {"keywords": ("agent start",), "event_type": "agent_start", "message_key": "event.agent_start"},
+            {"keywords": ("step ",), "ignore": True},
+            {"keywords": ("task completed", "任务完成"), "ignore": True},
+            {"keywords": ("error", "错误", "traceback"), "event_type": "error", "raw": True},
+            {"keywords": ("takeover", "接管"), "event_type": "takeover", "reason_key": "event.takeover_detected"},
+        )
+        for trigger in triggers:
+            if not any(keyword in lower for keyword in trigger["keywords"]):
+                continue
+            if trigger.get("ignore"):
                 return
+            if trigger.get("raw"):
+                if self._current_record:
+                    self._current_record.error_summary = stripped[:200]
+                self._add_event("error", stripped[:200])
+                return
+            if trigger["event_type"] == "takeover":
+                self.request_takeover(self._translate_text(trigger["reason_key"]))
+                return
+            message_key = trigger["message_key"]
+            self._add_event(
+                trigger["event_type"],
+                self._translate_text(message_key),
+                message_key=message_key,
+                message_params={},
+            )
+            return
 
     def _on_reader_finished(self):
         """日志读取线程结束时触发进程收尾"""
@@ -403,15 +433,20 @@ class TaskService(QObject):
             if self._state == TaskState.STOPPING:
                 record.state = TaskState.CANCELLED
                 self._set_state(TaskState.CANCELLED)
-                self._add_event("cancelled", "任务已取消")
+                self._add_event("cancelled", "任务已取消",
+                                message_key="event.cancelled", message_params={})
             elif exit_code == 0:
                 record.state = TaskState.COMPLETED
                 self._set_state(TaskState.COMPLETED)
-                self._add_event("task_complete", f"任务完成，耗时 {record.duration_str}")
+                self._add_event("task_complete", f"任务完成，耗时 {record.duration_str}",
+                                message_key="event.task_complete",
+                                message_params={"duration": record.duration_str})
             else:
                 record.state = TaskState.FAILED
                 self._set_state(TaskState.FAILED)
-                self._add_event("task_failed", f"任务失败，退出码 {exit_code}")
+                self._add_event("task_failed", f"任务失败，退出码 {exit_code}",
+                                message_key="event.task_failed",
+                                message_params={"exit_code": exit_code})
 
             self.task_finished.emit(record)
             self._save_history()
@@ -454,20 +489,69 @@ class TaskService(QObject):
 
     def _on_stuck_timeout(self):
         """超时无输出，认为卡住"""
-        self._add_event("stuck_detected", f"{self.STUCK_TIMEOUT_S}s 无输出，疑似卡住")
+        self._add_event(
+            "stuck_detected",
+            f"{self.STUCK_TIMEOUT_S}s 无输出，疑似卡住",
+            message_key="event.stuck_detected",
+            message_params={"timeout": self.STUCK_TIMEOUT_S},
+        )
         self.stuck_detected.emit()
 
-    def _add_event(self, event_type: str, message: str):
-        """记录关键事件"""
+    def _add_event(
+        self,
+        event_type: str,
+        message: str,
+        *,
+        message_key: str = "",
+        message_params: dict | None = None,
+    ):
+        """
+        记录关键事件。
+
+        新字段（i18n）：
+          message_key     - i18n 词典 key
+          message_params  - 翻译参数
+          rendered_message - 按当前 GUI 语言渲染的文本
+          lang            - 生成时的 GUI 语言
+        旧字段 message 继续保留，供历史兼容回退。
+        """
+        # 渲染翻译后的消息
+        rendered = message  # 默认回退到原始文本
+        lang = "cn"
+        if message_key and self._i18n:
+            lang = self._i18n.get_language()
+            try:
+                rendered = self._i18n.t(message_key, **(message_params or {}))
+            except Exception:
+                rendered = message
+        elif message_key:
+            # i18n 未注入时，尝试直接加载中文词典
+            try:
+                from gui.i18n.locales.cn import CN
+                tmpl = CN.get(message_key, "")
+                if tmpl:
+                    rendered = tmpl.format(**(message_params or {})) if message_params else tmpl
+            except Exception:
+                pass
+
         evt = {
             "time": time.time(),
             "time_str": time.strftime("%H:%M:%S"),
             "type": event_type,
-            "message": message,
+            "message": message,           # 旧字段，保留兼容
+            # --- 新 i18n 字段 ---
+            "message_key": message_key,
+            "message_params": message_params or {},
+            "rendered_message": rendered,
+            "lang": lang,
         }
         if self._current_record:
             self._current_record.events.append(evt)
         self.event_added.emit(evt)
+
+    def set_i18n(self, i18n_service) -> None:
+        """动态注入 I18nManager（MainWindow 初始化完毕后调用）。"""
+        self._i18n = i18n_service
 
     def _save_history(self):
         """保存任务历史"""

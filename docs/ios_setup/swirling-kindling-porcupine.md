@@ -189,113 +189,128 @@
 ## Phase Todo
 
 ### Phase 1 - 基础设施落地
-- [ ] 新建 `gui/i18n/manager.py`
-- [ ] 新建 `gui/i18n/page_adapter.py`
-- [ ] 新建 `gui/i18n/locales/cn.py`
-- [ ] 新建 `gui/i18n/locales/en.py`
-- [ ] 约定 key 命名规则与缺词占位格式（推荐：`[[key]]`）
-- [ ] 在 `MainWindow` 中注入 `I18nManager` 到 `services`
-- [ ] 参考 `ThemeManager` / `PageThemeAdapter` 完成页面注册与广播
+- [x] 新建 `gui/i18n/manager.py`
+- [x] 新建 `gui/i18n/page_adapter.py`
+- [x] 新建 `gui/i18n/locales/cn.py`
+- [x] 新建 `gui/i18n/locales/en.py`
+- [x] 约定 key 命名规则与缺词占位格式（推荐：`[[key]]`）
+- [x] 在 `MainWindow` 中注入 `I18nManager` 到 `services`
+- [x] 参考 `ThemeManager` / `PageThemeAdapter` 完成页面注册与广播
 
 **完成标准**
-- [ ] GUI 启动时能按 `OPEN_AUTOGLM_LANG` 解析当前语言
-- [ ] 手动触发语言变化后，注册页面能收到广播
-- [ ] 缺词时能稳定显示显式 key，而不是崩溃或静默回退
+- [x] GUI 启动时能按 `OPEN_AUTOGLM_LANG` 解析当前语言
+- [x] 手动触发语言变化后，注册页面能收到广播
+- [x] 缺词时能稳定显示显式 key，而不是崩溃或静默回退
 
 ### Phase 2 - 设置页与主窗口壳层
-- [ ] 将 `SettingsPage` 中的 `OPEN_AUTOGLM_LANG` 从普通文本字段升级为明确的语言选择控件
-- [ ] 保存语言后立即调用 `I18nManager.set_language()`
-- [ ] 将 `MainWindow` 的窗口标题、导航按钮、底部版本辅助文案、全局弹窗接入翻译
-- [ ] 明确接管/卡住提示框的 key 与参数化规则
+- [x] 将 `SettingsPage` 中的 `OPEN_AUTOGLM_LANG` 从普通文本字段升级为明确的语言选择控件
+- [x] 保存语言后立即调用 `I18nManager.set_language()`
+- [x] 将 `MainWindow` 的窗口标题、导航按钮、底部版本辅助文案、全局弹窗接入翻译
+- [x] 明确接管/卡住提示框的 key 与参数化规则
 
 **完成标准**
-- [ ] 在设置页切换语言并保存后，导航与全局弹窗无需重启即可切换
-- [ ] `OPEN_AUTOGLM_LANG` 仍通过 `ConfigService` 正常持久化
+- [x] 在设置页切换语言并保存后，导航与全局弹窗无需重启即可切换
+- [x] `OPEN_AUTOGLM_LANG` 仍通过 `ConfigService` 正常持久化
 
 ### Phase 3 - 工作台与运行反馈
-- [ ] 将 `DashboardPage` 中以下区域 key 化：
-  - [ ] 工具栏按钮与 placeholder
-  - [ ] 状态条 key（状态 / 设备 / 镜像）
-  - [ ] 环境摘要条文本与 tooltip
-  - [ ] 结果摘要文本
-  - [ ] 镜像占位文案 / 接管横幅 / 恢复按钮
-- [ ] 将 `STATE_DISPLAY` / `MIRROR_STATE_DISPLAY` 改为通过 i18n 获取展示文本
-- [ ] 将 `readiness_service.py` 的 `label` / `detail` / `hint` 迁移为可翻译结构
-- [ ] 规定原始日志始终保持原文，事件时间线展示翻译后的事件层文案
+- [x] 将 `DashboardPage` 中以下区域 key 化：
+  - [x] 工具栏按钮与 placeholder
+  - [x] 状态条 key（状态 / 设备 / 镜像）
+  - [x] 环境摘要条文本与 tooltip
+  - [x] 结果摘要文本
+  - [x] 镜像占位文案 / 接管横幅 / 恢复按钮
+- [x] 将 `STATE_DISPLAY` / `MIRROR_STATE_DISPLAY` 改为通过 i18n 获取展示文本
+- [x] 将 `readiness_service.py` 的 `label` / `detail` / `hint` 迁移为可翻译结构
+- [x] 规定原始日志始终保持原文，事件时间线展示翻译后的事件层文案
 
 **完成标准**
-- [ ] 工作台静态界面能完整切换语言
-- [ ] 重新检查环境后，摘要条与诊断摘要跟随当前语言
-- [ ] 运行中切换语言时，GUI 立即切换，但当前任务原始日志不变
+- [x] 工作台静态界面能完整切换语言
+- [x] 重新检查环境后，摘要条与诊断摘要跟随当前语言
+- [x] 运行中切换语言时，GUI 立即切换，但当前任务原始日志不变
 
 ### Phase 4 - TaskService 事件结构化
-- [ ] 改造 `TaskService._add_event()` 支持保存：`message_key / message_params / rendered_message / lang`
-- [ ] 将 `_infer_events_from_log()` 中可控的结构化事件改为 key 驱动
-- [ ] 保留旧 `message` 字段兼容读取
-- [ ] 对关键事件统一 key：
-  - [ ] `task_start`
-  - [ ] `process_started`
-  - [ ] `user_stop`
-  - [ ] `user_pause`
-  - [ ] `user_resume`
-  - [ ] `takeover_request`
-  - [ ] `task_complete`
-  - [ ] `task_failed`
-  - [ ] `cancelled`
-  - [ ] `stuck_detected`
+- [x] 改造 `TaskService._add_event()` 支持保存：`message_key / message_params / rendered_message / lang`
+- [x] 将 `_infer_events_from_log()` 中可控的结构化事件改为 key 驱动
+- [x] 保留旧 `message` 字段兼容读取
+- [x] 对关键事件统一 key：
+  - [x] `task_start`
+  - [x] `process_started`
+  - [x] `user_stop`
+  - [x] `user_pause`
+  - [x] `user_resume`
+  - [x] `takeover_request`
+  - [x] `task_complete`
+  - [x] `task_failed`
+  - [x] `cancelled`
+  - [x] `stuck_detected`
 
 **完成标准**
-- [ ] 新产生事件在工作台中以当前 GUI 语言显示
-- [ ] 事件序列化后具备新字段，供历史页直接消费
-- [ ] 原始 stdout/stderr 仍不参与翻译
+- [x] 新产生事件在工作台中以当前 GUI 语言显示
+- [x] 事件序列化后具备新字段，供历史页直接消费
+- [x] 原始 stdout/stderr 仍不参与翻译
 
 ### Phase 5 - 历史记录与历史页
-- [ ] `HistoryService.save_record()` 对新事件结构做安全序列化
-- [ ] `HistoryService._normalize_record()` 兼容旧记录与新记录共存
-- [ ] `HistoryPage` 改造以下文案：
-  - [ ] 页面标题
-  - [ ] 筛选器选项
-  - [ ] Tab 标题
-  - [ ] 状态标签
-  - [ ] 概览字段名
-  - [ ] 空状态 / 无日志提示
-  - [ ] 清空确认对话框
-- [ ] 历史事件显示优先使用 `rendered_message`，旧记录回退 `message`
+- [x] `HistoryService.save_record()` 对新事件结构做安全序列化
+- [x] `HistoryService._normalize_record()` 兼容旧记录与新记录共存
+- [x] `HistoryPage` 改造以下文案：
+  - [x] 页面标题
+  - [x] 筛选器选项
+  - [x] Tab 标题
+  - [x] 状态标签
+  - [x] 概览字段名
+  - [x] 空状态 / 无日志提示
+  - [x] 清空确认对话框
+- [x] 历史事件显示优先使用 `rendered_message`，旧记录回退 `message`
 
 **完成标准**
-- [ ] 切换语言后，旧历史记录不改变原语种
-- [ ] 切换语言后新运行的任务，其历史事件使用新语种保存
-- [ ] 历史页本身的壳层文案能即时切换
+- [x] 切换语言后，旧历史记录不改变原语种
+- [x] 切换语言后新运行的任务，其历史事件使用新语种保存
+- [x] 历史页本身的壳层文案能即时切换
 
 ### Phase 6 - 设备页与诊断页收尾
-- [ ] 设备页静态文案、按钮、状态提示、配对对话框全部 key 化
-- [ ] 诊断页标题、说明文案、按钮、结果格式化、摘要栏全部 key 化
-- [ ] 统一处理 `ReadinessCheckResult` 的结果格式化，避免页面层继续拼中文句子
+- [x] 设备页静态文案、按钮、状态提示、配对对话框全部 key 化
+- [x] 诊断页标题、说明文案、按钮、结果格式化、摘要栏全部 key 化
+- [x] 统一处理 `ReadinessCheckResult` 的结果格式化，避免页面层继续拼中文句子
 
 **完成标准**
-- [ ] 设备页和诊断页静态文案可完整切换
-- [ ] 诊断结果条目的 label/detail/hint 由当前语言驱动
+- [x] 设备页和诊断页静态文案可完整切换
+- [x] 诊断结果条目的 label/detail/hint 由当前语言驱动
 
 ### Phase 7 - 测试、扫描与补漏
-- [ ] 为 `I18nManager` 增加单元测试（建议新增 `tests/test_i18n_manager.py`）
-- [ ] 为历史兼容增加单元测试（建议新增 `tests/test_history_i18n_compat.py`）
-- [ ] 对 `gui/` 范围做硬编码文案扫描，清理首批漏项
-- [ ] 明确允许保留原文的例外项：日志原文、外部异常、第三方输出
+- [x] 为 `I18nManager` 增加单元测试（建议新增 `tests/test_i18n_manager.py`）
+- [x] 为历史兼容增加单元测试（建议新增 `tests/test_history_i18n_compat.py`）
+- [x] 为 readiness 渲染与事件推断增加单元测试（新增 `tests/test_readiness_i18n.py`）
+- [x] 为离屏 GUI 即时切换链路增加回归测试（新增 `tests/test_gui_i18n_headless.py`）
+- [x] 对 `gui/` 范围做硬编码文案扫描，形成补漏清单
+- [x] 继续清理首批漏项
+- [x] 明确允许保留原文的例外项：日志原文、外部异常、第三方输出
 
 **完成标准**
-- [ ] 有自动化测试覆盖 manager 与历史兼容
-- [ ] 有一轮硬编码文案扫描结果用于补漏
-- [ ] 剩余未 i18n 项均被记录为明确 TODO，而非隐性遗漏
+- [x] 有自动化测试覆盖 manager 与历史兼容
+- [x] 有自动化测试覆盖 readiness 渲染与事件推断
+- [x] 有自动化测试覆盖离屏 GUI 的即时切换与事件快照行为
+- [x] 有一轮硬编码文案扫描结果用于补漏
+- [x] 剩余未 i18n 项均被记录为明确 TODO，而非隐性遗漏
+
+## Review Snapshot
+- 已确认落地：i18n 总线、页面广播、`TaskService` 事件新字段、`HistoryService` 新旧事件兼容、`tests/test_i18n_manager.py`、`tests/test_history_i18n_compat.py`、`tests/test_readiness_i18n.py`、`tests/test_gui_i18n_headless.py`。
+- 已修复关键阻塞 1：`I18nManager.__init__()` 现会同步 `_lang`；真实构造路径已由 `tests/test_i18n_manager.py` 覆盖，初始化语言状态与词典语言保持一致。
+- 已修复关键阻塞 2：工作台当前会话事件时间线已优先显示 `rendered_message`；状态条、环境摘要、结果摘要、渠道下拉 tooltip 与镜像状态展示已接入当前语言重绘。
+- 已修复关键阻塞 3：`readiness_service.py` 已改为结构化 key / params + render helpers；`DiagnosticsPage` 会在 `apply_i18n()` 时重绘已有结果与摘要。
+- 本轮最终收口：`DashboardPage` 的渠道日志、镜像调试日志、tooltip / 下拉显示名与 `HistoryPage` 的状态标签回退已全部 key 化；`TaskService._infer_events_from_log()` 已改为 key 驱动并通过当前 GUI 语言生成接管理由。
+- 自动化验证：`python -m pytest tests/test_theme_engine.py tests/test_history_i18n_compat.py tests/test_readiness_i18n.py tests/test_i18n_manager.py tests/test_gui_i18n_headless.py` 当前稳定为 71 项通过；其中离屏 GUI 回归覆盖 `MainWindow` 壳层、`DashboardPage`、`HistoryPage`、原始日志不重翻、旧历史快照不重渲，以及 `TaskService` 事件按生成时语言保存 `rendered_message / lang`。
+- 最新扫描：`python scripts/scan_hardcoded_cn.py` 当前已报告“未发现明显硬编码残留”；首批 GUI i18n 漏项已全部清理完成。
+- 复核结论：Phase 3 / Phase 4 / Phase 5 / Phase 7 已推进到“已完成”状态；依赖真实设备 / API 的手工链路验证仍可按 Verification Plan 执行，但当前实现与无人值守回归已满足一期交付要求。
 
 ---
 
 ## Acceptance Criteria
-- [ ] 在设置页把语言从简中切到英文并保存后，主窗口导航、页面标题、按钮、筛选器、状态标签、后续弹窗立即切到英文
-- [ ] 此时如果任务正在运行，GUI 壳层立即切换，但该任务的原始日志和其已启动进程内部输出保持原语种
-- [ ] 语言切换后再启动新任务，`ConfigService.build_command_args()` 传给 `main.py` 的 `--lang` 为新值
-- [ ] 工作台新增事件、诊断摘要、运行反馈横幅按当前语言显示
-- [ ] 历史页旧记录保持旧语种；新任务生成的新记录使用新语种
-- [ ] 若词典漏项，界面显示显式 key（例如 `[[event.task.complete]]`），同时记录缺词日志
+- [x] 在设置页把语言从简中切到英文并保存后，主窗口导航、页面标题、按钮、筛选器、状态标签、后续弹窗立即切到英文
+- [x] 此时如果任务正在运行，GUI 壳层立即切换，但该任务的原始日志和其已启动进程内部输出保持原语种
+- [x] 语言切换后再启动新任务，`ConfigService.build_command_args()` 传给 `main.py` 的 `--lang` 为新值
+- [x] 工作台新增事件、诊断摘要、运行反馈横幅按当前语言显示
+- [x] 历史页旧记录保持旧语种；新任务生成的新记录使用新语种
+- [x] 若词典漏项，界面显示显式 key（例如 `[[event.task.complete]]`），同时记录缺词日志
 
 ---
 
@@ -333,14 +348,16 @@
   - [ ] `rendered_message`
 
 ### C. 测试验证
-- [ ] 运行现有测试：`python -m pytest tests/test_theme_engine.py`
-- [ ] 运行新增 i18n 相关测试：`python -m pytest tests/test_i18n_manager.py tests/test_history_i18n_compat.py`
-- [ ] 若新增更多单测，最终执行：`python -m pytest tests`
+- [x] 运行现有测试：`python -m pytest tests/test_theme_engine.py`
+- [x] 运行新增 i18n 相关测试：`python -m pytest tests/test_readiness_i18n.py tests/test_i18n_manager.py`
+- [x] 运行历史兼容测试：`python -m pytest tests/test_history_i18n_compat.py`
+- [x] 运行离屏 GUI 回归测试：`python -m pytest tests/test_gui_i18n_headless.py`
+- [x] 已等价执行当前全部测试文件（`tests/test_theme_engine.py` + `tests/test_history_i18n_compat.py` + `tests/test_readiness_i18n.py` + `tests/test_i18n_manager.py` + `tests/test_gui_i18n_headless.py`），当前稳定为 71 项通过
 
 ### D. 扫描补漏
-- [ ] 使用 Grep 对 `gui/` 内中文硬编码做扫描，排除词典文件、原始日志常量与必要例外
-- [ ] 对首轮扫描结果形成补漏清单，逐项回收
-- [ ] 验证缺词时是否显示显式 key，而不是沉默回退
+- [x] 使用脚本对 `gui/` 内中文硬编码做首轮扫描，排除词典文件、原始日志常量与必要例外
+- [x] 对扫描结果形成补漏清单；当前最新扫描已收敛为“未发现明显硬编码残留”
+- [x] 验证缺词时显示显式 key，而不是沉默回退
 
 ---
 
@@ -366,6 +383,8 @@
 - `gui/i18n/locales/en.py`
 - `tests/test_i18n_manager.py`
 - `tests/test_history_i18n_compat.py`
+- `tests/test_readiness_i18n.py`
+- `tests/test_gui_i18n_headless.py`
 
 ---
 
@@ -382,10 +401,10 @@
 ---
 
 ## Definition of Done
-- [ ] GUI 已具备稳定的简中 / 英文切换能力
-- [ ] 切换入口仅位于设置页，保存后即时全局生效
-- [ ] 当前任务不重启；后续新任务语言正确透传到 `main.py --lang`
-- [ ] 工作台运行反馈、历史事件、诊断摘要已纳入翻译体系
-- [ ] 原始日志不翻译，边界清晰
-- [ ] 旧历史不重渲，新历史按新语种保存
-- [ ] 缺词显式暴露 key，且有测试与扫描兜底
+- [x] GUI 已具备稳定的简中 / 英文切换能力
+- [x] 切换入口仅位于设置页，保存后即时全局生效
+- [x] 当前任务不重启；后续新任务语言正确透传到 `main.py --lang`
+- [x] 工作台运行反馈、历史事件、诊断摘要已纳入翻译体系
+- [x] 原始日志不翻译，边界清晰
+- [x] 旧历史不重渲，新历史按新语种保存
+- [x] 缺词显式暴露 key，且有测试与扫描兜底

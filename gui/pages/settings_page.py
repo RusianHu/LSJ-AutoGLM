@@ -8,6 +8,11 @@
 - 监听 config_changed 信号，自动同步活跃预设高亮状态
 """
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, QRect, Property
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
@@ -29,6 +34,12 @@ from PySide6.QtWidgets import (
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.styles.buttons import btn_primary, btn_subtle
+from gui.utils.runtime import (
+    app_root,
+    gui_build_script_path,
+    gui_onefile_output_path,
+    is_frozen,
+)
 
 class _ToggleSwitch(QWidget):
     """
@@ -143,16 +154,46 @@ class _PresetCard(QFrame):
       - 活跃状态：accent 色边框 + 淡色背景高亮
     """
 
-    def __init__(self, preset: dict, resolved_model: str = "", parent=None):
+    def __init__(self, preset: dict, resolved_model: str = "", translator=None, parent=None):
         super().__init__(parent)
         self._preset = preset
         self._resolved_model = resolved_model  # 从 .env 读到的真实模型名
         self._active = False
         self._theme_tokens: ThemeTokens = None
+        self._translator = translator
         self._build_ui()
         self.setFixedHeight(72)
         self.setCursor(Qt.PointingHandCursor)
         self.setFrameShape(QFrame.StyledPanel)
+
+    def _t(self, key: str, **params) -> str:
+        translator = self._translator
+        if callable(translator):
+            try:
+                return translator(key, **params)
+            except Exception:
+                pass
+        try:
+            from gui.i18n.locales.cn import CN
+            tmpl = CN.get(key, f"[[{key}]]")
+            return tmpl.format(**params) if params else tmpl
+        except Exception:
+            return f"[[{key}]]"
+
+    def set_translator(self, translator) -> None:
+        self._translator = translator
+        self._refresh_texts()
+
+    def _refresh_texts(self) -> None:
+        if hasattr(self, "_tag_lbl"):
+            use_thirdparty = self._preset.get("use_thirdparty", False)
+            tag_key = (
+                "page.settings.preset.tag.thirdparty"
+                if use_thirdparty else "page.settings.preset.tag.native"
+            )
+            self._tag_lbl.setText(self._t(tag_key))
+        if hasattr(self, "_model_lbl"):
+            self.update_model_display(self._resolved_model)
 
     # ----------------------------------------------------------------
     # 构建
@@ -177,7 +218,7 @@ class _PresetCard(QFrame):
         self._name_lbl = QLabel(self._preset.get("name", ""))
         self._name_lbl.setObjectName("presetCardName")
 
-        model_display = self._resolved_model or self._preset.get("default_model", "") or "自定义"
+        model_display = self._resolved_model or self._preset.get("default_model", "") or self._t("page.settings.field.custom")
         if len(model_display) > 38:
             model_display = model_display[:35] + "..."
         self._model_lbl = QLabel(model_display)
@@ -194,8 +235,8 @@ class _PresetCard(QFrame):
         right_col.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
         use_thirdparty = self._preset.get("use_thirdparty", False)
-        tag_text = "第三方提示词" if use_thirdparty else "原生 AutoGLM"
-        self._tag_lbl = QLabel(tag_text)
+        tag_key = "page.settings.preset.tag.thirdparty" if use_thirdparty else "page.settings.preset.tag.native"
+        self._tag_lbl = QLabel(self._t(tag_key))
         self._tag_lbl.setObjectName("presetCardTag")
         self._tag_lbl.setAlignment(Qt.AlignRight)
 
@@ -224,7 +265,8 @@ class _PresetCard(QFrame):
 
     def update_model_display(self, model: str):
         """动态更新卡片副标题（模型名），供配置变更后调用"""
-        display = model or self._preset.get("default_model", "") or "自定义"
+        self._resolved_model = model
+        display = model or self._preset.get("default_model", "") or self._t("page.settings.field.custom")
         if len(display) > 38:
             display = display[:35] + "..."
         self._model_lbl.setText(display)
@@ -335,19 +377,39 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self._services = services
         self._config = services.get("config")
+        self._i18n = services.get("i18n")  # I18nManager（可能启动时还未注入）
         self._field_widgets: dict = {}   # key -> QLineEdit
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
         self._last_banner_state = None
+        self._last_banner_i18n = None
         self._visibility_toggle_buttons: list[QPushButton] = []
         self._preset_cards: list[_PresetCard] = []  # 预设卡片列表
         self._build_ui()
         self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        self._lang_combo.currentIndexChanged.connect(self._on_lang_changed)
         self._apply_action_button_styles()
         self._load_values()
         self._load_theme_combo()
+        self._load_lang_combo()
         self._connect_config_signals()
+
+    # ================================================================
+    # i18n 支持
+    # ================================================================
+
+    def _t(self, key: str, **params) -> str:
+        """便捷翻译方法；优先使用 services 中的 I18nManager，无则回退内置中文。"""
+        i18n = getattr(self, "_i18n", None) or self._services.get("i18n")
+        if i18n:
+            return i18n.t(key, **params)
+        try:
+            from gui.i18n.locales.cn import CN
+            tmpl = CN.get(key, f"[[{key}]]")
+            return tmpl.format(**params) if params else tmpl
+        except Exception:
+            return f"[[{key}]]"
 
     # ================================================================
     # 信号连接
@@ -379,9 +441,9 @@ class SettingsPage(QWidget):
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(16)
 
-        title = QLabel("设置")
-        title.setProperty("role", "pageTitle")
-        root.addWidget(title)
+        self._title_lbl = QLabel(self._t("page.settings.title"))
+        self._title_lbl.setProperty("role", "pageTitle")
+        root.addWidget(self._title_lbl)
 
         # .env 文件路径提示
         self._env_path_lbl = QLabel()
@@ -410,8 +472,8 @@ class SettingsPage(QWidget):
         scroll_layout.addWidget(preset_switch_group)
 
         # ---- 模型与 API ----
-        model_group = QGroupBox("模型与 API")
-        model_form = QFormLayout(model_group)
+        self._model_group = QGroupBox(self._t("page.settings.section.model_api"))
+        model_form = QFormLayout(self._model_group)
         model_form.setLabelAlignment(Qt.AlignRight)
         model_form.setSpacing(10)
 
@@ -425,18 +487,18 @@ class SettingsPage(QWidget):
             "OPEN_AUTOGLM_COMPRESS_IMAGE",
         ]
         self._add_fields(model_form, api_fields)
-        scroll_layout.addWidget(model_group)
+        scroll_layout.addWidget(self._model_group)
 
         # ---- 渠道配置（动态，随活跃预设变化）----
-        channel_group = QGroupBox("渠道配置")
-        channel_vbox = QVBoxLayout(channel_group)
+        self._channel_group = QGroupBox(self._t("page.settings.section.channel"))
+        channel_vbox = QVBoxLayout(self._channel_group)
         channel_vbox.setContentsMargins(12, 16, 12, 8)
         channel_vbox.setSpacing(8)
 
-        channel_hint = QLabel("下方仅显示当前切换渠道中未在上方展示的额外专属字段。")
-        channel_hint.setProperty("role", "subtle")
-        channel_hint.setWordWrap(True)
-        channel_vbox.addWidget(channel_hint)
+        self._channel_hint_lbl = QLabel(self._t("page.settings.channel.hint"))
+        self._channel_hint_lbl.setProperty("role", "subtle")
+        self._channel_hint_lbl.setWordWrap(True)
+        channel_vbox.addWidget(self._channel_hint_lbl)
 
         # 动态内容容器，由 _rebuild_channel_detail() 填充
         self._channel_detail_container = QWidget()
@@ -445,56 +507,70 @@ class SettingsPage(QWidget):
         self._channel_detail_vbox.setSpacing(8)
         channel_vbox.addWidget(self._channel_detail_container)
 
-        scroll_layout.addWidget(channel_group)
+        scroll_layout.addWidget(self._channel_group)
 
         # ---- 运行参数 ----
-        run_group = QGroupBox("运行参数")
-        run_form = QFormLayout(run_group)
+        self._run_group = QGroupBox(self._t("page.settings.section.run_params"))
+        run_form = QFormLayout(self._run_group)
         run_form.setLabelAlignment(Qt.AlignRight)
         run_form.setSpacing(10)
 
         run_fields = [
             "OPEN_AUTOGLM_DEVICE_ID",
-            "OPEN_AUTOGLM_LANG",
             "OPEN_AUTOGLM_MAX_STEPS",
         ]
         self._add_fields(run_form, run_fields)
-        scroll_layout.addWidget(run_group)
+
+        # 语言选择 - 专用 ComboBox（不再是自由文本）
+        self._lang_combo = QComboBox()
+        self._lang_combo.addItem(self._t("page.settings.lang.cn"), "cn")
+        self._lang_combo.addItem(self._t("page.settings.lang.en"), "en")
+        self._lang_combo.setMinimumWidth(160)
+        self._lang_label = QLabel(self._t("page.settings.lang.label"))
+        run_form.addRow(self._lang_label, self._lang_combo)
+
+        scroll_layout.addWidget(self._run_group)
 
         # ---- 外观 ----
-        appearance_group = QGroupBox("外观")
-        appearance_form = QFormLayout(appearance_group)
+        self._appearance_group = QGroupBox(self._t("page.settings.section.appearance"))
+        appearance_form = QFormLayout(self._appearance_group)
         appearance_form.setLabelAlignment(Qt.AlignRight)
         appearance_form.setSpacing(10)
 
         self._theme_combo = QComboBox()
-        self._theme_combo.addItem("跟随系统", "system")
-        self._theme_combo.addItem("深色", "dark")
-        self._theme_combo.addItem("浅色", "light")
+        self._theme_combo.addItem(self._t("page.settings.theme.system"), "system")
+        self._theme_combo.addItem(self._t("page.settings.theme.dark"), "dark")
+        self._theme_combo.addItem(self._t("page.settings.theme.light"), "light")
         self._theme_combo.setMinimumWidth(160)
-        appearance_form.addRow(QLabel("界面主题"), self._theme_combo)
+        self._theme_label = QLabel(self._t("page.settings.theme.label"))
+        appearance_form.addRow(self._theme_label, self._theme_combo)
 
         self._theme_hint_lbl = QLabel("")
         self._theme_hint_lbl.setWordWrap(True)
         self._theme_hint_lbl.setProperty("role", "subtle")
-        appearance_form.addRow(QLabel("当前效果"), self._theme_hint_lbl)
-        scroll_layout.addWidget(appearance_group)
+        self._theme_effect_label = QLabel(self._t("page.settings.theme.effect_label"))
+        appearance_form.addRow(self._theme_effect_label, self._theme_hint_lbl)
+        scroll_layout.addWidget(self._appearance_group)
+
+        # ---- 构建与脚本 ----
+        build_group = self._build_build_tools_group()
+        scroll_layout.addWidget(build_group)
 
         scroll_layout.addStretch(1)
 
         # 底部操作按钮
         btn_row = QHBoxLayout()
-        self._btn_save = QPushButton("保存修改")
+        self._btn_save = QPushButton(self._t("page.settings.btn.save"))
         self._btn_save.setProperty("variant", "primary")
         self._btn_save.clicked.connect(self._on_save)
         btn_row.addWidget(self._btn_save)
 
-        self._btn_validate = QPushButton("校验配置")
+        self._btn_validate = QPushButton(self._t("page.settings.btn.validate"))
         self._btn_validate.setProperty("variant", "subtle")
         self._btn_validate.clicked.connect(self._on_validate)
         btn_row.addWidget(self._btn_validate)
 
-        self._btn_reload = QPushButton("重新加载 .env")
+        self._btn_reload = QPushButton(self._t("page.settings.btn.reload"))
         self._btn_reload.setProperty("variant", "subtle")
         self._btn_reload.clicked.connect(self._on_reload)
         btn_row.addWidget(self._btn_reload)
@@ -514,12 +590,14 @@ class SettingsPage(QWidget):
 
     def _build_preset_switch_group(self) -> QGroupBox:
         """构建快速切换卡片组"""
-        group = QGroupBox("快速切换")
+        self._quick_switch_group = QGroupBox(self._t("page.settings.section.quick_switch"))
+        group = self._quick_switch_group
         outer = QVBoxLayout(group)
         outer.setContentsMargins(12, 16, 12, 12)
         outer.setSpacing(8)
 
-        hint = QLabel("点击卡片快速切换当前生效的模型渠道，不会覆盖下方已保存的运行开关")
+        self._preset_hint_lbl = QLabel(self._t("page.settings.preset.hint"))
+        hint = self._preset_hint_lbl
         hint.setProperty("role", "subtle")
         hint.setWordWrap(True)
         outer.addWidget(hint)
@@ -538,7 +616,7 @@ class SettingsPage(QWidget):
         for preset in presets:
             # 读取该预设在 .env 中的真实模型名（本地预设等有专用字段）
             resolved_model = self._config.get_preset_model(preset)
-            card = _PresetCard(preset, resolved_model=resolved_model)
+            card = _PresetCard(preset, resolved_model=resolved_model, translator=self._t)
             card.apply_tokens(self._theme_tokens)
             card.mousePressEvent = lambda e, p=preset, c=card: self._on_preset_card_clicked(p, c)
             grid_layout.addWidget(card)
@@ -567,11 +645,18 @@ class SettingsPage(QWidget):
             self._rebuild_channel_detail(channel_id)
             self._load_values()  # 刷新表单字段
             self._show_banner(
-                f"已切换到渠道「{preset.get('name', channel_id)}」，当前生效配置已写入 .env",
+                "",
                 ok=True,
+                i18n_key="page.settings.banner.switch_ok",
+                i18n_params={"name": preset.get("name", channel_id)},
             )
         else:
-            self._show_banner(f"切换渠道失败: {channel_id}", ok=False)
+            self._show_banner(
+                "",
+                ok=False,
+                i18n_key="page.settings.banner.switch_fail",
+                i18n_params={"channel": channel_id},
+            )
 
     def _refresh_preset_active(self):
         """根据当前配置高亮匹配的预设卡片，并同步更新各卡片显示的真实模型名"""
@@ -591,14 +676,155 @@ class SettingsPage(QWidget):
             if active and active_id != "custom":
                 model = self._config.get_preset_model(active) or active.get("default_model", "")
                 self._active_preset_lbl.setText(
-                    f"当前切换渠道：{active.get('name', active_id)}  |  模型：{model}"
+                    self._t(
+                        "page.settings.active.channel",
+                        name=active.get("name", active_id),
+                        model=model,
+                    )
                 )
             else:
                 url = self._config.get("OPEN_AUTOGLM_BASE_URL") or ""
                 model = self._config.get("OPEN_AUTOGLM_MODEL") or ""
                 self._active_preset_lbl.setText(
-                    f"当前模式：自定义  |  URL：{url}  |  模型：{model}"
+                    self._t(
+                        "page.settings.active.custom",
+                        url=url,
+                        model=model,
+                    )
                 )
+
+    # ================================================================
+    # 构建与脚本
+    # ================================================================
+
+    def _build_build_tools_group(self) -> QGroupBox:
+        self._build_tools_group = QGroupBox(self._t("page.settings.section.build_tools"))
+        group = self._build_tools_group
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(12, 16, 12, 12)
+        outer.setSpacing(8)
+
+        self._build_hint_lbl = QLabel(self._t("page.settings.build.hint"))
+        self._build_hint_lbl.setProperty("role", "subtle")
+        self._build_hint_lbl.setWordWrap(True)
+        outer.addWidget(self._build_hint_lbl)
+
+        self._build_mode_lbl = QLabel("")
+        self._build_root_lbl = QLabel("")
+        self._build_script_lbl = QLabel("")
+        self._build_output_lbl = QLabel("")
+        for label in (
+            self._build_mode_lbl,
+            self._build_root_lbl,
+            self._build_script_lbl,
+            self._build_output_lbl,
+        ):
+            label.setWordWrap(True)
+            label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            outer.addWidget(label)
+
+        btn_row = QHBoxLayout()
+        self._btn_run_build = QPushButton(self._t("page.settings.build.btn.run"))
+        self._btn_run_build.setProperty("variant", "primary")
+        self._btn_run_build.clicked.connect(self._on_run_build_script)
+        btn_row.addWidget(self._btn_run_build)
+
+        self._btn_open_scripts_dir = QPushButton(self._t("page.settings.build.btn.open_scripts"))
+        self._btn_open_scripts_dir.setProperty("variant", "subtle")
+        self._btn_open_scripts_dir.clicked.connect(self._on_open_scripts_dir)
+        btn_row.addWidget(self._btn_open_scripts_dir)
+
+        self._btn_open_dist_dir = QPushButton(self._t("page.settings.build.btn.open_dist"))
+        self._btn_open_dist_dir.setProperty("variant", "subtle")
+        self._btn_open_dist_dir.clicked.connect(self._on_open_dist_dir)
+        btn_row.addWidget(self._btn_open_dist_dir)
+
+        btn_row.addStretch(1)
+        outer.addLayout(btn_row)
+
+        self._refresh_build_paths()
+        return group
+
+    def _refresh_build_paths(self):
+        mode_key = "page.settings.build.mode.frozen" if is_frozen() else "page.settings.build.mode.source"
+        root_path = app_root().resolve()
+        script_path = gui_build_script_path().resolve()
+        output_path = gui_onefile_output_path().resolve()
+
+        if hasattr(self, "_build_mode_lbl"):
+            self._build_mode_lbl.setText(
+                self._t("page.settings.build.mode", mode=self._t(mode_key))
+            )
+        if hasattr(self, "_build_root_lbl"):
+            self._build_root_lbl.setText(
+                self._t("page.settings.build.root", path=str(root_path))
+            )
+        if hasattr(self, "_build_script_lbl"):
+            self._build_script_lbl.setText(
+                self._t("page.settings.build.script", path=str(script_path))
+            )
+        if hasattr(self, "_build_output_lbl"):
+            self._build_output_lbl.setText(
+                self._t("page.settings.build.output", path=str(output_path))
+            )
+
+    def _open_in_shell(self, path: Path, *, select_file: bool = False, ensure_dir: bool = False):
+        target = Path(path)
+        if ensure_dir:
+            target.mkdir(parents=True, exist_ok=True)
+
+        open_target = target
+        if target.suffix and not target.exists():
+            open_target = target.parent
+
+        if os.name == "nt":
+            if select_file and target.exists():
+                subprocess.Popen(["explorer", f"/select,{target}"])
+            else:
+                os.startfile(str(open_target))
+            return
+
+        opener = ["xdg-open", str(open_target)]
+        if sys.platform == "darwin":
+            opener = ["open", str(open_target)]
+        subprocess.Popen(opener)
+
+    def _on_run_build_script(self):
+        script_path = gui_build_script_path().resolve()
+        if not script_path.exists():
+            self._show_banner(
+                "",
+                ok=False,
+                i18n_key="page.settings.build.banner.script_missing",
+                i18n_params={"path": str(script_path)},
+            )
+            return
+
+        try:
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", str(script_path)],
+                cwd=str(app_root()),
+            )
+            self._show_banner(
+                "",
+                ok=True,
+                i18n_key="page.settings.build.banner.started",
+            )
+        except Exception as e:
+            self._show_banner(
+                "",
+                ok=False,
+                i18n_key="page.settings.build.banner.start_failed",
+                i18n_params={"error": str(e)},
+            )
+
+    def _on_open_scripts_dir(self):
+        self._open_in_shell(gui_build_script_path().resolve().parent, ensure_dir=True)
+
+    def _on_open_dist_dir(self):
+        output_path = gui_onefile_output_path().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._open_in_shell(output_path, select_file=True, ensure_dir=True)
 
     # ================================================================
     # 渠道详情动态面板
@@ -634,9 +860,9 @@ class SettingsPage(QWidget):
             keys = []
         if not keys:
             if channel_id in {"newapi", "local"}:
-                hint_text = "当前渠道没有额外专属字段；上方“模型与 API”保存的是当前生效配置，不会反向覆盖快速切换卡片。"
+                hint_text = self._t("page.settings.channel.detail.shared_only")
             else:
-                hint_text = "当前渠道无专属配置字段（使用 模型与 API 区的全局字段即可）。"
+                hint_text = self._t("page.settings.channel.detail.none")
             hint = QLabel(hint_text)
             hint.setProperty("role", "subtle")
             hint.setWordWrap(True)
@@ -710,9 +936,10 @@ class SettingsPage(QWidget):
                     row_layout.setContentsMargins(0, 0, 0, 0)
                     row_layout.setSpacing(4)
                     row_layout.addWidget(edit, 1)
-                    toggle_btn = QPushButton("显示")
+                    toggle_btn = QPushButton(self._t("page.settings.btn.show"))
                     toggle_btn.setFixedWidth(48)
                     toggle_btn.setProperty("variant", "subtle")
+                    toggle_btn.setProperty("sensitiveVisible", False)
                     toggle_btn.clicked.connect(lambda _, e=edit, b=toggle_btn: self._toggle_visibility(e, b))
                     self._visibility_toggle_buttons.append(toggle_btn)
                     row_layout.addWidget(toggle_btn)
@@ -726,10 +953,12 @@ class SettingsPage(QWidget):
         """切换敏感字段的显示/隐藏"""
         if edit.echoMode() == QLineEdit.Password:
             edit.setEchoMode(QLineEdit.Normal)
-            btn.setText("隐藏")
+            btn.setProperty("sensitiveVisible", True)
+            btn.setText(self._t("page.settings.btn.hide"))
         else:
             edit.setEchoMode(QLineEdit.Password)
-            btn.setText("显示")
+            btn.setProperty("sensitiveVisible", False)
+            btn.setText(self._t("page.settings.btn.show"))
 
     # ================================================================
     # 数据加载与保存
@@ -739,11 +968,12 @@ class SettingsPage(QWidget):
         """将配置值加载到表单字段"""
         if not self._config:
             return
-        self._env_path_lbl.setText(f"配置文件: {self._config.env_path}")
+        self._env_path_lbl.setText(self._t("page.settings.env_path_label", path=self._config.env_path))
         for key, edit in self._field_widgets.items():
             value = self._config.get(key)
             edit.setText(value)
         self._update_theme_hint()
+        self._refresh_build_paths()
 
     def _on_save(self):
         """收集界面值，批量写入（只写一次文件），失败时全量回滚"""
@@ -753,19 +983,31 @@ class SettingsPage(QWidget):
             key: edit.text().strip()
             for key, edit in self._field_widgets.items()
         }
+        # 将语言下拉选择单独合并进 updates
+        if hasattr(self, "_lang_combo"):
+            updates["OPEN_AUTOGLM_LANG"] = self._lang_combo.currentData() or "cn"
         # 先做校验（不污染缓存）
         errors = self._config.validate(updates)
         if errors:
             msgs = "\n".join(f"• {k}: {v}" for k, v in errors)
-            QMessageBox.warning(self, "校验失败", msgs)
+            QMessageBox.warning(self, self._t("page.settings.dialog.validate_fail"), msgs)
             return
         try:
             self._config.set_many(updates)
-            self._show_banner("配置已保存到 .env 文件", ok=True)
+            self._show_banner(
+                "",
+                ok=True,
+                i18n_key="page.settings.banner.saved_env",
+            )
             # 保存后刷新切换卡片高亮（URL/模型可能变化）
             self._refresh_preset_active()
+            # 语言保存后立即切换 GUI 语言
+            new_lang = updates.get("OPEN_AUTOGLM_LANG", "cn")
+            i18n = self._i18n or self._services.get("i18n")
+            if i18n:
+                i18n.set_language(new_lang)
         except Exception as e:
-            QMessageBox.warning(self, "保存失败", str(e))
+            QMessageBox.warning(self, self._t("page.settings.dialog.save_fail"), str(e))
 
     def _on_validate(self):
         """
@@ -780,10 +1022,19 @@ class SettingsPage(QWidget):
         }
         errors = self._config.validate(temp_values)
         if not errors:
-            self._show_banner("配置校验通过", ok=True)
+            self._show_banner(
+                "",
+                ok=True,
+                i18n_key="page.settings.banner.validate_ok",
+            )
         else:
             msgs = "\n".join(f"• {k}: {v}" for k, v in errors)
-            self._show_banner(f"校验发现问题：\n{msgs}", ok=False)
+            self._show_banner(
+                "",
+                ok=False,
+                i18n_key="page.settings.banner.validate_fail_msg",
+                i18n_params={"msgs": msgs},
+            )
 
     def _on_reload(self):
         """从磁盘重新加载 .env"""
@@ -792,10 +1043,27 @@ class SettingsPage(QWidget):
         self._config.load()
         self._load_values()
         self._refresh_preset_active()
-        self._show_banner("已从 .env 文件重新加载", ok=True)
+        self._show_banner(
+            "",
+            ok=True,
+            i18n_key="page.settings.banner.reloaded",
+        )
 
-    def _show_banner(self, msg: str, ok: bool = True):
-        """显示校验/操作结果横幅"""
+    def _show_banner(
+        self,
+        msg: str,
+        ok: bool = True,
+        *,
+        i18n_key: str = "",
+        i18n_params: dict | None = None,
+    ):
+        """显示校验/操作结果横幅。"""
+        if i18n_key:
+            params = i18n_params or {}
+            msg = self._t(i18n_key, **params)
+            self._last_banner_i18n = (i18n_key, params)
+        else:
+            self._last_banner_i18n = None
         v = self._theme_vars or {}
         color = v.get("success", "#3fb950") if ok else v.get("warning", "#f0883e")
         bg = v.get("success_bg", "#0f2d1a") if ok else v.get("warning_bg", "#2d1a0f")
@@ -817,12 +1085,13 @@ class SettingsPage(QWidget):
             return
         current = self._theme_combo.currentData()
         if current == "system":
-            actual = "深色" if self._theme_mode == "dark" else "浅色"
-            self._theme_hint_lbl.setText(f"当前为跟随系统，实际生效外观：{actual}")
+            actual_key = "page.settings.theme.dark" if self._theme_mode == "dark" else "page.settings.theme.light"
+            actual = self._t(actual_key)
+            self._theme_hint_lbl.setText(self._t("page.settings.theme.hint.system", actual=actual))
         elif current == "dark":
-            self._theme_hint_lbl.setText("已固定为深色主题")
+            self._theme_hint_lbl.setText(self._t("page.settings.theme.hint.dark"))
         elif current == "light":
-            self._theme_hint_lbl.setText("已固定为浅色主题")
+            self._theme_hint_lbl.setText(self._t("page.settings.theme.hint.light"))
         else:
             self._theme_hint_lbl.setText("")
 
@@ -831,6 +1100,9 @@ class SettingsPage(QWidget):
             (getattr(self, "_btn_save", None), btn_primary(self._theme_tokens)),
             (getattr(self, "_btn_validate", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_reload", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_run_build", None), btn_primary(self._theme_tokens)),
+            (getattr(self, "_btn_open_scripts_dir", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_open_dist_dir", None), btn_subtle(self._theme_tokens)),
         ):
             if btn:
                 btn.setStyleSheet(style)
@@ -856,7 +1128,12 @@ class SettingsPage(QWidget):
         if self._theme_tokens is None:
             return
         if self._last_banner_state and self._validate_banner.isVisible():
-            self._show_banner(*self._last_banner_state)
+            msg, ok = self._last_banner_state
+            if self._last_banner_i18n:
+                key, params = self._last_banner_i18n
+                self._show_banner(msg, ok, i18n_key=key, i18n_params=params)
+            else:
+                self._show_banner(msg, ok)
         self._update_theme_hint()
         # 刷新所有预设卡片主题
         for card in self._preset_cards:
@@ -892,6 +1169,106 @@ class SettingsPage(QWidget):
                 break
         self._theme_combo.blockSignals(False)
         self._update_theme_hint()
+
+    def _load_lang_combo(self):
+        """将配置中的语言值同步到 ComboBox 显示"""
+        if not self._config:
+            return
+        current = self._config.get("OPEN_AUTOGLM_LANG") or "cn"
+        self._lang_combo.blockSignals(True)
+        for i in range(self._lang_combo.count()):
+            if self._lang_combo.itemData(i) == current:
+                self._lang_combo.setCurrentIndex(i)
+                break
+        self._lang_combo.blockSignals(False)
+
+    def _on_lang_changed(self, index: int):
+        """
+        语言下拉变化时，仅更新 ComboBox 显示，不立即保存。
+        保存后才生效，符合设置页保存后生效的规范。
+        """
+        pass  # 保存由 _on_save 统一处理
+
+    def apply_i18n(self, i18n_manager) -> None:
+        """
+        PageI18nAdapter 回调 - 语言切换后更新设置页本身的静态文案。
+        """
+        _t = i18n_manager.t
+        # 更新 i18n 服务引用（InitialState 时可能还未注入）
+        self._i18n = i18n_manager
+        if hasattr(self, "_title_lbl"):
+            self._title_lbl.setText(_t("page.settings.title"))
+        # GroupBox 标题
+        if hasattr(self, "_model_group"):
+            self._model_group.setTitle(_t("page.settings.section.model_api"))
+        if hasattr(self, "_channel_group"):
+            self._channel_group.setTitle(_t("page.settings.section.channel"))
+        if hasattr(self, "_run_group"):
+            self._run_group.setTitle(_t("page.settings.section.run_params"))
+        if hasattr(self, "_appearance_group"):
+            self._appearance_group.setTitle(_t("page.settings.section.appearance"))
+        if hasattr(self, "_build_tools_group"):
+            self._build_tools_group.setTitle(_t("page.settings.section.build_tools"))
+        if hasattr(self, "_quick_switch_group"):
+            self._quick_switch_group.setTitle(_t("page.settings.section.quick_switch"))
+        # 行标签与说明
+        if hasattr(self, "_channel_hint_lbl"):
+            self._channel_hint_lbl.setText(_t("page.settings.channel.hint"))
+        if hasattr(self, "_build_hint_lbl"):
+            self._build_hint_lbl.setText(_t("page.settings.build.hint"))
+        if hasattr(self, "_lang_label"):
+            self._lang_label.setText(_t("page.settings.lang.label"))
+        if hasattr(self, "_theme_label"):
+            self._theme_label.setText(_t("page.settings.theme.label"))
+        if hasattr(self, "_theme_effect_label"):
+            self._theme_effect_label.setText(_t("page.settings.theme.effect_label"))
+        if hasattr(self, "_env_path_lbl") and self._config:
+            self._env_path_lbl.setText(_t("page.settings.env_path_label", path=self._config.env_path))
+        # 语言下拉文字
+        if hasattr(self, "_lang_combo"):
+            self._lang_combo.setItemText(0, _t("page.settings.lang.cn"))
+            self._lang_combo.setItemText(1, _t("page.settings.lang.en"))
+        # 主题下拉文字
+        if hasattr(self, "_theme_combo"):
+            self._theme_combo.setItemText(0, _t("page.settings.theme.system"))
+            self._theme_combo.setItemText(1, _t("page.settings.theme.dark"))
+            self._theme_combo.setItemText(2, _t("page.settings.theme.light"))
+        # 按钮文字
+        if hasattr(self, "_btn_save"):
+            self._btn_save.setText(_t("page.settings.btn.save"))
+        if hasattr(self, "_btn_validate"):
+            self._btn_validate.setText(_t("page.settings.btn.validate"))
+        if hasattr(self, "_btn_reload"):
+            self._btn_reload.setText(_t("page.settings.btn.reload"))
+        if hasattr(self, "_btn_run_build"):
+            self._btn_run_build.setText(_t("page.settings.build.btn.run"))
+        if hasattr(self, "_btn_open_scripts_dir"):
+            self._btn_open_scripts_dir.setText(_t("page.settings.build.btn.open_scripts"))
+        if hasattr(self, "_btn_open_dist_dir"):
+            self._btn_open_dist_dir.setText(_t("page.settings.build.btn.open_dist"))
+        for btn in self._visibility_toggle_buttons:
+            is_visible = bool(btn.property("sensitiveVisible"))
+            btn.setText(_t("page.settings.btn.hide") if is_visible else _t("page.settings.btn.show"))
+        # 预设卡片与提示文字
+        if hasattr(self, "_preset_hint_lbl"):
+            self._preset_hint_lbl.setText(_t("page.settings.preset.hint"))
+        for card in self._preset_cards:
+            if hasattr(card, "set_translator"):
+                card.set_translator(_t)
+        self._update_theme_hint()
+        self._refresh_build_paths()
+        self._refresh_preset_active()
+        if self._config:
+            active = self._config.get_active_channel()
+            active_id = active.get("id", "") if active else ""
+            self._rebuild_channel_detail(active_id)
+        if self._last_banner_state and self._validate_banner.isVisible():
+            msg, ok = self._last_banner_state
+            if self._last_banner_i18n:
+                key, params = self._last_banner_i18n
+                self._show_banner(msg, ok, i18n_key=key, i18n_params=params)
+            else:
+                self._show_banner(msg, ok)
 
     def _on_theme_changed(self, index: int):
         """主题下拉变化时立即写入配置并触发主题切换"""

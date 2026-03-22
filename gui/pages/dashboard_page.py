@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 
 from gui.services.readiness_service import (
     collect_blocking_labels,
+    render_summary,
     run_readiness_checks,
     summarize_readiness,
 )
@@ -54,26 +55,30 @@ from gui.theme.styles.lists import list_event
 from gui.theme.styles.logs import log_console
 
 
-# 任务状态 -> (显示文字, 颜色)
-STATE_DISPLAY = {
-    TaskState.IDLE:      ("空闲",   "#8b949e"),
-    TaskState.STARTING:  ("启动中", "#e3b341"),
-    TaskState.RUNNING:   ("运行中", "#3fb950"),
-    TaskState.PAUSED:    ("已暂停", "#e3b341"),
-    TaskState.STOPPING:  ("停止中", "#f85149"),
-    TaskState.COMPLETED: ("已完成", "#3fb950"),
-    TaskState.FAILED:    ("失败",   "#f85149"),
-    TaskState.CANCELLED: ("已取消", "#8b949e"),
+# 任务状态 -> 颜色（文字由 i18n 提供）
+STATE_COLORS = {
+    TaskState.IDLE:      "#8b949e",
+    TaskState.STARTING:  "#e3b341",
+    TaskState.RUNNING:   "#3fb950",
+    TaskState.PAUSED:    "#e3b341",
+    TaskState.STOPPING:  "#f85149",
+    TaskState.COMPLETED: "#3fb950",
+    TaskState.FAILED:    "#f85149",
+    TaskState.CANCELLED: "#8b949e",
 }
 
-# 镜像状态 -> 显示文字
-MIRROR_STATE_DISPLAY = {
-    MirrorState.IDLE:     ("未启动", "#8b949e"),
-    MirrorState.STARTING: ("启动中", "#e3b341"),
-    MirrorState.RUNNING:  ("运行中", "#3fb950"),
-    MirrorState.ERROR:    ("出错",   "#f85149"),
-    MirrorState.STOPPED:  ("已停止", "#8b949e"),
+# 镜像状态 -> 颜色（文字由 i18n 提供）
+MIRROR_STATE_COLORS = {
+    MirrorState.IDLE:     "#8b949e",
+    MirrorState.STARTING: "#e3b341",
+    MirrorState.RUNNING:  "#3fb950",
+    MirrorState.ERROR:    "#f85149",
+    MirrorState.STOPPED:  "#8b949e",
 }
+
+# --- 向后兼容别名（防止导入方报错）---
+STATE_DISPLAY = {k: (k.value, v) for k, v in STATE_COLORS.items()}
+MIRROR_STATE_DISPLAY = {k: (k.value, v) for k, v in MIRROR_STATE_COLORS.items()}
 
 
 class _ReadinessWorker(QThread):
@@ -107,15 +112,16 @@ class DashboardPage(QWidget):
         self._device = services.get("device")
         self._mirror = services.get("mirror")
         self._config = services.get("config")
+        self._i18n = services.get("i18n")  # I18nManager
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
-        self._last_task_status = ("空闲", "#8b949e")
-        self._last_device_status = ("未检测", "#8b949e")
-        self._last_mirror_status = ("未启动", "#8b949e")
+        self._last_task_status = (self._t("state.idle"), "#8b949e")
+        self._last_device_status = (self._t("page.dashboard.status.no_device"), "#8b949e")
+        self._last_mirror_status = (self._t("mirror.state.idle"), "#8b949e")
         self._last_result_color = ""
-        self._last_readiness_state = ("正在检查启动环境...", "info")
-        self._last_readiness_tooltip = "启动环境检查尚未开始"
+        self._last_readiness_state = (self._t("page.dashboard.readiness.checking"), "info")
+        self._last_readiness_tooltip = self._t("page.dashboard.readiness.checking")
         self._readiness_results = []
         self._readiness_summary = None
         self._readiness_worker = None
@@ -215,34 +221,34 @@ class DashboardPage(QWidget):
 
         # 任务输入框
         self._task_input = QLineEdit()
-        self._task_input.setPlaceholderText("输入任务描述，例如：打开微信发消息给张三...")
+        self._task_input.setPlaceholderText(self._t("page.dashboard.toolbar.task_placeholder"))
         self._task_input.setMinimumWidth(300)
         self._task_input.returnPressed.connect(self._on_start)
         layout.addWidget(self._task_input, 1)
 
         # 开始按钮
-        self._btn_start = QPushButton("开始")
+        self._btn_start = QPushButton(self._t("page.dashboard.toolbar.btn.start"))
         self._btn_start.setFixedWidth(72)
         self._btn_start.setProperty("variant", "primary")
         self._btn_start.clicked.connect(self._on_start)
         layout.addWidget(self._btn_start)
 
         # 停止按钮
-        self._btn_stop = QPushButton("停止")
+        self._btn_stop = QPushButton(self._t("page.dashboard.toolbar.btn.stop"))
         self._btn_stop.setFixedWidth(72)
         self._btn_stop.setProperty("variant", "danger")
         self._btn_stop.clicked.connect(self._on_stop)
         layout.addWidget(self._btn_stop)
 
         # 暂停/恢复按钮
-        self._btn_pause = QPushButton("暂停")
+        self._btn_pause = QPushButton(self._t("page.dashboard.toolbar.btn.pause"))
         self._btn_pause.setFixedWidth(72)
         self._btn_pause.setProperty("variant", "warning")
         self._btn_pause.clicked.connect(self._on_pause_resume)
         layout.addWidget(self._btn_pause)
 
         # 接管按钮
-        self._btn_takeover = QPushButton("接管")
+        self._btn_takeover = QPushButton(self._t("page.dashboard.toolbar.btn.takeover"))
         self._btn_takeover.setFixedWidth(72)
         self._btn_takeover.setProperty("variant", "warning")
         self._btn_takeover.clicked.connect(self._on_takeover)
@@ -263,9 +269,18 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(20)
 
-        self._lbl_task_state = self._make_status_chip("状态", "空闲", "#8b949e")
-        self._lbl_device_status = self._make_status_chip("设备", "未检测", "#8b949e")
-        self._lbl_mirror_status = self._make_status_chip("镜像", "未启动", "#8b949e")
+        self._lbl_task_state = self._make_status_chip(
+            self._t("page.dashboard.status.label.state"),
+            self._t("state.idle"), "#8b949e"
+        )
+        self._lbl_device_status = self._make_status_chip(
+            self._t("page.dashboard.status.label.device"),
+            self._t("page.dashboard.status.no_device"), "#8b949e"
+        )
+        self._lbl_mirror_status = self._make_status_chip(
+            self._t("page.dashboard.status.label.mirror"),
+            self._t("mirror.state.idle"), "#8b949e"
+        )
 
         layout.addWidget(self._lbl_task_state)
         layout.addWidget(self._make_sep())
@@ -275,7 +290,7 @@ class DashboardPage(QWidget):
         layout.addStretch(1)
 
         # 镜像控制按钮
-        self._btn_mirror_toggle = QPushButton("启动镜像")
+        self._btn_mirror_toggle = QPushButton(self._t("page.dashboard.mirror.btn.start_mirror"))
         self._btn_mirror_toggle.setFixedHeight(22)
         self._btn_mirror_toggle.setProperty("variant", "subtle")
         self._btn_mirror_toggle.clicked.connect(self._on_mirror_toggle)
@@ -309,13 +324,13 @@ class DashboardPage(QWidget):
         self._readiness_text_lbl.setWordWrap(True)
         layout.addWidget(self._readiness_text_lbl, 1)
 
-        self._btn_open_diag = QPushButton("查看诊断")
+        self._btn_open_diag = QPushButton(self._t("shell.nav.diagnostics"))
         self._btn_open_diag.setProperty("variant", "subtle")
         self._btn_open_diag.setFixedHeight(28)
         self._btn_open_diag.clicked.connect(self._open_diagnostics_page)
         layout.addWidget(self._btn_open_diag)
 
-        self._btn_readiness_refresh = QPushButton("重新检查")
+        self._btn_readiness_refresh = QPushButton(self._t("page.dashboard.readiness.btn.refresh"))
         self._btn_readiness_refresh.setProperty("variant", "subtle")
         self._btn_readiness_refresh.setFixedHeight(28)
         self._btn_readiness_refresh.clicked.connect(lambda: self._schedule_readiness_check(0))
@@ -368,7 +383,8 @@ class DashboardPage(QWidget):
             self._pending_readiness_refresh = True
             return
         self._pending_readiness_refresh = False
-        self._set_readiness_state("正在检查启动环境...", "info", "正在执行启动环境检查")
+        checking_txt = self._t("page.dashboard.readiness.checking")
+        self._set_readiness_state(checking_txt, "info", checking_txt)
         if hasattr(self, "_btn_readiness_refresh"):
             self._btn_readiness_refresh.setEnabled(False)
         device_id = self._current_device_id()
@@ -382,14 +398,15 @@ class DashboardPage(QWidget):
         self._last_readiness_check_at = time.monotonic()
         if not self._readiness_results:
             self._readiness_summary = None
-            self._set_readiness_state("启动环境检查未返回结果", "warning")
+            self._set_readiness_state(self._t("page.dashboard.readiness.no_results"), "warning")
             return
 
         self._readiness_summary = summarize_readiness(self._readiness_results)
-        summary_text = f"{self._readiness_summary.title} · {self._readiness_summary.detail}"
+        title, detail, action_hint = render_summary(self._readiness_summary, self._t)
+        summary_text = f"{title} · {detail}"
         tooltip = summary_text
-        if self._readiness_summary.action_hint:
-            tooltip += f"\n{self._readiness_summary.action_hint}"
+        if action_hint:
+            tooltip += f"\n{action_hint}"
         self._set_readiness_state(summary_text, self._readiness_summary.semantic, tooltip)
 
     def _on_readiness_worker_finished(self):
@@ -422,14 +439,15 @@ class DashboardPage(QWidget):
     # ----------------------------------------------------------------
 
     def _build_mirror_panel(self) -> QWidget:
-        panel = QGroupBox("设备与镜像")
+        self._mirror_panel_group = QGroupBox(self._t("page.dashboard.mirror.title"))
+        panel = self._mirror_panel_group
         panel.setMinimumWidth(380)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 16, 8, 8)
         layout.setSpacing(8)
 
         # 设备信息区
-        self._device_info_lbl = QLabel("未连接任何设备")
+        self._device_info_lbl = QLabel(self._t("page.dashboard.mirror.no_device"))
         self._device_info_lbl.setStyleSheet("color:#8b949e; font-size:12px; padding:4px;")
         self._device_info_lbl.setWordWrap(True)
         layout.addWidget(self._device_info_lbl)
@@ -443,7 +461,7 @@ class DashboardPage(QWidget):
         self._mirror_stack.setContentsMargins(0, 0, 0, 0)
 
         # 占位标签（scrcpy 外部窗口模式或未启动时）
-        self._mirror_placeholder = QLabel("镜像未启动\n\n点击状态栏「启动镜像」按钮\n或使用 scrcpy 外部窗口")
+        self._mirror_placeholder = QLabel(self._t("page.dashboard.mirror.placeholder"))
         self._mirror_placeholder.setAlignment(Qt.AlignCenter)
         self._mirror_placeholder.setStyleSheet("""
             color:#484f58; font-size:13px; line-height:1.8;
@@ -465,7 +483,7 @@ class DashboardPage(QWidget):
         layout.addWidget(self._mirror_container, 1)
 
         # 接管提示横幅（隐藏）
-        self._takeover_banner = QLabel("[ 接管模式 ] 请手动操作手机，完成后点击「继续执行」")
+        self._takeover_banner = QLabel(self._t("page.dashboard.takeover.banner"))
         self._takeover_banner.setAlignment(Qt.AlignCenter)
         self._takeover_banner.setStyleSheet("""
             background:#3d2800; color:#e3b341; font-size:12px;
@@ -475,7 +493,7 @@ class DashboardPage(QWidget):
         layout.addWidget(self._takeover_banner)
 
         # 继续执行按钮（接管模式下显示）
-        self._btn_resume_exec = QPushButton("继续执行")
+        self._btn_resume_exec = QPushButton(self._t("page.dashboard.takeover.btn.restore"))
         self._btn_resume_exec.setProperty("variant", "primary")
         self._btn_resume_exec.hide()
         self._btn_resume_exec.clicked.connect(self._on_resume_after_takeover)
@@ -488,12 +506,14 @@ class DashboardPage(QWidget):
     # ----------------------------------------------------------------
 
     def _build_log_panel(self) -> QWidget:
-        panel = QGroupBox("日志与事件")
+        self._log_panel_group = QGroupBox(self._t("event.result_summary"))
+        panel = self._log_panel_group
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 16, 8, 8)
         layout.setSpacing(0)
 
-        tabs = QTabWidget()
+        self._log_tabs = QTabWidget()
+        tabs = self._log_tabs
         tabs.setDocumentMode(True)
 
         # 原始日志 Tab
@@ -509,7 +529,7 @@ class DashboardPage(QWidget):
             }
         """)
         self._log_view.setMaximumBlockCount(5000)
-        tabs.addTab(self._log_view, "原始日志")
+        tabs.addTab(self._log_view, self._t("page.dashboard.log.tab.log"))
 
         # 事件时间线 Tab
         self._event_list = QListWidget()
@@ -524,12 +544,12 @@ class DashboardPage(QWidget):
             }
             QListWidget::item:selected { background:#264f78; }
         """)
-        tabs.addTab(self._event_list, "事件时间线")
+        tabs.addTab(self._event_list, self._t("page.dashboard.log.tab.events"))
 
         layout.addWidget(tabs, 1)
 
         # 底部结果摘要区
-        self._result_lbl = QLabel("")
+        self._result_lbl = QLabel(self._t("page.dashboard.log.empty_result"))
         self._result_lbl.setWordWrap(True)
         self._result_lbl.setStyleSheet("""
             background:#161b22; border:1px solid #21262d;
@@ -551,17 +571,23 @@ class DashboardPage(QWidget):
     def _set_task_status(self, text: str, color: str):
         self._last_task_status = (text, color)
         if hasattr(self, "_lbl_task_state"):
-            self._lbl_task_state.setText(self._format_status_chip("状态", text, color))
+            self._lbl_task_state.setText(
+                self._format_status_chip(self._t("page.dashboard.status.label.state"), text, color)
+            )
 
     def _set_device_status(self, text: str, color: str):
         self._last_device_status = (text, color)
         if hasattr(self, "_lbl_device_status"):
-            self._lbl_device_status.setText(self._format_status_chip("设备", text, color))
+            self._lbl_device_status.setText(
+                self._format_status_chip(self._t("page.dashboard.status.label.device"), text, color)
+            )
 
     def _set_mirror_status(self, text: str, color: str):
         self._last_mirror_status = (text, color)
         if hasattr(self, "_lbl_mirror_status"):
-            self._lbl_mirror_status.setText(self._format_status_chip("镜像", text, color))
+            self._lbl_mirror_status.setText(
+                self._format_status_chip(self._t("page.dashboard.status.label.mirror"), text, color)
+            )
 
     def _summary_style(self, color: str = "") -> str:
         v = self._theme_vars or {}
@@ -613,8 +639,8 @@ class DashboardPage(QWidget):
 
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
-        新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
-        缓存 tokens 后按三段式刷新。
+        New theme hook driven by PageThemeAdapter / ThemeManager.
+        Cache tokens first, then refresh surfaces and dynamic states.
         """
         self._theme_tokens = tokens
         self._theme_mode = tokens.mode
@@ -728,6 +754,18 @@ class DashboardPage(QWidget):
     # 渠道切换
     # ================================================================
 
+    def _channel_name(self, preset: dict | None) -> str:
+        """Return the localized channel name, falling back to preset.name."""
+        if not preset:
+            return ""
+        channel_id = (preset.get("id") or "").strip()
+        fallback = preset.get("name") or channel_id
+        if not channel_id:
+            return fallback
+        key = f"page.dashboard.channel.preset.{channel_id}"
+        translated = self._t(key)
+        return fallback if translated == f"[[{key}]]" else translated
+
     def _populate_channel_combo(self):
         """填充渠道下拉框选项（仅填充，不触发切换逻辑）"""
         if not self._config:
@@ -736,7 +774,7 @@ class DashboardPage(QWidget):
         self._channel_combo.clear()
         presets = self._config.CHANNEL_PRESETS
         for preset in presets:
-            self._channel_combo.addItem(preset["name"], userData=preset["id"])
+            self._channel_combo.addItem(self._channel_name(preset), userData=preset["id"])
         self._channel_combo.blockSignals(False)
 
     def _sync_channel_combo(self):
@@ -759,8 +797,9 @@ class DashboardPage(QWidget):
             }
             if self._task.state not in idle_states:
                 QMessageBox.warning(
-                    self, "无法切换渠道",
-                    "任务运行中不能切换模型渠道，请先停止当前任务。"
+                    self,
+                    self._t("page.dashboard.channel.switch_blocked.title"),
+                    self._t("page.dashboard.channel.switch_blocked.text"),
                 )
                 # 回滚下拉框选中项
                 self._sync_channel_combo()
@@ -768,7 +807,11 @@ class DashboardPage(QWidget):
 
         ok = self._config.set_active_channel(channel_id)
         if not ok:
-            QMessageBox.warning(self, "切换失败", f"渠道切换失败: {channel_id}")
+            QMessageBox.warning(
+                self,
+                self._t("page.dashboard.channel.switch_failed.title"),
+                self._t("page.dashboard.channel.switch_failed.text", channel_id=channel_id),
+            )
             self._sync_channel_combo()
             return
 
@@ -779,16 +822,24 @@ class DashboardPage(QWidget):
             (p for p in self._config.CHANNEL_PRESETS if p["id"] == channel_id), None
         )
         if preset and channel_id != "custom":
-            thirdparty_hint = "(第三方提示词)" if preset["use_thirdparty"] else "(原生AutoGLM)"
+            mode_hint = self._t(
+                "page.dashboard.channel.hint.thirdparty_inline"
+                if preset["use_thirdparty"]
+                else "page.dashboard.channel.hint.native_inline"
+            )
             resolved_url = self._config.get_preset_url(preset)
             resolved_model = self._config.get_preset_model(preset)
             self._append_log(
-                f"[渠道] 已切换至: {preset['name']} {thirdparty_hint}\n"
-                f"[渠道] Base URL: {resolved_url}\n"
-                f"[渠道] 模型: {resolved_model}\n"
+                self._t(
+                    "page.dashboard.channel.log.switch_preset",
+                    name=self._channel_name(preset),
+                    mode_hint=mode_hint,
+                    base_url=resolved_url,
+                    model=resolved_model,
+                )
             )
         else:
-            self._append_log("[渠道] 已切换至自定义模式（保留当前 URL/模型设置）\n")
+            self._append_log(self._t("page.dashboard.channel.log.switch_custom"))
 
     # ================================================================
     # 按钮回调
@@ -802,27 +853,27 @@ class DashboardPage(QWidget):
 
         if not self._readiness_results:
             self._set_readiness_state(
-                "正在检查启动环境，请稍候片刻再开始任务。",
+                self._t("page.dashboard.readiness.checking"),
                 "info",
-                "启动环境检查仍在进行或尚未开始，请稍后重试。",
+                self._t("page.dashboard.readiness.hint_retry"),
             )
             self._schedule_readiness_check(0)
             return
 
-        blocking_labels = collect_blocking_labels(self._readiness_results)
+        blocking_labels = collect_blocking_labels(self._readiness_results, translator=self._t)
         if blocking_labels:
-            warning_text = f"启动前仍有关键项未就绪：{blocking_labels}"
+            warning_text = self._t("page.dashboard.blocking.warning", labels=blocking_labels)
             self._set_readiness_state(
                 warning_text,
                 "error",
-                warning_text + "\n建议先查看诊断页并完成必要配置。",
+                warning_text + "\n" + self._t("page.dashboard.blocking.hint"),
             )
             msg = QMessageBox(self)
-            msg.setWindowTitle("启动前检查未通过")
-            msg.setText(f"当前仍有关键项未就绪：{blocking_labels}")
-            msg.setInformativeText("建议先查看“诊断”页详情，补齐设备连接、API 配置或依赖项后再开始任务。")
-            btn_diag = msg.addButton("查看诊断", QMessageBox.ActionRole)
-            msg.addButton("取消", QMessageBox.RejectRole)
+            msg.setWindowTitle(self._t("page.dashboard.blocking.dialog.title"))
+            msg.setText(self._t("page.dashboard.blocking.dialog.text", labels=blocking_labels))
+            msg.setInformativeText(self._t("page.dashboard.blocking.dialog.info"))
+            btn_diag = msg.addButton(self._t("page.dashboard.blocking.dialog.btn.diag"), QMessageBox.ActionRole)
+            msg.addButton(self._t("dialog.confirm.no"), QMessageBox.RejectRole)
             msg.exec()
             if msg.clickedButton() == btn_diag:
                 self._open_diagnostics_page()
@@ -833,7 +884,7 @@ class DashboardPage(QWidget):
             self._log_view.clear()
             self._event_list.clear()
             self._last_result_color = ""
-            self._result_lbl.setText("")
+            self._result_lbl.setText(self._t("page.dashboard.log.empty_result"))
             self._result_lbl.setStyleSheet(
                 self._summary_style(self._theme_vars.get("text_secondary", "#526273"))
             )
@@ -854,7 +905,7 @@ class DashboardPage(QWidget):
 
     def _on_takeover(self):
         if self._task:
-            self._task.request_takeover("用户主动接管")
+            self._task.request_takeover(self._t("page.dashboard.takeover.user_reason"))
 
     def _on_resume_after_takeover(self):
         if self._task:
@@ -892,11 +943,15 @@ class DashboardPage(QWidget):
                     embed_container_size=embed_container_size,
                 )
                 self._append_mirror_debug_log(
-                    f"[镜像] 启动请求: device_id={device_id}, embed_wid={embed_wid or 'None'}, "
-                    f"embed_size={embed_container_size or 'None'}\n"
+                    self._t(
+                        "page.dashboard.mirror.debug.start_request",
+                        device_id=device_id,
+                        embed_wid=embed_wid or "None",
+                        embed_size=embed_container_size or "None",
+                    )
                 )
             else:
-                self._append_log("[GUI] 未找到可用设备，无法启动镜像\n")
+                self._append_log(self._t("page.dashboard.mirror.log.no_device"))
 
     # ================================================================
     # 任务状态回调
@@ -904,7 +959,10 @@ class DashboardPage(QWidget):
 
     def _on_task_state_changed(self, state: TaskState):
         self._update_button_states(state)
-        text, color = STATE_DISPLAY.get(state, ("未知", "#8b949e"))
+        # i18n 化状态文字
+        state_key = f"state.{state.value}"
+        color = STATE_COLORS.get(state, "#8b949e")
+        text = self._t(state_key)
         self._set_task_status(text, color)
 
         # 接管/暂停态显示操作提示
@@ -925,10 +983,10 @@ class DashboardPage(QWidget):
         self._btn_takeover.setEnabled(state == TaskState.RUNNING)
 
         if state == TaskState.PAUSED:
-            self._btn_pause.setText("恢复")
+            self._btn_pause.setText(self._t("page.dashboard.toolbar.btn.resume"))
             self._btn_pause.setProperty("variant", "success")
         else:
-            self._btn_pause.setText("暂停")
+            self._btn_pause.setText(self._t("page.dashboard.toolbar.btn.pause"))
             self._btn_pause.setProperty("variant", "warning")
         self._apply_action_button_styles(task_state=state)
 
@@ -949,8 +1007,9 @@ class DashboardPage(QWidget):
             self._append_log(line)
 
     def _on_event_added(self, evt: dict):
+        message = evt.get("rendered_message") or evt.get("message", "")
         item = QListWidgetItem(
-            f"[{evt['time_str']}] {evt['message']}"
+            f"[{evt.get('time_str', '')}] {message}"
         )
         color_map = {
             "task_complete": "#3fb950",
@@ -960,21 +1019,25 @@ class DashboardPage(QWidget):
             "user_pause":    "#e3b341",
             "stuck_detected":"#f0883e",
         }
-        color = color_map.get(evt["type"])
+        color = color_map.get(evt.get("type"))
         if color:
             item.setForeground(QColor(color))
         self._event_list.insertItem(0, item)
 
     def _on_task_finished(self, record):
         state = record.state
-        text, color = STATE_DISPLAY.get(state, ("未知", "#8b949e"))
+        state_key = f"state.{state.value}"
+        color = STATE_COLORS.get(state, "#8b949e")
+        text = self._t(state_key)
         summary = (
-            f"任务：{record.task_text[:60]}\n"
-            f"状态：{text}  |  耗时：{record.duration_str}  |  "
-            f"设备：{record.device_id or '—'}  |  模型：{record.model or '—'}"
+            f"{self._t('page.history.overview.task')}：{record.task_text[:60]}\n"
+            f"{self._t('page.history.overview.state')}：{text}  |  "
+            f"{self._t('page.history.overview.duration')}：{record.duration_str}  |  "
+            f"{self._t('page.history.overview.device')}：{record.device_id or '—'}  |  "
+            f"{self._t('page.history.overview.model')}：{record.model or '—'}"
         )
         if record.error_summary:
-            summary += f"\n错误：{record.error_summary[:120]}"
+            summary += f"\n{self._t('page.history.overview.error')}：{record.error_summary[:120]}"
         self._last_result_color = color
         self._result_lbl.setStyleSheet(self._summary_style(color))
         self._result_lbl.setText(summary)
@@ -985,8 +1048,8 @@ class DashboardPage(QWidget):
 
     def _on_devices_changed(self, devices):
         if not devices:
-            self._device_info_lbl.setText("未连接任何设备")
-            self._update_device_status("未连接", "#f85149")
+            self._device_info_lbl.setText(self._t("page.device.no_device"))
+            self._update_device_status(self._t("page.device.status.disconnected"), "#f85149")
             return
 
         current = self._device.selected_device if self._device else None
@@ -1016,8 +1079,8 @@ class DashboardPage(QWidget):
     def _on_device_selected(self, device_info):
         from gui.services.device_service import DeviceStatus
         if device_info is None:
-            self._device_info_lbl.setText("未选择设备")
-            self._update_device_status("未选择", "#8b949e")
+            self._device_info_lbl.setText(self._t("page.dashboard.device_info.no_device"))
+            self._update_device_status(self._t("page.dashboard.device_info.no_selected"), "#8b949e")
             # 清除镜像控件的设备绑定
             if self._mirror_label:
                 self._mirror_label.set_device_id("")
@@ -1026,14 +1089,19 @@ class DashboardPage(QWidget):
         if self._mirror_label:
             self._mirror_label.set_device_id(device_info.device_id)
         lines = [f"<b>{device_info.display_name}</b>"]
-        conn_type = {"usb": "USB", "wifi": "WiFi"}.get(device_info.connection_type, "未知")
-        lines.append(f"连接方式: {conn_type}")
-        kbd = device_info.adb_keyboard_status or (
-            "ADB Keyboard 已启用" if device_info.adb_keyboard_enabled else "ADB Keyboard 未安装"
+        conn_type = {"usb": "USB", "wifi": "WiFi"}.get(
+            device_info.connection_type,
+            self._t("page.dashboard.device_info.conn_type.unknown")
         )
-        if kbd.startswith("ADB Keyboard "):
-            kbd = kbd[len("ADB Keyboard "):]
-        lines.append(f"ADB Keyboard: {kbd}")
+        lines.append(self._t("page.dashboard.device_info.conn_label", conn_type=conn_type))
+        _kbd_raw = device_info.adb_keyboard_status
+        if _kbd_raw:
+            # 剥离旧数据中可能存在的 "ADB Keyboard " 前缀，仅保留状态词
+            kbd = _kbd_raw[len("ADB Keyboard "):] if _kbd_raw.startswith("ADB Keyboard ") else _kbd_raw
+        else:
+            kbd = self._t("page.dashboard.device_info.kbd_enabled") if device_info.adb_keyboard_enabled \
+                else self._t("page.dashboard.device_info.kbd_missing")
+        lines.append(self._t("page.dashboard.device_info.kbd_label", status=kbd))
         self._device_info_lbl.setText("<br>".join(lines))
         self._device_info_lbl.setStyleSheet("font-size:12px; padding:4px;")
 
@@ -1052,13 +1120,14 @@ class DashboardPage(QWidget):
     # ================================================================
 
     def _on_mirror_state_changed(self, state: MirrorState):
-        text, color = MIRROR_STATE_DISPLAY.get(state, ("未知", "#8b949e"))
+        color = MIRROR_STATE_COLORS.get(state, "#8b949e")
+        text = self._t(f"mirror.state.{state.value}")
         self._set_mirror_status(text, color)
         if state == MirrorState.RUNNING:
-            self._btn_mirror_toggle.setText("停止镜像")
+            self._btn_mirror_toggle.setText(self._t("page.dashboard.mirror.btn.stop_mirror"))
             self._btn_mirror_toggle.setProperty("variant", "danger")
         else:
-            self._btn_mirror_toggle.setText("启动镜像")
+            self._btn_mirror_toggle.setText(self._t("page.dashboard.mirror.btn.start_mirror"))
             self._btn_mirror_toggle.setProperty("variant", "subtle")
         self._apply_action_button_styles(mirror_running=(state == MirrorState.RUNNING))
 
@@ -1068,11 +1137,11 @@ class DashboardPage(QWidget):
             if self._mirror_stack and self._mirror_label:
                 self._mirror_stack.setCurrentWidget(self._mirror_label)
         elif mode == MirrorMode.NONE:
-            self._mirror_placeholder.setText("镜像已停止")
+            self._mirror_placeholder.setText(self._t("page.dashboard.mirror.stopped"))
             if self._mirror_stack and self._mirror_placeholder:
                 self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
         elif mode == MirrorMode.SCRCPY_EXTERNAL:
-            self._mirror_placeholder.setText("scrcpy 镜像运行中（独立窗口）\n\n内嵌模式不可用时使用此模式")
+            self._mirror_placeholder.setText(self._t("page.dashboard.mirror.scrcpy_external"))
             if self._mirror_stack and self._mirror_placeholder:
                 self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
         elif mode == MirrorMode.SCRCPY_EMBEDDED:
@@ -1088,11 +1157,13 @@ class DashboardPage(QWidget):
         self._mirror_label.set_raw_pixmap(pixmap)
 
     def _on_mirror_error(self, msg: str):
-        self._append_log(f"[镜像] {msg}\n")
+        self._append_log(self._t("page.dashboard.mirror.log.error", msg=msg))
 
     def _on_mirror_window_created(self, hwnd: int):
         self._last_mirror_geometry_debug = None
-        self._append_mirror_debug_log(f"[镜像] scrcpy 窗口已嵌入，HWND={hwnd}\n")
+        self._append_mirror_debug_log(
+            self._t("page.dashboard.mirror.debug.window_embedded", hwnd=hwnd)
+        )
         QTimer.singleShot(0, self._sync_embedded_mirror_geometry)
 
     @staticmethod
@@ -1154,20 +1225,35 @@ class DashboardPage(QWidget):
             self._last_mirror_geometry_debug = debug_signature
             if fit_rect:
                 self._append_mirror_debug_log(
-                    "[镜像][调试] 容器="
-                    f"({rect.x()},{rect.y()},{rect.width()},{rect.height()})，"
-                    f"设备={device_size[0]}x{device_size[1]}，"
-                    f"DPR={scale_factor:.2f}，"
-                    "按比例适配(fit)="
-                    f"({fit_rect[0]},{fit_rect[1]},{fit_rect[2]},{fit_rect[3]})，"
-                    "下发原生(native)="
-                    f"({native_rect[0]},{native_rect[1]},{native_rect[2]},{native_rect[3]})\n"
+                    self._t(
+                        "page.dashboard.mirror.debug.fit_rect",
+                        x=rect.x(),
+                        y=rect.y(),
+                        w=rect.width(),
+                        h=rect.height(),
+                        device_w=device_size[0],
+                        device_h=device_size[1],
+                        dpr=scale_factor,
+                        fit_x=fit_rect[0],
+                        fit_y=fit_rect[1],
+                        fit_w=fit_rect[2],
+                        fit_h=fit_rect[3],
+                        native_x=native_rect[0],
+                        native_y=native_rect[1],
+                        native_w=native_rect[2],
+                        native_h=native_rect[3],
+                    )
                 )
             else:
                 self._append_mirror_debug_log(
-                    "[镜像][调试] 尚未获取设备屏幕尺寸，"
-                    f"DPR={scale_factor:.2f}，按容器 full rect 下发原生窗口="
-                    f"({native_rect[0]},{native_rect[1]},{native_rect[2]},{native_rect[3]})\n"
+                    self._t(
+                        "page.dashboard.mirror.debug.full_rect",
+                        dpr=scale_factor,
+                        native_x=native_rect[0],
+                        native_y=native_rect[1],
+                        native_w=native_rect[2],
+                        native_h=native_rect[3],
+                    )
                 )
 
         self._mirror.resize_scrcpy_window(
@@ -1202,25 +1288,38 @@ class DashboardPage(QWidget):
         is_thirdparty = self._config._is_truthy(
             self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
         )
-        tp_hint = "[第三方提示词]" if is_thirdparty else "[原生AutoGLM]"
+        tp_hint = self._t(
+            "page.dashboard.channel.hint.thirdparty_bracketed"
+            if is_thirdparty
+            else "page.dashboard.channel.hint.native_bracketed"
+        )
         # 渠道下拉框显示名加上动态模型名后缀（便于区分同渠道不同模型）
         active = self._config.get_active_channel()
         active_id = active["id"] if active else "custom"
+        display_model = model[:24] if len(model) > 24 else model
         if active_id != "custom":
-            display_model = model[:24] if len(model) > 24 else model
             self._channel_combo.setItemText(
                 self._channel_combo.currentIndex(),
-                f"{active['name']}  [{display_model}]"
+                self._t(
+                    "page.dashboard.channel.display.preset",
+                    name=self._channel_name(active),
+                    model=display_model,
+                )
             )
         else:
-            # 自定义模式：显示当前实际模型名
-            display_model = model[:24] if len(model) > 24 else model
             self._channel_combo.setItemText(
                 self._channel_combo.currentIndex(),
-                f"自定义  [{display_model}]" if display_model and display_model != "—" else "自定义"
+                self._t("page.dashboard.channel.display.custom_with_model", model=display_model)
+                if display_model and display_model != "—"
+                else self._t("page.dashboard.channel.display.custom_plain")
             )
         self._channel_combo.setToolTip(
-            f"Base URL: {base_url}\n模型: {model}\n{tp_hint}"
+            self._t(
+                "page.dashboard.channel.tooltip",
+                base_url=base_url,
+                model=model,
+                mode_hint=tp_hint,
+            )
         )
 
     def on_page_activated(self):
@@ -1272,4 +1371,92 @@ class DashboardPage(QWidget):
                 btn.setStyleSheet(style)
                 btn.update()
 
+    # ================================================================
+    # i18n 支持
+    # ================================================================
 
+    def _t(self, key: str, **params) -> str:
+        """便捷翻译方法，优先使用 services 中的 I18nManager，无则回退内置中文。"""
+        i18n = getattr(self, "_i18n", None) or self._services.get("i18n")
+        if i18n:
+            return i18n.t(key, **params)
+        # 回退：中文词典兜底
+        try:
+            from gui.i18n.locales.cn import CN
+            tmpl = CN.get(key, f"[[{key}]]")
+            return tmpl.format(**params) if params else tmpl
+        except Exception:
+            return f"[[{key}]]"
+
+    def apply_i18n(self, i18n_manager) -> None:
+        """PageI18nAdapter 回调 - 语言切换后立即更新工作台静态文案。"""
+        self._i18n = i18n_manager
+        _t = i18n_manager.t
+        # 工具栏
+        if hasattr(self, "_task_input"):
+            self._task_input.setPlaceholderText(_t("page.dashboard.toolbar.task_placeholder"))
+        if hasattr(self, "_btn_start"):
+            self._btn_start.setText(_t("page.dashboard.toolbar.btn.start"))
+        if hasattr(self, "_btn_stop"):
+            self._btn_stop.setText(_t("page.dashboard.toolbar.btn.stop"))
+        if hasattr(self, "_btn_takeover"):
+            self._btn_takeover.setText(_t("page.dashboard.toolbar.btn.takeover"))
+        if hasattr(self, "_btn_pause"):
+            task_state = self._task.state if self._task else None
+            from gui.services.task_service import TaskState as _TS
+            if task_state == _TS.PAUSED:
+                self._btn_pause.setText(_t("page.dashboard.toolbar.btn.resume"))
+            else:
+                self._btn_pause.setText(_t("page.dashboard.toolbar.btn.pause"))
+
+        # 状态条与镜像区
+        if self._task:
+            self._on_task_state_changed(self._task.state)
+        else:
+            self._set_task_status(_t("state.idle"), "#8b949e")
+        if self._device and self._device.selected_device:
+            self._on_device_selected(self._device.selected_device)
+        else:
+            if hasattr(self, "_device_info_lbl"):
+                self._device_info_lbl.setText(_t("page.dashboard.device_info.no_device"))
+            self._set_device_status(_t("page.dashboard.device_info.no_selected"), "#8b949e")
+        if hasattr(self, "_mirror_panel_group"):
+            self._mirror_panel_group.setTitle(_t("page.dashboard.mirror.title"))
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.setText(_t("page.dashboard.takeover.banner"))
+        if hasattr(self, "_btn_resume_exec"):
+            self._btn_resume_exec.setText(_t("page.dashboard.takeover.btn.restore"))
+        if self._mirror:
+            self._on_mirror_state_changed(self._mirror.state)
+            self._on_mirror_mode_changed(self._mirror.mode)
+        if hasattr(self, "_channel_combo"):
+            self._populate_channel_combo()
+            self._refresh_status_bar()
+
+        # 环境摘要 / 诊断入口
+        if hasattr(self, "_btn_readiness_refresh"):
+            self._btn_readiness_refresh.setText(_t("page.dashboard.readiness.btn.refresh"))
+        if hasattr(self, "_btn_open_diag"):
+            self._btn_open_diag.setText(_t("shell.nav.diagnostics"))
+        if self._readiness_summary:
+            title, detail, action_hint = render_summary(self._readiness_summary, _t)
+            summary_text = f"{title} · {detail}"
+            tooltip = summary_text + (f"\n{action_hint}" if action_hint else "")
+            self._set_readiness_state(summary_text, self._readiness_summary.semantic, tooltip)
+        elif not self._readiness_results:
+            self._set_readiness_state(_t("page.dashboard.readiness.checking"), self._last_readiness_state[1])
+
+        # 日志 / 事件 / 结果面板
+        if hasattr(self, "_log_panel_group"):
+            self._log_panel_group.setTitle(_t("event.result_summary"))
+        if hasattr(self, "_log_tabs"):
+            self._log_tabs.setTabText(0, _t("page.dashboard.log.tab.log"))
+            self._log_tabs.setTabText(1, _t("page.dashboard.log.tab.events"))
+        if self._task and self._task.current_record and self._task.current_record.state in {
+            TaskState.COMPLETED,
+            TaskState.FAILED,
+            TaskState.CANCELLED,
+        }:
+            self._on_task_finished(self._task.current_record)
+        elif hasattr(self, "_result_lbl") and not self._last_result_color:
+            self._result_lbl.setText(_t("page.dashboard.log.empty_result"))

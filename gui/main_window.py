@@ -4,6 +4,7 @@
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QFrame,
     QHBoxLayout,
@@ -21,6 +22,8 @@ from gui.theme.preferences import ThemePreference
 from gui.theme.global_shell import GlobalShellStyler
 from gui.theme.page_adapter import PageThemeAdapter
 from gui.theme.tokens import ThemeTokens
+from gui.i18n.manager import I18nManager
+from gui.i18n.page_adapter import PageI18nAdapter
 
 
 class MainWindow(QMainWindow):
@@ -60,11 +63,27 @@ class MainWindow(QMainWindow):
         # 连接主题变化 -> 壳层更新 + 导航更新
         self._theme_manager.theme_changed.connect(self._on_tokens_changed)
 
+        # ---------- I18nEngine 初始化 ----------
+        _init_lang = "cn"
+        cfg = services.get("config")
+        if cfg:
+            _init_lang = cfg.get("OPEN_AUTOGLM_LANG") or "cn"
+        self._i18n_manager = I18nManager(_init_lang, self)
+        self._i18n_adapter = PageI18nAdapter(self._i18n_manager)
+        # 语言切换 -> 更新壳层（标题、导航）
+        self._i18n_manager.language_changed.connect(self._on_language_changed)
+
         # 暴露给 services，让需要的服务可以访问
         self._services["theme_manager"] = self._theme_manager
+        self._services["i18n"] = self._i18n_manager
         self._services["navigate_to_page"] = self.switch_page
 
-        self.setWindowTitle("LSJ AutoGLM")
+        self._app_version = (
+            QApplication.instance().applicationVersion().strip()
+            if QApplication.instance() and QApplication.instance().applicationVersion()
+            else "0.1"
+        )
+        self.setWindowTitle(self._i18n_manager.t("shell.window.title"))
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1440, 900)
         self._build_ui()
@@ -121,24 +140,28 @@ class MainWindow(QMainWindow):
         self._btn_group = QButtonGroup(self)
         self._btn_group.setExclusive(True)
 
+        _t = self._i18n_manager.t
+        # (key, icon, i18n_key)
         nav_items = [
-            ("dashboard", "[=]", "工作台"),
-            ("device",    "[D]", "设备"),
-            ("history",   "[H]", "历史"),
-            ("settings",  "[S]", "设置"),
-            ("diag",      "[?]", "诊断"),
+            ("dashboard", "[=]", "shell.nav.dashboard"),
+            ("device",    "[D]", "shell.nav.device"),
+            ("history",   "[H]", "shell.nav.history"),
+            ("settings",  "[S]", "shell.nav.settings"),
+            ("diag",      "[?]", "shell.nav.diagnostics"),
         ]
+        self._nav_items_meta = nav_items  # 保留供 retranslate 使用
         self._nav_buttons = {}
-        for key, icon, label in nav_items:
-            btn = NavButton(icon, label)
+        for key, icon, i18n_key in nav_items:
+            btn = NavButton(icon, _t(i18n_key))
             self._btn_group.addButton(btn)
             layout.addWidget(btn)
             self._nav_buttons[key] = btn
+            btn.setProperty("i18n_key", i18n_key)
 
         layout.addStretch(1)
 
         # 底部版本号
-        self._ver_lbl = QLabel("v0.1 Alpha")
+        self._ver_lbl = QLabel(_t("shell.footer.version", version=self._app_version))
         self._ver_lbl.setStyleSheet("color:#3a4560; font-size:10px; padding:4px 8px;")
         layout.addWidget(self._ver_lbl)
 
@@ -169,8 +192,11 @@ class MainWindow(QMainWindow):
         for page in self._pages.values():
             self._stack.addWidget(page)
             self._page_adapter.register_page(page)
+            self._i18n_adapter.register_page(page)
 
         self._stack.setCurrentWidget(self._page_dashboard)
+        # 推送初始 i18n 状态
+        self._i18n_adapter.push_current()
 
     def _connect_signals(self):
         for key, btn in self._nav_buttons.items():
@@ -184,6 +210,9 @@ class MainWindow(QMainWindow):
         if task:
             task.takeover_requested.connect(self._on_takeover_request)
             task.stuck_detected.connect(self._on_stuck_detected)
+            # 注入 i18n 服务（TaskService 初始化时尚未有 i18n）
+            if hasattr(task, "set_i18n"):
+                task.set_i18n(self._i18n_manager)
 
         # 监听配置变化以实时切换主题
         cfg = self._services.get("config")
@@ -209,10 +238,11 @@ class MainWindow(QMainWindow):
 
     def _on_takeover_request(self, reason: str):
         from PySide6.QtWidgets import QMessageBox
+        _t = self._i18n_manager.t
         msg = QMessageBox(self)
-        msg.setWindowTitle("人工接管请求")
-        msg.setText(f"Agent 请求人工接管\n\n原因：{reason}")
-        msg.setInformativeText("任务已暂停，请在手机镜像中完成操作后点击\"继续执行\"。")
+        msg.setWindowTitle(_t("dialog.takeover.title"))
+        msg.setText(_t("dialog.takeover.text", reason=reason))
+        msg.setInformativeText(_t("dialog.takeover.info"))
         msg.setIcon(QMessageBox.Warning)
         msg.setStandardButtons(QMessageBox.Ok)
         msg.setStyleSheet(self._dialog_style())
@@ -223,22 +253,23 @@ class MainWindow(QMainWindow):
 
     def _on_stuck_detected(self):
         from PySide6.QtWidgets import QMessageBox
+        _t = self._i18n_manager.t
         task = self._services.get("task")
         msg = QMessageBox(self)
-        msg.setWindowTitle("任务可能卡住")
-        msg.setText("超过 120 秒未收到输出，任务可能已卡住。")
-        msg.setInformativeText("请选择处理方式：")
+        msg.setWindowTitle(_t("dialog.stuck.title"))
+        msg.setText(_t("dialog.stuck.text"))
+        msg.setInformativeText(_t("dialog.stuck.info"))
         msg.setIcon(QMessageBox.Question)
         msg.setStyleSheet(self._dialog_style())
-        btn_wait = msg.addButton("继续等待", QMessageBox.AcceptRole)
-        btn_takeover = msg.addButton("人工接管", QMessageBox.ActionRole)
-        btn_stop = msg.addButton("终止任务", QMessageBox.DestructiveRole)
+        btn_wait = msg.addButton(_t("dialog.stuck.btn.wait"), QMessageBox.AcceptRole)
+        btn_takeover = msg.addButton(_t("dialog.stuck.btn.takeover"), QMessageBox.ActionRole)
+        btn_stop = msg.addButton(_t("dialog.stuck.btn.stop"), QMessageBox.DestructiveRole)
         msg.exec()
         clicked = msg.clickedButton()
         if clicked == btn_stop and task:
             task.stop_task()
         elif clicked == btn_takeover and task:
-            task.request_takeover("用户响应卡住提示")
+            task.request_takeover(_t("dialog.stuck.takeover_reason"))
 
     # ---------- 主题系统 ----------
 
@@ -259,8 +290,30 @@ class MainWindow(QMainWindow):
         self._theme_manager.set_preference(theme)
 
     def _on_config_changed(self):
-        """配置变化时重新应用主题。"""
+        """配置变化时重新应用主题；若语言变化则切换 GUI 语言。"""
         self.apply_theme(self._get_current_theme())
+        cfg = self._services.get("config")
+        if cfg:
+            new_lang = cfg.get("OPEN_AUTOGLM_LANG") or "cn"
+            if new_lang != self._i18n_manager.get_language():
+                self._i18n_manager.set_language(new_lang)
+
+    def _on_language_changed(self, lang: str):
+        """I18nManager.language_changed 回调 - 更新壳层文案。"""
+        self.setWindowTitle(self._i18n_manager.t("shell.window.title"))
+        # 更新导航按钮文字
+        for key, _icon, i18n_key in getattr(self, "_nav_items_meta", []):
+            btn = self._nav_buttons.get(key)
+            if btn and hasattr(btn, "set_label"):
+                btn.set_label(self._i18n_manager.t(i18n_key))
+            elif btn:
+                # 回退：直接更新文本（NavButton 可能没有 set_label）
+                if hasattr(btn, "setText"):
+                    btn.setText(self._i18n_manager.t(i18n_key))
+        if hasattr(self, "_ver_lbl"):
+            self._ver_lbl.setText(
+                self._i18n_manager.t("shell.footer.version", version=self._app_version)
+            )
 
     def _on_tokens_changed(self, tokens: ThemeTokens):
         """

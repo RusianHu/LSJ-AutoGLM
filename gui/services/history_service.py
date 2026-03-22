@@ -109,7 +109,16 @@ class HistoryService(QObject):
     def _normalize_record(self, record: dict) -> dict:
         raw = dict(record or {})
         events = raw.get("events", [])
-        raw["events"] = events if isinstance(events, list) else []
+        # 兼容新旧事件结构：确保每个事件都有 message_key/rendered_message 字段（旧记录补空）
+        normalized_events = []
+        for evt in (events if isinstance(events, list) else []):
+            if isinstance(evt, dict):
+                evt.setdefault("message_key", "")
+                evt.setdefault("message_params", {})
+                evt.setdefault("rendered_message", evt.get("message", ""))
+                evt.setdefault("lang", "cn")
+                normalized_events.append(evt)
+        raw["events"] = normalized_events
         raw["start_time_str"] = raw.get("start_time_str") or self._format_time(raw.get("start_time"))
         raw["end_time_str"] = raw.get("end_time_str") or self._format_time(raw.get("end_time"))
         raw["duration_str"] = raw.get("duration_str") or self._format_duration(
