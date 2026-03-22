@@ -29,6 +29,185 @@ from PySide6.QtWidgets import (
 from gui.services.device_service import DeviceStatus
 
 
+def _btn_style_template(
+    theme_mode: str,
+    theme_vars: dict | None = None,
+    *,
+    bg: str,
+    hover_bg: str,
+    pressed_bg: str,
+    border: str,
+    hover_border: str,
+    pressed_border: str,
+    text: str,
+    compact: bool = False,
+    disabled_bg: str = "",
+    disabled_border: str = "",
+    disabled_text: str = "",
+) -> str:
+    is_light = theme_mode == "light"
+    v = theme_vars or {}
+    radius = 6 if compact else 8
+    min_height = 22 if compact else 32
+    padding = "0 10px" if compact else "0 14px"
+    font_weight = 500 if compact else 600
+    disabled_bg = disabled_bg or ("#eef2f7" if is_light else "#161b22")
+    disabled_border = disabled_border or ("#d5deea" if is_light else "#21262d")
+    disabled_text = disabled_text or v.get("text_muted", "#94a3b8" if is_light else "#484f58")
+    return f"""
+        QPushButton {{
+            background-color:{bg};
+            border:1px solid {border};
+            border-radius:{radius}px;
+            color:{text};
+            padding:{padding};
+            min-height:{min_height}px;
+            font-size:13px;
+            font-weight:{font_weight};
+        }}
+        QPushButton:hover {{
+            background-color:{hover_bg};
+            border-color:{hover_border};
+        }}
+        QPushButton:pressed {{
+            background-color:{pressed_bg};
+            border-color:{pressed_border};
+        }}
+        QPushButton:disabled {{
+            background-color:{disabled_bg};
+            border-color:{disabled_border};
+            color:{disabled_text};
+        }}
+    """
+
+
+def _primary_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    v = theme_vars or {}
+    if theme_mode == "light":
+        return _btn_style_template(
+            theme_mode,
+            v,
+            bg=v.get("accent", "#2563eb"),
+            hover_bg="#1d4ed8",
+            pressed_bg="#1e40af",
+            border=v.get("accent", "#2563eb"),
+            hover_border="#1d4ed8",
+            pressed_border="#1e40af",
+            text="#ffffff",
+            compact=compact,
+            disabled_bg="#dbe7ff",
+            disabled_border="#c7d7fe",
+            disabled_text="#8aa1d1",
+        )
+    return _btn_style_template(
+        theme_mode,
+        v,
+        bg=v.get("accent", "#1f6feb"),
+        hover_bg="#388bfd",
+        pressed_bg="#1b62d1",
+        border=v.get("accent", "#1f6feb"),
+        hover_border="#388bfd",
+        pressed_border="#1b62d1",
+        text="#ffffff",
+        compact=compact,
+    )
+
+
+def _danger_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    v = theme_vars or {}
+    if theme_mode == "light":
+        return _btn_style_template(
+            theme_mode,
+            v,
+            bg=v.get("danger_bg", "#fee2e5"),
+            hover_bg="#fecdd3",
+            pressed_bg="#fda4af",
+            border=v.get("danger_border", "#c9525a"),
+            hover_border=v.get("danger", "#b91c1c"),
+            pressed_border=v.get("danger", "#b91c1c"),
+            text=v.get("danger", "#b91c1c"),
+            compact=compact,
+        )
+    return _btn_style_template(
+        theme_mode,
+        v,
+        bg="#21262d",
+        hover_bg="#3d1a1a",
+        pressed_bg="#4a1d1d",
+        border=v.get("danger_border", "#8f2d2b"),
+        hover_border=v.get("danger", "#f85149"),
+        pressed_border=v.get("danger", "#f85149"),
+        text=v.get("danger", "#f85149"),
+        compact=compact,
+        disabled_border="#21262d",
+    )
+
+
+def _success_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    v = theme_vars or {}
+    if theme_mode == "light":
+        return _btn_style_template(
+            theme_mode,
+            v,
+            bg=v.get("success_bg", "#dcfce7"),
+            hover_bg="#bbf7d0",
+            pressed_bg="#86efac",
+            border=v.get("success_border", "#16a34a"),
+            hover_border=v.get("success", "#166534"),
+            pressed_border=v.get("success", "#166534"),
+            text=v.get("success", "#166534"),
+            compact=compact,
+        )
+    return _btn_style_template(
+        theme_mode,
+        v,
+        bg="#0f2418",
+        hover_bg="#12351f",
+        pressed_bg="#184828",
+        border=v.get("success_border", "#238636"),
+        hover_border=v.get("success", "#3fb950"),
+        pressed_border=v.get("success", "#3fb950"),
+        text=v.get("success", "#3fb950"),
+        compact=compact,
+        disabled_border="#21262d",
+    )
+
+
+def _subtle_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    v = theme_vars or {}
+    if theme_mode == "light":
+        return _btn_style_template(
+            theme_mode,
+            v,
+            bg=v.get("bg_elevated", "#edf2f7"),
+            hover_bg="#e2e8f0",
+            pressed_bg="#d9e2ec",
+            border=v.get("border", "#d5deea"),
+            hover_border=v.get("accent", "#2563eb"),
+            pressed_border=v.get("accent", "#2563eb"),
+            text=v.get("text_primary", "#1f2937"),
+            compact=compact,
+            disabled_bg="#f8fafc",
+            disabled_border="#e2e8f0",
+            disabled_text="#94a3b8",
+        )
+    return _btn_style_template(
+        theme_mode,
+        v,
+        bg=v.get("bg_btn", "#161b22"),
+        hover_bg=v.get("bg_elevated", "#1b2432"),
+        pressed_bg="#0f1724",
+        border=v.get("border", "#30363d"),
+        hover_border=v.get("accent", "#4f8cff"),
+        pressed_border=v.get("accent", "#4f8cff"),
+        text=v.get("text_primary", "#c9d1d9"),
+        compact=compact,
+        disabled_bg="#161b22",
+        disabled_border="#21262d",
+        disabled_text="#484f58",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 二维码扫描配对对话框（PC 生成二维码 → 手机扫描）
 # ---------------------------------------------------------------------------
@@ -95,25 +274,39 @@ class QrCodeScanDialog(QDialog):
         QDialog { background:#0d1117; color:#c9d1d9; }
         QLabel  { color:#c9d1d9; }
         QPushButton {
-            background:#21262d; border:1px solid #30363d;
+            background-color:#21262d; border:1px solid #30363d;
             border-radius:6px; color:#c9d1d9;
             padding:6px 16px; font-size:13px;
         }
-        QPushButton:hover { background:#30363d; }
+        QPushButton:hover { background-color:#30363d; }
         QFrame#card {
             background:#161b22; border:1px solid #30363d; border-radius:8px;
         }
     """
+    _LIGHT_STYLE = """
+        QDialog { background:#f4f7fb; color:#18212f; }
+        QLabel  { color:#18212f; }
+        QPushButton {
+            background-color:#eef2f7; border:1px solid #d5deea;
+            border-radius:6px; color:#18212f;
+            padding:6px 16px; font-size:13px;
+        }
+        QPushButton:hover { background-color:#eef3f9; border-color:#a9b6c7; }
+        QFrame#card {
+            background:#ffffff; border:1px solid #d5deea; border-radius:8px;
+        }
+    """
 
-    def __init__(self, known_device_ids: set, parent=None):
+    def __init__(self, known_device_ids: set, parent=None, theme: str = "dark"):
         super().__init__(parent)
         self._known_ids = known_device_ids
         self._watcher: _PairWatcher | None = None
         self._service_name = self._rand_name()
         self._password = self._rand_password()
+        self._theme_mode = theme
         self.setWindowTitle("二维码配对设备")
         self.setMinimumWidth(420)
-        self.setStyleSheet(self._DARK_STYLE)
+        self.setStyleSheet(self._LIGHT_STYLE if theme == "light" else self._DARK_STYLE)
         self._build_ui()
         self._generate_qr()
         self._start_watcher()
@@ -138,8 +331,12 @@ class QrCodeScanDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
+        title_color = "#18212f" if self._theme_mode == "light" else "#c9d1d9"
+        muted_color = "#526273" if self._theme_mode == "light" else "#8b949e"
+        countdown_color = "#7b8aa0" if self._theme_mode == "light" else "#484f58"
+
         title = QLabel("使用手机扫描下方二维码配对")
-        title.setStyleSheet("font-size:15px; font-weight:bold; color:#c9d1d9;")
+        title.setStyleSheet(f"font-size:15px; font-weight:bold; color:{title_color};")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
 
@@ -155,7 +352,7 @@ class QrCodeScanDialog(QDialog):
             "3. 用手机扫描下方二维码，等待配对完成",
         ]:
             lbl = QLabel(step)
-            lbl.setStyleSheet("color:#8b949e; font-size:12px;")
+            lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
             sf_layout.addWidget(lbl)
         layout.addWidget(steps_frame)
 
@@ -175,20 +372,21 @@ class QrCodeScanDialog(QDialog):
         # 状态标签
         self._status_lbl = QLabel("等待手机扫描...")
         self._status_lbl.setAlignment(Qt.AlignCenter)
-        self._status_lbl.setStyleSheet("color:#8b949e; font-size:12px;")
+        self._status_lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
         self._status_lbl.setWordWrap(True)
         layout.addWidget(self._status_lbl)
 
         # 倒计时标签
         self._countdown_lbl = QLabel("")
         self._countdown_lbl.setAlignment(Qt.AlignCenter)
-        self._countdown_lbl.setStyleSheet("color:#484f58; font-size:11px;")
+        self._countdown_lbl.setStyleSheet(f"color:{countdown_color}; font-size:11px;")
         layout.addWidget(self._countdown_lbl)
 
         # 关闭按钮
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         self._close_btn = QPushButton("关闭")
+        self._close_btn.setStyleSheet(_subtle_btn_style(self._theme_mode))
         self._close_btn.clicked.connect(self._on_close)
         btn_row.addWidget(self._close_btn)
         layout.addLayout(btn_row)
@@ -229,9 +427,11 @@ class QrCodeScanDialog(QDialog):
             )
             self._qr_label.setPixmap(pixmap)
         except Exception as e:
+            error_bg = "#ffffff" if self._theme_mode == "light" else "#161b22"
+            error_color = "#b91c1c" if self._theme_mode == "light" else "#f85149"
             self._qr_label.setText(f"二维码生成失败:\n{e}")
             self._qr_label.setStyleSheet(
-                "background:#161b22; color:#f85149; font-size:11px;"
+                f"background:{error_bg}; color:{error_color}; font-size:11px;"
                 "border-radius:8px; padding:8px;"
             )
 
@@ -332,7 +532,7 @@ class QrPairDialog(QDialog):
             border-color: #1f6feb;
         }
         QPushButton {
-            background: #21262d;
+            background-color: #21262d;
             border: 1px solid #30363d;
             border-radius: 6px;
             color: #c9d1d9;
@@ -340,18 +540,54 @@ class QrPairDialog(QDialog):
             font-size: 13px;
         }
         QPushButton:hover {
-            background: #30363d;
+            background-color: #30363d;
         }
         QFrame#divider {
             background: #21262d;
         }
     """
+    _LIGHT_STYLE = """
+        QDialog {
+            background: #f4f7fb;
+            color: #18212f;
+        }
+        QLabel {
+            color: #18212f;
+        }
+        QLineEdit {
+            background: #ffffff;
+            border: 1px solid #d5deea;
+            border-radius: 6px;
+            color: #18212f;
+            padding: 6px 10px;
+            font-size: 13px;
+        }
+        QLineEdit:focus {
+            border-color: #2563eb;
+        }
+        QPushButton {
+            background-color: #eef2f7;
+            border: 1px solid #d5deea;
+            border-radius: 6px;
+            color: #18212f;
+            padding: 6px 16px;
+            font-size: 13px;
+        }
+        QPushButton:hover {
+            background-color: #eef3f9;
+            border-color: #a9b6c7;
+        }
+        QFrame#divider {
+            background: #d5deea;
+        }
+    """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, theme: str = "dark"):
         super().__init__(parent)
+        self._theme_mode = theme
         self.setWindowTitle("使用二维码配对设备")
         self.setMinimumWidth(460)
-        self.setStyleSheet(self._DARK_STYLE)
+        self.setStyleSheet(self._LIGHT_STYLE if theme == "light" else self._DARK_STYLE)
         self._build_ui()
 
     def _build_ui(self):
@@ -359,27 +595,32 @@ class QrPairDialog(QDialog):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(14)
 
+        title_color = "#18212f" if self._theme_mode == "light" else "#c9d1d9"
+        muted_color = "#526273" if self._theme_mode == "light" else "#8b949e"
+        card_bg = "#ffffff" if self._theme_mode == "light" else "#161b22"
+        card_border = "#d5deea" if self._theme_mode == "light" else "#30363d"
+
         # 标题
         title = QLabel("二维码配对 (Android 11+)")
-        title.setStyleSheet("font-size:16px; font-weight:bold; color:#c9d1d9;")
+        title.setStyleSheet(f"font-size:16px; font-weight:bold; color:{title_color};")
         layout.addWidget(title)
 
         # 操作说明卡片
         steps_frame = QFrame()
-        steps_frame.setStyleSheet("""
-            QFrame {
-                background: #161b22;
-                border: 1px solid #30363d;
+        steps_frame.setStyleSheet(f"""
+            QFrame {{
+                background: {card_bg};
+                border: 1px solid {card_border};
                 border-radius: 8px;
-            }
-            QLabel { color: #8b949e; font-size: 12px; }
+            }}
+            QLabel {{ color: {muted_color}; font-size: 12px; }}
         """)
         steps_layout = QVBoxLayout(steps_frame)
         steps_layout.setContentsMargins(14, 12, 14, 12)
         steps_layout.setSpacing(4)
 
         steps_title = QLabel("手机操作步骤：")
-        steps_title.setStyleSheet("color:#c9d1d9; font-size:13px; font-weight:bold;")
+        steps_title.setStyleSheet(f"color:{title_color}; font-size:13px; font-weight:bold;")
         steps_layout.addWidget(steps_title)
 
         steps_text = [
@@ -393,7 +634,7 @@ class QrPairDialog(QDialog):
         ]
         for step in steps_text:
             lbl = QLabel(step)
-            lbl.setStyleSheet("color:#8b949e; font-size:12px;")
+            lbl.setStyleSheet(f"color:{muted_color}; font-size:12px;")
             lbl.setWordWrap(True)
             steps_layout.addWidget(lbl)
 
@@ -439,7 +680,7 @@ class QrPairDialog(QDialog):
         # 状态标签
         self._status_lbl = QLabel("")
         self._status_lbl.setWordWrap(True)
-        self._status_lbl.setStyleSheet("font-size:12px; color:#8b949e;")
+        self._status_lbl.setStyleSheet(f"font-size:12px; color:{muted_color};")
         layout.addWidget(self._status_lbl)
 
         # 按钮行
@@ -447,22 +688,12 @@ class QrPairDialog(QDialog):
         btn_row.addStretch()
 
         self._cancel_btn = QPushButton("取消")
+        self._cancel_btn.setStyleSheet(_subtle_btn_style(self._theme_mode))
         self._cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(self._cancel_btn)
 
         self._pair_btn = QPushButton("开始配对")
-        self._pair_btn.setStyleSheet("""
-            QPushButton {
-                background: #1f6feb;
-                border: none;
-                border-radius: 6px;
-                color: #fff;
-                padding: 6px 20px;
-                font-size: 13px;
-            }
-            QPushButton:hover { background: #388bfd; }
-            QPushButton:disabled { background: #21262d; color: #484f58; }
-        """)
+        self._pair_btn.setStyleSheet(_primary_btn_style(self._theme_mode))
         self._pair_btn.setDefault(True)
         self._pair_btn.clicked.connect(self._on_pair)
         btn_row.addWidget(self._pair_btn)
@@ -505,7 +736,11 @@ class DevicePage(QWidget):
         super().__init__(parent)
         self._services = services
         self._device = services.get("device")
+        self._theme_mode = "dark"
+        self._theme_vars = {}
         self._build_ui()
+        self._apply_action_button_styles()
+        self._update_action_button_states()
         self._connect_signals()
 
     def _build_ui(self):
@@ -515,7 +750,7 @@ class DevicePage(QWidget):
 
         # 标题
         title = QLabel("设备管理")
-        title.setStyleSheet("font-size:18px; font-weight:bold; color:#c9d1d9;")
+        title.setProperty("role", "pageTitle")
         root.addWidget(title)
 
         # ADB 状态区
@@ -524,13 +759,15 @@ class DevicePage(QWidget):
         adb_layout.setSpacing(8)
 
         self._adb_status_lbl = QLabel("ADB 状态: 检查中...")
-        self._adb_status_lbl.setStyleSheet("color:#8b949e; font-size:13px;")
+        self._adb_status_lbl.setProperty("role", "muted")
+        self._adb_status_lbl.setStyleSheet("font-size:13px;")
         adb_layout.addWidget(self._adb_status_lbl)
 
-        btn_check_adb = QPushButton("重新检查 ADB")
-        btn_check_adb.setFixedWidth(150)
-        btn_check_adb.clicked.connect(self._on_check_adb)
-        adb_layout.addWidget(btn_check_adb)
+        self._btn_check_adb = QPushButton("重新检查 ADB")
+        self._btn_check_adb.setFixedWidth(150)
+        self._btn_check_adb.setProperty("variant", "subtle")
+        self._btn_check_adb.clicked.connect(self._on_check_adb)
+        adb_layout.addWidget(self._btn_check_adb)
         root.addWidget(adb_group)
 
         # 设备列表区
@@ -539,16 +776,7 @@ class DevicePage(QWidget):
         devices_layout.setSpacing(8)
 
         self._device_list = QListWidget()
-        self._device_list.setStyleSheet("""
-            QListWidget {
-                background:#0a0e17; border:1px solid #21262d;
-                border-radius:6px; color:#c9d1d9; font-size:13px;
-                padding:4px;
-            }
-            QListWidget::item { padding:8px 12px; border-radius:4px; }
-            QListWidget::item:selected { background:#264f78; }
-            QListWidget::item:hover { background:#21262d; }
-        """)
+        self._device_list.setProperty("surface", "console")
         self._device_list.setFixedHeight(180)
         self._device_list.currentRowChanged.connect(self._on_device_selected)
         devices_layout.addWidget(self._device_list)
@@ -556,16 +784,19 @@ class DevicePage(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
         self._btn_select = QPushButton("选为当前设备")
+        self._btn_select.setProperty("variant", "primary")
         self._btn_select.clicked.connect(self._on_set_active)
         btn_row.addWidget(self._btn_select)
 
         self._btn_disconnect = QPushButton("断开连接")
+        self._btn_disconnect.setProperty("variant", "danger")
         self._btn_disconnect.clicked.connect(self._on_disconnect)
         btn_row.addWidget(self._btn_disconnect)
 
-        btn_refresh = QPushButton("刷新")
-        btn_refresh.clicked.connect(self._on_refresh)
-        btn_row.addWidget(btn_refresh)
+        self._btn_refresh = QPushButton("刷新")
+        self._btn_refresh.setProperty("variant", "subtle")
+        self._btn_refresh.clicked.connect(self._on_refresh)
+        btn_row.addWidget(self._btn_refresh)
         btn_row.addStretch()
         devices_layout.addLayout(btn_row)
         root.addWidget(devices_group)
@@ -582,18 +813,13 @@ class DevicePage(QWidget):
         self._wifi_input = QLineEdit()
         self._wifi_input.setPlaceholderText("192.168.x.x:5555")
         self._wifi_input.setFixedWidth(200)
+        self._wifi_input.textChanged.connect(self._update_action_button_states)
         wifi_row.addWidget(self._wifi_input)
 
-        btn_wifi_connect = QPushButton("连接")
-        btn_wifi_connect.setStyleSheet("""
-            QPushButton {
-                background:#1f6feb; border:none; border-radius:6px;
-                color:#fff; padding:6px 18px;
-            }
-            QPushButton:hover { background:#388bfd; }
-        """)
-        btn_wifi_connect.clicked.connect(self._on_wifi_connect)
-        wifi_row.addWidget(btn_wifi_connect)
+        self._btn_wifi_connect = QPushButton("连接")
+        self._btn_wifi_connect.setProperty("variant", "primary")
+        self._btn_wifi_connect.clicked.connect(self._on_wifi_connect)
+        wifi_row.addWidget(self._btn_wifi_connect)
         wifi_row.addStretch()
         wifi_outer.addLayout(wifi_row)
 
@@ -601,39 +827,27 @@ class DevicePage(QWidget):
         qr_row = QHBoxLayout()
         qr_row.setSpacing(8)
         qr_hint = QLabel("Android 11+ 无线配对:")
-        qr_hint.setStyleSheet("color:#8b949e; font-size:12px;")
+        qr_hint.setProperty("role", "muted")
+        qr_hint.setStyleSheet("font-size:12px;")
         qr_row.addWidget(qr_hint)
 
         # 生成二维码供手机扫描（真正的二维码配对）
-        btn_qr_scan = QPushButton("生成配对二维码")
-        btn_qr_scan.setToolTip(
+        self._btn_qr_scan = QPushButton("生成配对二维码")
+        self._btn_qr_scan.setToolTip(
             "PC 生成二维码，手机「无线调试」→「使用二维码配对」扫描（需 Android 11+）"
         )
-        btn_qr_scan.setStyleSheet("""
-            QPushButton {
-                background:#1a7f37; border:none; border-radius:6px;
-                color:#fff; padding:6px 18px; font-size:13px;
-            }
-            QPushButton:hover { background:#2ea043; }
-        """)
-        btn_qr_scan.clicked.connect(self._on_qr_scan_pair)
-        qr_row.addWidget(btn_qr_scan)
+        self._btn_qr_scan.setProperty("variant", "success")
+        self._btn_qr_scan.clicked.connect(self._on_qr_scan_pair)
+        qr_row.addWidget(self._btn_qr_scan)
 
         # 手动输入配对码（备用方式）
-        btn_qr_pair = QPushButton("配对码配对")
-        btn_qr_pair.setToolTip(
+        self._btn_qr_pair = QPushButton("配对码配对")
+        self._btn_qr_pair.setToolTip(
             "手动输入手机显示的配对地址和配对码（备用方式）"
         )
-        btn_qr_pair.setStyleSheet("""
-            QPushButton {
-                background:#21262d; border:1px solid #30363d;
-                border-radius:6px; color:#c9d1d9;
-                padding:6px 14px; font-size:13px;
-            }
-            QPushButton:hover { background:#30363d; }
-        """)
-        btn_qr_pair.clicked.connect(self._on_qr_pair)
-        qr_row.addWidget(btn_qr_pair)
+        self._btn_qr_pair.setProperty("variant", "subtle")
+        self._btn_qr_pair.clicked.connect(self._on_qr_pair)
+        qr_row.addWidget(self._btn_qr_pair)
 
         qr_row.addStretch()
         wifi_outer.addLayout(qr_row)
@@ -646,13 +860,7 @@ class DevicePage(QWidget):
         self._detail_log = QPlainTextEdit()
         self._detail_log.setReadOnly(True)
         self._detail_log.setFixedHeight(120)
-        self._detail_log.setStyleSheet("""
-            QPlainTextEdit {
-                background:#0a0e17; border:none; border-radius:4px;
-                color:#8b949e; font-size:12px; padding:6px;
-                font-family: 'Consolas', monospace;
-            }
-        """)
+        self._detail_log.setProperty("surface", "console")
         detail_layout.addWidget(self._detail_log)
         root.addWidget(detail_group)
 
@@ -660,11 +868,12 @@ class DevicePage(QWidget):
         kbd_group = QGroupBox("ADB Keyboard")
         kbd_layout = QHBoxLayout(kbd_group)
         self._kbd_status_lbl = QLabel("—")
-        self._kbd_status_lbl.setStyleSheet("color:#8b949e;")
+        self._kbd_status_lbl.setProperty("role", "muted")
         kbd_layout.addWidget(self._kbd_status_lbl)
-        btn_check_kbd = QPushButton("检查当前设备")
-        btn_check_kbd.clicked.connect(self._on_check_kbd)
-        kbd_layout.addWidget(btn_check_kbd)
+        self._btn_check_kbd = QPushButton("检查当前设备")
+        self._btn_check_kbd.setProperty("variant", "subtle")
+        self._btn_check_kbd.clicked.connect(self._on_check_kbd)
+        kbd_layout.addWidget(self._btn_check_kbd)
         kbd_layout.addStretch()
         root.addWidget(kbd_group)
 
@@ -672,23 +881,92 @@ class DevicePage(QWidget):
         scrcpy_group = QGroupBox("scrcpy 依赖")
         scrcpy_layout = QHBoxLayout(scrcpy_group)
         self._scrcpy_status_lbl = QLabel("—")
-        self._scrcpy_status_lbl.setStyleSheet("color:#8b949e;")
+        self._scrcpy_status_lbl.setProperty("role", "muted")
         scrcpy_layout.addWidget(self._scrcpy_status_lbl)
-        btn_check_scrcpy = QPushButton("检查")
-        btn_check_scrcpy.clicked.connect(self._on_check_scrcpy)
-        scrcpy_layout.addWidget(btn_check_scrcpy)
+        self._btn_check_scrcpy = QPushButton("检查")
+        self._btn_check_scrcpy.setProperty("variant", "subtle")
+        self._btn_check_scrcpy.clicked.connect(self._on_check_scrcpy)
+        scrcpy_layout.addWidget(self._btn_check_scrcpy)
         scrcpy_layout.addStretch()
         root.addWidget(scrcpy_group)
 
         root.addStretch(1)
 
+    def _device_list_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QListWidget {"
+            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; padding:4px;"
+            "}"
+            "QListWidget::item { padding:8px 12px; border-radius:6px; }"
+            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
+            f"QListWidget::item:hover {{ background:{v.get('accent_soft', 'rgba(79, 140, 255, 0.16)')}; }}"
+        )
+
+    def _detail_log_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QPlainTextEdit {"
+            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+            f"border-radius:8px; color:{v.get('text_secondary', '#8b949e')}; font-size:12px; padding:6px;"
+            "font-family:'Consolas',monospace;"
+            "}"
+        )
+
+    def _apply_action_button_styles(self):
+        btn_styles = (
+            (getattr(self, "_btn_check_adb", None), _subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_select", None), _primary_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_disconnect", None), _danger_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_refresh", None), _subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_wifi_connect", None), _primary_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_qr_scan", None), _success_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_qr_pair", None), _subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_check_kbd", None), _subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_check_scrcpy", None), _subtle_btn_style(self._theme_mode, self._theme_vars)),
+        )
+        for btn, style in btn_styles:
+            if btn:
+                btn.setStyleSheet(style)
+                btn.update()
+
+    def _update_action_button_states(self):
+        selected_item = self._device_list.currentItem() if hasattr(self, "_device_list") else None
+        selected_device_id = selected_item.data(Qt.UserRole) if selected_item else ""
+        active_device_id = ""
+        if self._device and self._device.selected_device:
+            active_device_id = self._device.selected_device.device_id or ""
+
+        if hasattr(self, "_btn_select"):
+            self._btn_select.setEnabled(bool(selected_device_id) and selected_device_id != active_device_id)
+        if hasattr(self, "_btn_disconnect"):
+            self._btn_disconnect.setEnabled(bool(selected_device_id))
+        if hasattr(self, "_btn_wifi_connect"):
+            self._btn_wifi_connect.setEnabled(bool(self._wifi_input.text().strip()))
+        if hasattr(self, "_btn_check_kbd"):
+            self._btn_check_kbd.setEnabled(bool(active_device_id))
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        self._theme_mode = theme
+        self._theme_vars = theme_vars or {}
+
+        self._apply_action_button_styles()
+
+        if hasattr(self, '_device_list'):
+            self._device_list.setStyleSheet(self._device_list_style())
+        if hasattr(self, '_detail_log'):
+            self._detail_log.setStyleSheet(self._detail_log_style())
+
     def _connect_signals(self):
         if self._device:
             self._device.devices_changed.connect(self._refresh_device_list)
+            self._device.device_selected.connect(lambda *_: self._update_action_button_states())
             self._device.adb_status_changed.connect(self._on_adb_status)
             self._device.error_occurred.connect(self._on_device_error)
             # 初始刷新
             self._refresh_device_list(self._device.devices)
+            self._update_action_button_states()
 
     # ---------- 回调 ----------
 
@@ -711,6 +989,7 @@ class DevicePage(QWidget):
         self._device_list.clear()
         if not devices:
             self._device_list.addItem("  （未找到设备）")
+            self._update_action_button_states()
             return
         for d in devices:
             color = "#3fb950" if d.status == DeviceStatus.CONNECTED else "#e3b341"
@@ -720,9 +999,10 @@ class DevicePage(QWidget):
             item.setForeground(QColor(color))
             item.setData(Qt.UserRole, d.device_id)
             self._device_list.addItem(item)
+        self._update_action_button_states()
 
     def _on_device_selected(self, row):
-        pass  # 仅 UI 高亮，点击"选为当前设备"才生效
+        self._update_action_button_states()
 
     def _on_set_active(self):
         item = self._device_list.currentItem()
@@ -732,6 +1012,7 @@ class DevicePage(QWidget):
         if device_id and self._device:
             self._device.select_device(device_id)
             self._log(f"已选择设备: {device_id}")
+            self._update_action_button_states()
 
     def _on_disconnect(self):
         item = self._device_list.currentItem()
@@ -785,7 +1066,7 @@ class DevicePage(QWidget):
             known_ids = {d.device_id for d in self._device.devices}
 
         self._log("正在生成配对二维码，请用手机扫描...")
-        dlg = QrCodeScanDialog(known_ids, parent=self)
+        dlg = QrCodeScanDialog(known_ids, parent=self, theme=self._theme_mode)
         dlg.exec()
 
         paired_id = dlg.paired_device_id
@@ -803,7 +1084,7 @@ class DevicePage(QWidget):
 
     def _on_qr_pair(self):
         """打开配对码手动输入对话框，执行 adb pair（备用方式）"""
-        dlg = QrPairDialog(self)
+        dlg = QrPairDialog(self, theme=self._theme_mode)
         if dlg.exec() != QrPairDialog.DialogCode.Accepted:
             return
         addr = dlg.pair_address

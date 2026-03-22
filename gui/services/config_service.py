@@ -55,6 +55,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
         "OPEN_AUTOGLM_ZHIPU_API_KEY": "",
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": "",
+        "OPEN_AUTOGLM_THEME": "system",
     }
 
     # 敏感字段（显示时遮罩）
@@ -86,6 +87,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_THEME": {"label": "界面主题", "sensitive": False, "editable": False},
     }
 
     # 兼容第一轮 GUI 中已写入/读取过的旧键名

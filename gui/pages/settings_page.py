@@ -3,6 +3,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.utils.button_styles import primary_btn_style, subtle_btn_style
+
 
 class SettingsPage(QWidget):
     """设置页"""
@@ -25,7 +28,12 @@ class SettingsPage(QWidget):
         self._services = services
         self._config = services.get("config")
         self._field_widgets: dict = {}   # key -> QLineEdit
+        self._theme_mode = "dark"
+        self._theme_vars = {}
+        self._last_banner_state = None
+        self._visibility_toggle_buttons: list[QPushButton] = []
         self._build_ui()
+        self._apply_action_button_styles()
         self._load_values()
 
     def _build_ui(self):
@@ -34,21 +42,17 @@ class SettingsPage(QWidget):
         root.setSpacing(16)
 
         title = QLabel("设置")
-        title.setStyleSheet("font-size:18px; font-weight:bold; color:#c9d1d9;")
+        title.setProperty("role", "pageTitle")
         root.addWidget(title)
 
         # .env 文件路径提示
         self._env_path_lbl = QLabel()
-        self._env_path_lbl.setStyleSheet("color:#484f58; font-size:12px;")
+        self._env_path_lbl.setProperty("role", "subtle")
         root.addWidget(self._env_path_lbl)
 
         # 校验提示区
         self._validate_banner = QLabel("")
         self._validate_banner.setWordWrap(True)
-        self._validate_banner.setStyleSheet(
-            "background:#161b22; border:1px solid #21262d; border-radius:4px; "
-            "padding:8px; color:#e3b341; font-size:12px;"
-        )
         self._validate_banner.hide()
         root.addWidget(self._validate_banner)
 
@@ -111,28 +115,44 @@ class SettingsPage(QWidget):
         ]
         self._add_fields(run_form, run_fields)
         scroll_layout.addWidget(run_group)
+
+        # ---- 外观 ----
+        appearance_group = QGroupBox("外观")
+        appearance_form = QFormLayout(appearance_group)
+        appearance_form.setLabelAlignment(Qt.AlignRight)
+        appearance_form.setSpacing(10)
+
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItem("跟随系统", "system")
+        self._theme_combo.addItem("深色", "dark")
+        self._theme_combo.addItem("浅色", "light")
+        self._theme_combo.setMinimumWidth(160)
+        appearance_form.addRow(QLabel("界面主题"), self._theme_combo)
+
+        self._theme_hint_lbl = QLabel("")
+        self._theme_hint_lbl.setWordWrap(True)
+        self._theme_hint_lbl.setProperty("role", "subtle")
+        appearance_form.addRow(QLabel("当前效果"), self._theme_hint_lbl)
+        scroll_layout.addWidget(appearance_group)
+
         scroll_layout.addStretch(1)
 
         # 底部操作按钮
         btn_row = QHBoxLayout()
-        btn_save = QPushButton("保存修改")
-        btn_save.setStyleSheet("""
-            QPushButton {
-                background:#1f6feb; border:none; border-radius:6px;
-                color:#fff; padding:8px 24px; font-size:13px;
-            }
-            QPushButton:hover { background:#388bfd; }
-        """)
-        btn_save.clicked.connect(self._on_save)
-        btn_row.addWidget(btn_save)
+        self._btn_save = QPushButton("保存修改")
+        self._btn_save.setProperty("variant", "primary")
+        self._btn_save.clicked.connect(self._on_save)
+        btn_row.addWidget(self._btn_save)
 
-        btn_validate = QPushButton("校验配置")
-        btn_validate.clicked.connect(self._on_validate)
-        btn_row.addWidget(btn_validate)
+        self._btn_validate = QPushButton("校验配置")
+        self._btn_validate.setProperty("variant", "subtle")
+        self._btn_validate.clicked.connect(self._on_validate)
+        btn_row.addWidget(self._btn_validate)
 
-        btn_reload = QPushButton("重新加载 .env")
-        btn_reload.clicked.connect(self._on_reload)
-        btn_row.addWidget(btn_reload)
+        self._btn_reload = QPushButton("重新加载 .env")
+        self._btn_reload.setProperty("variant", "subtle")
+        self._btn_reload.clicked.connect(self._on_reload)
+        btn_row.addWidget(self._btn_reload)
 
         btn_row.addStretch(1)
         root.addLayout(btn_row)
@@ -154,10 +174,9 @@ class SettingsPage(QWidget):
                 edit.setEchoMode(QLineEdit.Password)
             if not editable:
                 edit.setReadOnly(True)
-                edit.setStyleSheet("background:#0a0e17; color:#484f58;")
 
             lbl = QLabel(f"{label_text}:")
-            lbl.setStyleSheet("color:#8b949e; font-size:12px;")
+            lbl.setProperty("role", "statusMeta")
 
             # 对敏感字段添加显示/隐藏按钮
             if sensitive:
@@ -168,12 +187,9 @@ class SettingsPage(QWidget):
                 row_layout.addWidget(edit, 1)
                 toggle_btn = QPushButton("显示")
                 toggle_btn.setFixedWidth(48)
-                toggle_btn.setStyleSheet(
-                    "QPushButton { background:#21262d; border:1px solid #30363d; "
-                    "border-radius:4px; color:#8b949e; padding:0 6px; font-size:11px; } "
-                    "QPushButton:hover { color:#c9d1d9; }"
-                )
+                toggle_btn.setProperty("variant", "subtle")
                 toggle_btn.clicked.connect(lambda _, e=edit, b=toggle_btn: self._toggle_visibility(e, b))
+                self._visibility_toggle_buttons.append(toggle_btn)
                 row_layout.addWidget(toggle_btn)
                 form.addRow(lbl, row_widget)
             else:
@@ -197,6 +213,7 @@ class SettingsPage(QWidget):
             # 敏感字段显示真实值（密码模式隐藏）
             value = self._config.get(key)
             edit.setText(value)
+        self._update_theme_hint()
 
     def _on_save(self):
         """收集界面值，批量写入（只写一次文件），失败时全量回滚"""
@@ -247,15 +264,85 @@ class SettingsPage(QWidget):
 
     def _show_banner(self, msg: str, ok: bool = True):
         """显示校验/操作结果横幅"""
-        color   = "#3fb950" if ok else "#f0883e"
-        bg      = "#0f2d1a" if ok else "#2d1a0f"
-        border  = "#3fb95040" if ok else "#f0883e40"
+        v = self._theme_vars or {}
+        color = v.get("success", "#3fb950") if ok else v.get("warning", "#f0883e")
+        bg = v.get("success_bg", "#0f2d1a") if ok else v.get("warning_bg", "#2d1a0f")
+        border = v.get("success_border", "#3fb95040") if ok else v.get("warning_border", "#f0883e40")
+        self._last_banner_state = (msg, ok)
         self._validate_banner.setText(msg)
         self._validate_banner.setStyleSheet(
-            f"background:{bg}; border:1px solid {border}; border-radius:4px; "
+            f"background:{bg}; border:1px solid {border}; border-radius:8px; "
             f"padding:8px; color:{color}; font-size:12px;"
         )
         self._validate_banner.show()
 
+    def _update_theme_hint(self):
+        if not hasattr(self, "_theme_combo") or not hasattr(self, "_theme_hint_lbl"):
+            return
+        current = self._theme_combo.currentData()
+        if current == "system":
+            actual = "深色" if self._theme_mode == "dark" else "浅色"
+            self._theme_hint_lbl.setText(f"当前为跟随系统，实际生效外观：{actual}")
+        elif current == "dark":
+            self._theme_hint_lbl.setText("已固定为深色主题")
+        elif current == "light":
+            self._theme_hint_lbl.setText("已固定为浅色主题")
+        else:
+            self._theme_hint_lbl.setText("")
+
+    def _apply_action_button_styles(self):
+        for btn, style in (
+            (getattr(self, "_btn_save", None), primary_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_validate", None), subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_reload", None), subtle_btn_style(self._theme_mode, self._theme_vars)),
+        ):
+            if btn:
+                btn.setStyleSheet(style)
+                btn.update()
+
+        for btn in self._visibility_toggle_buttons:
+            btn.setStyleSheet(subtle_btn_style(self._theme_mode, self._theme_vars, compact=True))
+            btn.update()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        self._theme_mode = theme
+        self._theme_vars = theme_vars or {}
+
+        self._apply_action_button_styles()
+
+        if self._last_banner_state and self._validate_banner.isVisible():
+            self._show_banner(*self._last_banner_state)
+        self._update_theme_hint()
+
+    def _load_theme_combo(self):
+        """将配置中的主题值同步到 ComboBox 显示"""
+        if not self._config:
+            return
+        current = self._config.get("OPEN_AUTOGLM_THEME") or "system"
+        for i in range(self._theme_combo.count()):
+            if self._theme_combo.itemData(i) == current:
+                # 临时断开信号，避免触发写入
+                self._theme_combo.blockSignals(True)
+                self._theme_combo.setCurrentIndex(i)
+                self._theme_combo.blockSignals(False)
+                break
+        self._update_theme_hint()
+        # 连接信号（只连一次）
+        try:
+            self._theme_combo.currentIndexChanged.disconnect(self._on_theme_changed)
+        except RuntimeError:
+            pass
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, index: int):
+        """主题下拉变化时立即写入配置并触发主题切换"""
+        if not self._config:
+            return
+        value = self._theme_combo.itemData(index)
+        self._update_theme_hint()
+        if value:
+            self._config.set("OPEN_AUTOGLM_THEME", value)
+
     def on_page_activated(self):
         self._load_values()
+        self._load_theme_combo()

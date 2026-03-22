@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.utils.button_styles import primary_btn_style
+
 
 class _DiagWorker(QThread):
     """在后台线程中运行所有诊断检查"""
@@ -172,7 +174,11 @@ class DiagnosticsPage(QWidget):
         self._services = services
         self._config = services.get("config")
         self._worker: _DiagWorker = None
+        self._theme_mode = "dark"
+        self._theme_vars = {}
+        self._last_summary_state = ("点击「一键检查」开始诊断", "idle")
         self._build_ui()
+        self._apply_action_button_styles()
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -182,51 +188,79 @@ class DiagnosticsPage(QWidget):
         # 标题行
         header = QHBoxLayout()
         title = QLabel("系统诊断")
-        title.setStyleSheet("font-size:18px; font-weight:bold; color:#c9d1d9;")
+        title.setProperty("role", "pageTitle")
         header.addWidget(title)
         header.addStretch(1)
 
         self._btn_run = QPushButton("一键检查")
-        self._btn_run.setStyleSheet("""
-            QPushButton {
-                background:#1f6feb; border:none; border-radius:6px;
-                color:#fff; padding:8px 24px; font-size:13px;
-            }
-            QPushButton:hover { background:#388bfd; }
-            QPushButton:disabled { background:#1f2535; color:#484f58; }
-        """)
+        self._btn_run.setProperty("variant", "primary")
         self._btn_run.clicked.connect(self._on_run)
         header.addWidget(self._btn_run)
         root.addLayout(header)
 
         # 说明
         hint = QLabel("检查项包括：Python 版本、PySide6、ADB、设备连接、ADB Keyboard、scrcpy、openai 包、API 连通性等。")
-        hint.setStyleSheet("color:#484f58; font-size:12px;")
+        hint.setProperty("role", "subtle")
+        hint.setStyleSheet("font-size:12px;")
         hint.setWordWrap(True)
         root.addWidget(hint)
 
         # 结果列表
         self._result_list = QListWidget()
-        self._result_list.setStyleSheet("""
-            QListWidget {
-                background:#0a0e17; border:1px solid #21262d;
-                border-radius:6px; color:#c9d1d9; font-size:13px; padding:4px;
-            }
-            QListWidget::item {
-                padding:8px 12px; border-radius:4px;
-                border-bottom:1px solid #161b22;
-            }
-            QListWidget::item:selected { background:#264f78; }
-        """)
+        self._result_list.setProperty("surface", "console")
         root.addWidget(self._result_list, 1)
 
         # 摘要
         self._summary_lbl = QLabel("点击「一键检查」开始诊断")
-        self._summary_lbl.setStyleSheet(
-            "background:#161b22; border:1px solid #21262d; border-radius:4px; "
-            "padding:10px 16px; color:#8b949e; font-size:13px;"
-        )
+        self._summary_lbl.setWordWrap(True)
         root.addWidget(self._summary_lbl)
+
+    def _result_list_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QListWidget {"
+            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; padding:4px;"
+            "}"
+            "QListWidget::item {"
+            f"padding:8px 12px; border-radius:4px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
+            "}"
+            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
+        )
+
+    def _summary_style(self, state: str) -> str:
+        v = self._theme_vars or {}
+        if state == "success":
+            color = v.get("success", "#3fb950")
+            bg = v.get("success_bg", "#0f2d1a")
+            border = v.get("success_border", "#3fb95040")
+        elif state == "warning":
+            color = v.get("warning", "#e3b341")
+            bg = v.get("warning_bg", "#2d2200")
+            border = v.get("warning_border", "#e3b34140")
+        else:
+            color = v.get("text_secondary", "#8b949e")
+            bg = v.get("bg_secondary", "#161b22")
+            border = v.get("border", "#30363d")
+        return (
+            f"background:{bg}; border:1px solid {border}; border-radius:8px; "
+            f"padding:10px 16px; color:{color}; font-size:13px;"
+            f"font-weight:{'700' if state in ('success', 'warning') else '400'};"
+        )
+
+    def _apply_action_button_styles(self):
+        if hasattr(self, "_btn_run"):
+            self._btn_run.setStyleSheet(primary_btn_style(self._theme_mode, self._theme_vars))
+            self._btn_run.update()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        self._theme_mode = theme
+        self._theme_vars = theme_vars or {}
+        self._apply_action_button_styles()
+        if hasattr(self, "_result_list"):
+            self._result_list.setStyleSheet(self._result_list_style())
+        if hasattr(self, "_summary_lbl"):
+            self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
 
     def _on_run(self):
         if self._worker and self._worker.isRunning():
@@ -235,11 +269,9 @@ class DiagnosticsPage(QWidget):
             self._worker.deleteLater()
             self._worker = None
         self._result_list.clear()
-        self._summary_lbl.setText("诊断运行中...")
-        self._summary_lbl.setStyleSheet(
-            "background:#161b22; border:1px solid #30363d; border-radius:4px; "
-            "padding:10px 16px; color:#e3b341; font-size:13px;"
-        )
+        self._last_summary_state = ("诊断运行中...", "warning")
+        self._summary_lbl.setText(self._last_summary_state[0])
+        self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
         self._btn_run.setEnabled(False)
 
         self._worker = _DiagWorker(self._config)
@@ -278,11 +310,9 @@ class DiagnosticsPage(QWidget):
             color = "#e3b341" if failed <= 2 else "#f85149"
             bg = "#2d2200"
             border = "#e3b34140"
+        self._last_summary_state = (msg, "success" if failed == 0 else "warning")
         self._summary_lbl.setText(msg)
-        self._summary_lbl.setStyleSheet(
-            f"background:{bg}; border:1px solid {border}; border-radius:4px; "
-            f"padding:10px 16px; color:{color}; font-size:13px; font-weight:bold;"
-        )
+        self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
 
     def _on_worker_finished(self):
         if self._worker:

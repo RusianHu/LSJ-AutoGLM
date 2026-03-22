@@ -2,7 +2,7 @@
 """左侧导航按钮控件"""
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QPushButton
+from PySide6.QtWidgets import QPushButton, QSizePolicy
 
 
 class NavButton(QPushButton):
@@ -12,31 +12,46 @@ class NavButton(QPushButton):
         super().__init__(parent)
         self._icon_text = icon_text
         self._label = label
+        self.setObjectName("NavButton")
         self.setText(f"{icon_text}\n{label}")
         self.setCheckable(True)
         self.setFixedHeight(64)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self._apply_style()
 
-    def _apply_style(self):
-        self.setStyleSheet("""
-            NavButton {
+    def apply_theme(self, theme_vars: dict, theme_mode: str = "dark"):
+        self.setProperty("themeMode", theme_mode)
+        self.setStyleSheet(f"""
+            NavButton {{
                 background: transparent;
                 border: none;
-                border-radius: 8px;
-                color: #b0b8c8;
+                border-radius: 12px;
+                color: {theme_vars['nav_text']};
                 font-size: 11px;
-                font-weight: 500;
-                padding: 4px 8px;
+                font-weight: 600;
+                padding: 6px 10px;
                 text-align: center;
-            }
-            NavButton:hover {
-                background: rgba(255,255,255,0.07);
-                color: #e0e6f0;
-            }
-            NavButton:checked {
-                background: rgba(82, 155, 245, 0.18);
-                color: #529bf5;
-                border-left: 3px solid #529bf5;
-            }
+            }}
+            NavButton:hover {{
+                background: {theme_vars['nav_hover_bg']};
+                color: {theme_vars['nav_text_hover']};
+            }}
+            NavButton:checked {{
+                background: {theme_vars['accent_soft']};
+                color: {theme_vars['accent']};
+                border-left: 3px solid {theme_vars['accent']};
+            }}
         """)
+
+    def _apply_style(self):
+        self.apply_theme(
+            {
+                "nav_text": "#a9b5c7",
+                "nav_text_hover": "#e2e8f0",
+                "nav_hover_bg": "rgba(255,255,255,0.06)",
+                "accent_soft": "rgba(79, 140, 255, 0.16)",
+                "accent": "#4f8cff",
+            },
+            "dark",
+        )

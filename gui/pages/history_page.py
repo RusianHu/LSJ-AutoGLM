@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.utils.button_styles import danger_btn_style, subtle_btn_style
+
 
 STATE_COLOR = {
     "completed": "#3fb950",
@@ -47,7 +49,10 @@ class HistoryPage(QWidget):
         self._services = services
         self._history = services.get("history")
         self._current_record: dict = {}
+        self._theme_mode = "dark"
+        self._theme_vars = {}
         self._build_ui()
+        self._apply_action_button_styles()
         self._connect_signals()
         self._load_history()
 
@@ -59,7 +64,7 @@ class HistoryPage(QWidget):
         # 标题行
         header = QHBoxLayout()
         title = QLabel("任务历史")
-        title.setStyleSheet("font-size:18px; font-weight:bold; color:#c9d1d9;")
+        title.setProperty("role", "pageTitle")
         header.addWidget(title)
         header.addStretch(1)
 
@@ -71,20 +76,17 @@ class HistoryPage(QWidget):
         self._filter_combo.currentIndexChanged.connect(self._load_history)
         header.addWidget(self._filter_combo)
 
-        btn_refresh = QPushButton("刷新")
-        btn_refresh.setFixedWidth(64)
-        btn_refresh.clicked.connect(self._load_history)
-        header.addWidget(btn_refresh)
+        self._btn_refresh = QPushButton("刷新")
+        self._btn_refresh.setFixedWidth(64)
+        self._btn_refresh.setProperty("variant", "subtle")
+        self._btn_refresh.clicked.connect(self._load_history)
+        header.addWidget(self._btn_refresh)
 
-        btn_clear = QPushButton("清空全部")
-        btn_clear.setFixedWidth(80)
-        btn_clear.setStyleSheet("""
-            QPushButton { color:#f85149; border:1px solid #f8514940;
-                background:#21262d; border-radius:6px; padding:4px 10px; }
-            QPushButton:hover { background:#3d1a1a; }
-        """)
-        btn_clear.clicked.connect(self._on_clear_all)
-        header.addWidget(btn_clear)
+        self._btn_clear = QPushButton("清空全部")
+        self._btn_clear.setFixedWidth(80)
+        self._btn_clear.setProperty("variant", "danger")
+        self._btn_clear.clicked.connect(self._on_clear_all)
+        header.addWidget(self._btn_clear)
         root.addLayout(header)
 
         # 主体 Splitter
@@ -97,15 +99,7 @@ class HistoryPage(QWidget):
         left_layout.setSpacing(4)
 
         self._task_list = QListWidget()
-        self._task_list.setStyleSheet("""
-            QListWidget {
-                background:#0a0e17; border:1px solid #21262d;
-                border-radius:6px; color:#c9d1d9; font-size:12px; padding:4px;
-            }
-            QListWidget::item { padding:8px 10px; border-radius:4px; border-bottom:1px solid #161b22; }
-            QListWidget::item:selected { background:#264f78; }
-            QListWidget::item:hover { background:#21262d; }
-        """)
+        self._task_list.setProperty("surface", "console")
         self._task_list.currentRowChanged.connect(self._on_task_selected)
         left_layout.addWidget(self._task_list, 1)
         splitter.addWidget(left)
@@ -126,23 +120,12 @@ class HistoryPage(QWidget):
         # 原始日志 tab
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
-        self._log_view.setStyleSheet("""
-            QPlainTextEdit {
-                background:#0a0e17; color:#c9d1d9; border:none; border-radius:4px;
-                font-family:'Consolas','Courier New',monospace; font-size:12px; padding:8px;
-            }
-        """)
+        self._log_view.setProperty("surface", "console")
         self._detail_tabs.addTab(self._log_view, "原始日志")
 
         # 事件时间线 tab
         self._event_list = QListWidget()
-        self._event_list.setStyleSheet("""
-            QListWidget {
-                background:#0a0e17; border:none; color:#c9d1d9; font-size:12px; padding:4px;
-            }
-            QListWidget::item { padding:5px 8px; border-bottom:1px solid #161b22; }
-            QListWidget::item:selected { background:#264f78; }
-        """)
+        self._event_list.setProperty("surface", "console")
         self._detail_tabs.addTab(self._event_list, "事件时间线")
 
         right_layout.addWidget(self._detail_tabs, 1)
@@ -159,8 +142,9 @@ class HistoryPage(QWidget):
         def row(key: str, value_lbl: QLabel) -> QHBoxLayout:
             h = QHBoxLayout()
             k = QLabel(key)
-            k.setStyleSheet("color:#484f58; font-size:12px; min-width:80px;")
-            value_lbl.setStyleSheet("color:#c9d1d9; font-size:12px;")
+            k.setProperty("role", "statusMeta")
+            k.setStyleSheet("min-width:80px;")
+            value_lbl.setStyleSheet("font-size:12px;")
             value_lbl.setWordWrap(True)
             h.addWidget(k)
             h.addWidget(value_lbl, 1)
@@ -193,6 +177,63 @@ class HistoryPage(QWidget):
 
         layout.addStretch(1)
         return w
+
+    def _console_list_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QListWidget {"
+            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
+            "}"
+            "QListWidget::item {"
+            f"padding:8px 10px; border-radius:4px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
+            "}"
+            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
+            f"QListWidget::item:hover {{ background:{v.get('accent_soft', 'rgba(79, 140, 255, 0.16)')}; }}"
+        )
+
+    def _event_list_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QListWidget {"
+            f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+            f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
+            "}"
+            "QListWidget::item {"
+            f"padding:5px 8px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
+            "}"
+            f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
+        )
+
+    def _log_view_style(self) -> str:
+        v = self._theme_vars or {}
+        return (
+            "QPlainTextEdit {"
+            f"background:{v.get('bg_console', '#0a0f18')}; color:{v.get('text_primary', '#c9d1d9')};"
+            f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
+            "font-family:'Consolas','Courier New',monospace; font-size:12px; padding:8px;"
+            "}"
+        )
+
+    def _apply_action_button_styles(self):
+        for btn, style in (
+            (getattr(self, "_btn_refresh", None), subtle_btn_style(self._theme_mode, self._theme_vars)),
+            (getattr(self, "_btn_clear", None), danger_btn_style(self._theme_mode, self._theme_vars)),
+        ):
+            if btn:
+                btn.setStyleSheet(style)
+                btn.update()
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        self._theme_mode = theme
+        self._theme_vars = theme_vars or {}
+        self._apply_action_button_styles()
+        if hasattr(self, "_task_list"):
+            self._task_list.setStyleSheet(self._console_list_style())
+        if hasattr(self, "_log_view"):
+            self._log_view.setStyleSheet(self._log_view_style())
+        if hasattr(self, "_event_list"):
+            self._event_list.setStyleSheet(self._event_list_style())
 
     def _connect_signals(self):
         if self._history:

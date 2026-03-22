@@ -70,6 +70,12 @@ class DashboardPage(QWidget):
         self._device = services.get("device")
         self._mirror = services.get("mirror")
         self._config = services.get("config")
+        self._theme_mode = "dark"
+        self._theme_vars = {}
+        self._last_task_status = ("空闲", "#8b949e")
+        self._last_device_status = ("未检测", "#8b949e")
+        self._last_mirror_status = ("未启动", "#8b949e")
+        self._last_result_color = ""
 
         self._mirror_label: MirrorLabel = None   # ADB 截图降级时的图片显示
         self._mirror_container: QWidget = None
@@ -82,6 +88,7 @@ class DashboardPage(QWidget):
         )
 
         self._build_ui()
+        self._apply_action_button_styles()
         self._connect_signals()
         self._update_button_states(TaskState.IDLE)
         self._refresh_status_bar()
@@ -120,8 +127,9 @@ class DashboardPage(QWidget):
 
     def _build_toolbar(self) -> QWidget:
         bar = QWidget()
+        self._toolbar = bar
+        bar.setProperty("role", "toolbar")
         bar.setFixedHeight(60)
-        bar.setStyleSheet("background:#161b22; border-bottom:1px solid #21262d;")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(10)
@@ -131,31 +139,6 @@ class DashboardPage(QWidget):
         self._channel_combo.setFixedHeight(32)
         self._channel_combo.setMinimumWidth(220)
         self._channel_combo.setMaximumWidth(280)
-        self._channel_combo.setStyleSheet("""
-            QComboBox {
-                background:#21262d; border:1px solid #30363d; border-radius:6px;
-                color:#c9d1d9; padding:0 10px; font-size:12px;
-            }
-            QComboBox:hover { border-color:#58a6ff; }
-            QComboBox::drop-down {
-                border:none; width:24px;
-            }
-            QComboBox::down-arrow {
-                width:10px; height:10px;
-                border-left:2px solid #8b949e;
-                border-bottom:2px solid #8b949e;
-                transform:rotate(-45deg);
-                margin-right:6px;
-            }
-            QComboBox QAbstractItemView {
-                background:#1c2128; border:1px solid #30363d;
-                selection-background-color:#264f78;
-                color:#c9d1d9; padding:2px; outline:none;
-            }
-            QComboBox QAbstractItemView::item {
-                padding:4px 8px; min-height:24px;
-            }
-        """)
         self._populate_channel_combo()
         self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
         layout.addWidget(self._channel_combo)
@@ -170,27 +153,28 @@ class DashboardPage(QWidget):
         # 开始按钮
         self._btn_start = QPushButton("开始")
         self._btn_start.setFixedWidth(72)
-        self._btn_start.setStyleSheet(self._btn_primary_style())
+        self._btn_start.setProperty("variant", "primary")
         self._btn_start.clicked.connect(self._on_start)
         layout.addWidget(self._btn_start)
 
         # 停止按钮
         self._btn_stop = QPushButton("停止")
         self._btn_stop.setFixedWidth(72)
-        self._btn_stop.setStyleSheet(self._btn_danger_style())
+        self._btn_stop.setProperty("variant", "danger")
         self._btn_stop.clicked.connect(self._on_stop)
         layout.addWidget(self._btn_stop)
 
         # 暂停/恢复按钮
         self._btn_pause = QPushButton("暂停")
         self._btn_pause.setFixedWidth(72)
+        self._btn_pause.setProperty("variant", "warning")
         self._btn_pause.clicked.connect(self._on_pause_resume)
         layout.addWidget(self._btn_pause)
 
         # 接管按钮
         self._btn_takeover = QPushButton("接管")
         self._btn_takeover.setFixedWidth(72)
-        self._btn_takeover.setStyleSheet(self._btn_warning_style())
+        self._btn_takeover.setProperty("variant", "warning")
         self._btn_takeover.clicked.connect(self._on_takeover)
         layout.addWidget(self._btn_takeover)
 
@@ -202,8 +186,9 @@ class DashboardPage(QWidget):
 
     def _build_status_bar(self) -> QWidget:
         bar = QWidget()
+        self._status_bar = bar
+        bar.setProperty("role", "statusBar")
         bar.setFixedHeight(32)
-        bar.setStyleSheet("background:#0d1117; border-bottom:1px solid #21262d;")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(20)
@@ -222,29 +207,23 @@ class DashboardPage(QWidget):
         # 镜像控制按钮
         self._btn_mirror_toggle = QPushButton("启动镜像")
         self._btn_mirror_toggle.setFixedHeight(22)
-        self._btn_mirror_toggle.setStyleSheet("""
-            QPushButton {
-                background: #21262d; border:1px solid #30363d; border-radius:4px;
-                color:#8b949e; padding:0 10px; font-size:11px;
-            }
-            QPushButton:hover { background:#30363d; color:#c9d1d9; }
-        """)
+        self._btn_mirror_toggle.setProperty("variant", "subtle")
         self._btn_mirror_toggle.clicked.connect(self._on_mirror_toggle)
         layout.addWidget(self._btn_mirror_toggle)
 
         return bar
 
     def _make_status_chip(self, key: str, value: str, color: str) -> QLabel:
-        lbl = QLabel(f"<span style='color:#484f58'>{key}:</span> "
-                     f"<span style='color:{color}'>{value}</span>")
+        lbl = QLabel(self._format_status_chip(key, value, color))
         lbl.setStyleSheet("font-size:12px;")
         return lbl
 
     def _make_sep(self) -> QFrame:
         sep = QFrame()
+        sep.setProperty("role", "separator")
         sep.setFrameShape(QFrame.VLine)
         sep.setFixedHeight(16)
-        sep.setStyleSheet("color:#21262d;")
+        sep.setStyleSheet("")
         return sep
 
     # ----------------------------------------------------------------
@@ -306,7 +285,7 @@ class DashboardPage(QWidget):
 
         # 继续执行按钮（接管模式下显示）
         self._btn_resume_exec = QPushButton("继续执行")
-        self._btn_resume_exec.setStyleSheet(self._btn_primary_style())
+        self._btn_resume_exec.setProperty("variant", "primary")
         self._btn_resume_exec.hide()
         self._btn_resume_exec.clicked.connect(self._on_resume_after_takeover)
         layout.addWidget(self._btn_resume_exec)
@@ -370,6 +349,150 @@ class DashboardPage(QWidget):
         layout.addWidget(self._result_lbl)
 
         return panel
+
+    def _format_status_chip(self, key: str, value: str, color: str) -> str:
+        meta_color = self._theme_vars.get("text_muted", "#66778d")
+        return (
+            f"<span style='color:{meta_color}'>{key}:</span> "
+            f"<span style='color:{color}'>{value}</span>"
+        )
+
+    def _set_task_status(self, text: str, color: str):
+        self._last_task_status = (text, color)
+        if hasattr(self, "_lbl_task_state"):
+            self._lbl_task_state.setText(self._format_status_chip("状态", text, color))
+
+    def _set_device_status(self, text: str, color: str):
+        self._last_device_status = (text, color)
+        if hasattr(self, "_lbl_device_status"):
+            self._lbl_device_status.setText(self._format_status_chip("设备", text, color))
+
+    def _set_mirror_status(self, text: str, color: str):
+        self._last_mirror_status = (text, color)
+        if hasattr(self, "_lbl_mirror_status"):
+            self._lbl_mirror_status.setText(self._format_status_chip("镜像", text, color))
+
+    def _summary_style(self, color: str = "") -> str:
+        v = self._theme_vars or {}
+        summary_color = color or v.get("text_secondary", "#526273")
+        border_color = f"{summary_color}40" if summary_color.startswith("#") else v.get("border", "#d5deea")
+        return (
+            f"background:{v.get('bg_secondary', '#ffffff')}; "
+            f"border:1px solid {border_color}; border-radius:8px; padding:8px; "
+            f"font-size:12px; color:{summary_color}; margin-top:6px;"
+        )
+
+    def _channel_combo_style(self, theme_vars: dict) -> str:
+        v = theme_vars or {}
+        return f"""
+            QComboBox {{
+                background:{v.get('bg_secondary', '#161b22')};
+                border:1px solid {v.get('border', '#30363d')};
+                border-radius:8px;
+                color:{v.get('text_primary', '#c9d1d9')};
+                padding:0 10px;
+                font-size:12px;
+            }}
+            QComboBox:hover {{ border-color:{v.get('accent', '#4f8cff')}; }}
+            QComboBox::drop-down {{
+                border:none;
+                width:24px;
+            }}
+            QComboBox::down-arrow {{
+                width:0;
+                height:0;
+                border-left:5px solid transparent;
+                border-right:5px solid transparent;
+                border-top:6px solid {v.get('text_secondary', '#8b949e')};
+                margin-right:8px;
+            }}
+            QComboBox QAbstractItemView {{
+                background:{v.get('bg_secondary', '#161b22')};
+                border:1px solid {v.get('border', '#30363d')};
+                selection-background-color:{v.get('selection_bg', '#264f78')};
+                color:{v.get('text_primary', '#c9d1d9')};
+                padding:2px;
+                outline:none;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding:4px 8px;
+                min-height:24px;
+            }}
+        """
+
+    def on_theme_changed(self, theme: str, theme_vars: dict):
+        self._theme_mode = theme
+        self._theme_vars = theme_vars or {}
+        v = self._theme_vars
+
+        # 工具栏与状态栏仍由全局 role 选择器控制容器外观；
+        # 顶部动作按钮改为页面内显式样式，绕过真实窗口里异常的全局 variant 链路。
+        for widget, role in (
+            (getattr(self, "_toolbar", None), "toolbar"),
+            (getattr(self, "_status_bar", None), "statusBar"),
+        ):
+            if widget:
+                widget.setProperty("role", role)
+                widget.setStyleSheet("")
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
+
+        self._apply_action_button_styles()
+
+        if hasattr(self, "_channel_combo"):
+            self._channel_combo.setStyleSheet(self._channel_combo_style(v))
+
+        if hasattr(self, "_mirror_container"):
+            self._mirror_container.setStyleSheet(
+                f"background:{v.get('bg_console', '#0a0f18')}; "
+                f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
+            )
+        if hasattr(self, "_mirror_host"):
+            self._mirror_host.setStyleSheet(
+                f"background:{v.get('bg_console', '#0a0f18')}; border-radius:8px;"
+            )
+        if hasattr(self, "_mirror_placeholder"):
+            self._mirror_placeholder.setStyleSheet(
+                f"color:{v.get('text_muted', '#66778d')}; font-size:13px; line-height:1.8;"
+            )
+        if hasattr(self, "_device_info_lbl"):
+            self._device_info_lbl.setStyleSheet(
+                f"color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:4px;"
+            )
+        if hasattr(self, "_takeover_banner"):
+            self._takeover_banner.setStyleSheet(
+                f"background:{v.get('warning_bg', '#3d2800')}; color:{v.get('warning', '#e3b341')}; "
+                f"font-size:12px; border:1px solid {v.get('warning_border', '#6e4800')}; "
+                f"border-radius:8px; padding:6px;"
+            )
+        if hasattr(self, "_log_view"):
+            self._log_view.setStyleSheet(
+                "QPlainTextEdit {"
+                f"background:{v.get('bg_console', '#0a0f18')}; color:{v.get('text_primary', '#c9d1d9')};"
+                f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
+                "font-family:'Consolas','Courier New',monospace; font-size:12px; padding:8px;"
+                "}"
+            )
+        if hasattr(self, "_event_list"):
+            self._event_list.setStyleSheet(
+                "QListWidget {"
+                f"background:{v.get('bg_console', '#0a0f18')}; border:1px solid {v.get('border', '#30363d')};"
+                f"border-radius:8px; color:{v.get('text_primary', '#c9d1d9')}; font-size:12px; padding:4px;"
+                "}"
+                "QListWidget::item {"
+                f"padding:4px 8px; border-bottom:1px solid {v.get('bg_elevated', '#1b2432')};"
+                "}"
+                f"QListWidget::item:selected {{ background:{v.get('selection_bg', '#264f78')}; }}"
+            )
+        if hasattr(self, "_result_lbl"):
+            self._result_lbl.setStyleSheet(
+                self._summary_style(self._last_result_color or v.get("text_secondary", "#526273"))
+            )
+
+        self._set_task_status(*self._last_task_status)
+        self._set_device_status(*self._last_device_status)
+        self._set_mirror_status(*self._last_mirror_status)
 
     # ================================================================
     # 信号连接
@@ -476,7 +599,11 @@ class DashboardPage(QWidget):
             # 清空上次日志
             self._log_view.clear()
             self._event_list.clear()
+            self._last_result_color = ""
             self._result_lbl.setText("")
+            self._result_lbl.setStyleSheet(
+                self._summary_style(self._theme_vars.get("text_secondary", "#526273"))
+            )
             self._task.start_task(text)
 
     def _on_stop(self):
@@ -553,10 +680,7 @@ class DashboardPage(QWidget):
     def _on_task_state_changed(self, state: TaskState):
         self._update_button_states(state)
         text, color = STATE_DISPLAY.get(state, ("未知", "#8b949e"))
-        self._lbl_task_state.setText(
-            f"<span style='color:#484f58'>状态:</span> "
-            f"<span style='color:{color}'>{text}</span>"
-        )
+        self._set_task_status(text, color)
 
         # 接管/暂停态显示操作提示
         if state == TaskState.PAUSED:
@@ -577,8 +701,11 @@ class DashboardPage(QWidget):
 
         if state == TaskState.PAUSED:
             self._btn_pause.setText("恢复")
+            self._btn_pause.setProperty("variant", "success")
         else:
             self._btn_pause.setText("暂停")
+            self._btn_pause.setProperty("variant", "warning")
+        self._apply_action_button_styles(task_state=state)
 
     def _on_log_line(self, line: str):
         self._append_log(line)
@@ -623,10 +750,8 @@ class DashboardPage(QWidget):
         )
         if record.error_summary:
             summary += f"\n错误：{record.error_summary[:120]}"
-        self._result_lbl.setStyleSheet(
-            f"background:#161b22; border:1px solid {color}40;"
-            f"border-radius:4px; padding:8px; font-size:12px; color:{color}; margin-top:6px;"
-        )
+        self._last_result_color = color
+        self._result_lbl.setStyleSheet(self._summary_style(color))
         self._result_lbl.setText(summary)
 
     # ================================================================
@@ -681,7 +806,7 @@ class DashboardPage(QWidget):
         kbd = "已安装" if device_info.adb_keyboard_installed else "未安装"
         lines.append(f"ADB Keyboard: {kbd}")
         self._device_info_lbl.setText("<br>".join(lines))
-        self._device_info_lbl.setStyleSheet("color:#c9d1d9; font-size:12px; padding:4px;")
+        self._device_info_lbl.setStyleSheet("font-size:12px; padding:4px;")
 
         if device_info.status == DeviceStatus.CONNECTED:
             self._update_device_status(device_info.device_id, "#3fb950")
@@ -689,10 +814,7 @@ class DashboardPage(QWidget):
             self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
 
     def _update_device_status(self, text: str, color: str):
-        self._lbl_device_status.setText(
-            f"<span style='color:#484f58'>设备:</span> "
-            f"<span style='color:{color}'>{text}</span>"
-        )
+        self._set_device_status(text, color)
 
     # ================================================================
     # 镜像回调
@@ -700,14 +822,14 @@ class DashboardPage(QWidget):
 
     def _on_mirror_state_changed(self, state: MirrorState):
         text, color = MIRROR_STATE_DISPLAY.get(state, ("未知", "#8b949e"))
-        self._lbl_mirror_status.setText(
-            f"<span style='color:#484f58'>镜像:</span> "
-            f"<span style='color:{color}'>{text}</span>"
-        )
+        self._set_mirror_status(text, color)
         if state == MirrorState.RUNNING:
             self._btn_mirror_toggle.setText("停止镜像")
+            self._btn_mirror_toggle.setProperty("variant", "danger")
         else:
             self._btn_mirror_toggle.setText("启动镜像")
+            self._btn_mirror_toggle.setProperty("variant", "subtle")
+        self._apply_action_button_styles(mirror_running=(state == MirrorState.RUNNING))
 
     def _on_mirror_mode_changed(self, mode: MirrorMode):
         self._mirror_embedded = mode == MirrorMode.SCRCPY_EMBEDDED
@@ -879,35 +1001,210 @@ class DashboardPage(QWidget):
     # 按钮样式
     # ================================================================
 
-    @staticmethod
-    def _btn_primary_style() -> str:
-        return """
-            QPushButton {
-                background:#1f6feb; border:1px solid #388bfd40;
-                border-radius:6px; color:#fff; padding:6px 14px;
-            }
-            QPushButton:hover { background:#388bfd; }
-            QPushButton:disabled { background:#1f2535; color:#484f58; border-color:#21262d; }
+    def _apply_action_button_styles(self, task_state=None, mirror_running=None):
+        if task_state is None:
+            task_state = self._task.state if self._task else TaskState.IDLE
+        if mirror_running is None:
+            mirror_running = bool(self._mirror and self._mirror.is_running)
+
+        btn_specs = (
+            (getattr(self, "_btn_start", None), self._btn_primary_style()),
+            (getattr(self, "_btn_stop", None), self._btn_danger_style()),
+            (
+                getattr(self, "_btn_pause", None),
+                self._btn_success_style() if task_state == TaskState.PAUSED else self._btn_warning_style(),
+            ),
+            (getattr(self, "_btn_takeover", None), self._btn_warning_style()),
+            (getattr(self, "_btn_resume_exec", None), self._btn_primary_style()),
+            (
+                getattr(self, "_btn_mirror_toggle", None),
+                self._btn_danger_style(compact=True) if mirror_running else self._btn_subtle_style(compact=True),
+            ),
+        )
+        for btn, style in btn_specs:
+            if btn:
+                btn.setStyleSheet(style)
+                btn.update()
+
+    def _btn_style_template(
+        self,
+        *,
+        bg: str,
+        hover_bg: str,
+        pressed_bg: str,
+        border: str,
+        hover_border: str,
+        pressed_border: str,
+        text: str,
+        compact: bool = False,
+        disabled_bg: str = "",
+        disabled_border: str = "",
+        disabled_text: str = "",
+    ) -> str:
+        is_light = self._theme_mode == "light"
+        v = self._theme_vars or {}
+        radius = 6 if compact else 8
+        min_height = 22 if compact else 32
+        padding = "0 10px" if compact else "0 14px"
+        font_weight = 500 if compact else 600
+        disabled_bg = disabled_bg or ("#eef2f7" if is_light else "#161b22")
+        disabled_border = disabled_border or ("#d5deea" if is_light else "#21262d")
+        disabled_text = disabled_text or v.get("text_muted", "#94a3b8" if is_light else "#484f58")
+
+        return f"""
+            QPushButton {{
+                background-color:{bg};
+                border:1px solid {border};
+                border-radius:{radius}px;
+                color:{text};
+                padding:{padding};
+                min-height:{min_height}px;
+                font-size:12px;
+                font-weight:{font_weight};
+            }}
+            QPushButton:hover {{
+                background-color:{hover_bg};
+                border-color:{hover_border};
+            }}
+            QPushButton:pressed {{
+                background-color:{pressed_bg};
+                border-color:{pressed_border};
+            }}
+            QPushButton:disabled {{
+                background-color:{disabled_bg};
+                border-color:{disabled_border};
+                color:{disabled_text};
+            }}
         """
 
-    @staticmethod
-    def _btn_danger_style() -> str:
-        return """
-            QPushButton {
-                background:#21262d; border:1px solid #f8514940;
-                border-radius:6px; color:#f85149; padding:6px 14px;
-            }
-            QPushButton:hover { background:#3d1a1a; border-color:#f85149; }
-            QPushButton:disabled { background:#161b22; color:#484f58; border-color:#21262d; }
-        """
+    def _btn_primary_style(self, compact: bool = False) -> str:
+        v = self._theme_vars or {}
+        if self._theme_mode == "light":
+            return self._btn_style_template(
+                bg=v.get("accent", "#2563eb"),
+                hover_bg="#1d4ed8",
+                pressed_bg="#1e40af",
+                border=v.get("accent", "#2563eb"),
+                hover_border="#1d4ed8",
+                pressed_border="#1e40af",
+                text="#ffffff",
+                compact=compact,
+                disabled_bg="#dbe7ff",
+                disabled_border="#c7d7fe",
+                disabled_text="#8aa1d1",
+            )
+        return self._btn_style_template(
+            bg=v.get("accent", "#1f6feb"),
+            hover_bg="#388bfd",
+            pressed_bg="#1b62d1",
+            border=v.get("accent", "#1f6feb"),
+            hover_border="#388bfd",
+            pressed_border="#1b62d1",
+            text="#ffffff",
+            compact=compact,
+        )
 
-    @staticmethod
-    def _btn_warning_style() -> str:
-        return """
-            QPushButton {
-                background:#21262d; border:1px solid #e3b34140;
-                border-radius:6px; color:#e3b341; padding:6px 14px;
-            }
-            QPushButton:hover { background:#3d3200; border-color:#e3b341; }
-            QPushButton:disabled { background:#161b22; color:#484f58; border-color:#21262d; }
-        """
+    def _btn_danger_style(self, compact: bool = False) -> str:
+        v = self._theme_vars or {}
+        if self._theme_mode == "light":
+            return self._btn_style_template(
+                bg=v.get("danger_bg", "#fee2e5"),
+                hover_bg="#fecdd3",
+                pressed_bg="#fda4af",
+                border=v.get("danger_border", "#c9525a"),
+                hover_border=v.get("danger", "#b91c1c"),
+                pressed_border=v.get("danger", "#b91c1c"),
+                text=v.get("danger", "#b91c1c"),
+                compact=compact,
+            )
+        return self._btn_style_template(
+            bg="#21262d",
+            hover_bg="#3d1a1a",
+            pressed_bg="#4a1d1d",
+            border=v.get("danger_border", "#6e2b32"),
+            hover_border=v.get("danger", "#f85149"),
+            pressed_border=v.get("danger", "#f85149"),
+            text=v.get("danger", "#f85149"),
+            compact=compact,
+            disabled_border="#21262d",
+        )
+
+    def _btn_warning_style(self, compact: bool = False) -> str:
+        v = self._theme_vars or {}
+        if self._theme_mode == "light":
+            return self._btn_style_template(
+                bg=v.get("warning_bg", "#fef3c0"),
+                hover_bg="#fde68a",
+                pressed_bg="#fcd34d",
+                border=v.get("warning_border", "#c28b00"),
+                hover_border=v.get("warning", "#92400e"),
+                pressed_border=v.get("warning", "#92400e"),
+                text=v.get("warning", "#92400e"),
+                compact=compact,
+            )
+        return self._btn_style_template(
+            bg="#21262d",
+            hover_bg="#3d3200",
+            pressed_bg="#4a3d00",
+            border=v.get("warning_border", "#6e4800"),
+            hover_border=v.get("warning", "#e3b341"),
+            pressed_border=v.get("warning", "#e3b341"),
+            text=v.get("warning", "#e3b341"),
+            compact=compact,
+            disabled_border="#21262d",
+        )
+
+    def _btn_success_style(self, compact: bool = False) -> str:
+        v = self._theme_vars or {}
+        if self._theme_mode == "light":
+            return self._btn_style_template(
+                bg=v.get("success_bg", "#dcfce7"),
+                hover_bg="#bbf7d0",
+                pressed_bg="#86efac",
+                border=v.get("success_border", "#16a34a"),
+                hover_border=v.get("success", "#166534"),
+                pressed_border=v.get("success", "#166534"),
+                text=v.get("success", "#166534"),
+                compact=compact,
+            )
+        return self._btn_style_template(
+            bg="#0f2418",
+            hover_bg="#12351f",
+            pressed_bg="#184828",
+            border=v.get("success_border", "#238636"),
+            hover_border=v.get("success", "#3fb950"),
+            pressed_border=v.get("success", "#3fb950"),
+            text=v.get("success", "#3fb950"),
+            compact=compact,
+            disabled_border="#21262d",
+        )
+
+    def _btn_subtle_style(self, compact: bool = False) -> str:
+        v = self._theme_vars or {}
+        if self._theme_mode == "light":
+            return self._btn_style_template(
+                bg=v.get("bg_elevated", "#edf2f7"),
+                hover_bg="#e2e8f0",
+                pressed_bg="#d9e2ec",
+                border=v.get("border", "#d5deea"),
+                hover_border=v.get("accent", "#2563eb"),
+                pressed_border=v.get("accent", "#2563eb"),
+                text=v.get("text_primary", "#1f2937"),
+                compact=compact,
+                disabled_bg="#f8fafc",
+                disabled_border="#e2e8f0",
+                disabled_text="#94a3b8",
+            )
+        return self._btn_style_template(
+            bg=v.get("bg_btn", "#161b22"),
+            hover_bg=v.get("bg_elevated", "#1b2432"),
+            pressed_bg="#0f1724",
+            border=v.get("border", "#30363d"),
+            hover_border=v.get("accent", "#4f8cff"),
+            pressed_border=v.get("accent", "#4f8cff"),
+            text=v.get("text_primary", "#c9d1d9"),
+            compact=compact,
+            disabled_bg="#161b22",
+            disabled_border="#21262d",
+            disabled_text="#484f58",
+        )

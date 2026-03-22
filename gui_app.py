@@ -41,6 +41,9 @@ def main():
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
     app = QApplication(sys.argv)
+    # 使用 Fusion 风格，避免 Windows 原生样式对按钮 QSS 的干扰，
+    # 提高浅色/深色主题下按钮填充、边框、文字颜色的一致性。
+    app.setStyle("Fusion")
     app.setApplicationName("Open-AutoGLM")
     app.setApplicationVersion("0.1")
     app.setOrganizationName("Open-AutoGLM")
