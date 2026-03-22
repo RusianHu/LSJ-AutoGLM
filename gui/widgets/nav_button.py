@@ -18,9 +18,41 @@ class NavButton(QPushButton):
         self.setFixedHeight(64)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
-        self._apply_style()
+        self._apply_default_style()
+
+    def apply_theme_tokens(self, tokens) -> None:
+        """
+        接受 ThemeTokens 对象应用主题。
+        为首选接口，由 ThemeManager 驱动。
+        """
+        self.setProperty("themeMode", tokens.mode)
+        self.setStyleSheet(f"""
+            NavButton {{
+                background: transparent;
+                border: none;
+                border-radius: 12px;
+                color: {tokens.nav_text};
+                font-size: 11px;
+                font-weight: 600;
+                padding: 6px 10px;
+                text-align: center;
+            }}
+            NavButton:hover {{
+                background: {tokens.nav_hover_bg};
+                color: {tokens.nav_text_hover};
+            }}
+            NavButton:checked {{
+                background: {tokens.accent_soft};
+                color: {tokens.accent};
+                border-left: 3px solid {tokens.accent};
+            }}
+        """)
 
     def apply_theme(self, theme_vars: dict, theme_mode: str = "dark"):
+        """
+        [兼容层] 接受旧式 dict 格式主题变量。
+        请迁移到 apply_theme_tokens(tokens)。
+        """
         self.setProperty("themeMode", theme_mode)
         self.setStyleSheet(f"""
             NavButton {{
@@ -44,7 +76,8 @@ class NavButton(QPushButton):
             }}
         """)
 
-    def _apply_style(self):
+    def _apply_default_style(self):
+        """启动时使用暗色默认值，等待 ThemeManager 推送真实 tokens。"""
         self.apply_theme(
             {
                 "nav_text": "#a9b5c7",

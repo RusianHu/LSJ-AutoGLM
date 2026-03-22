@@ -1,5 +1,37 @@
 # -*- coding: utf-8 -*-
-"""GUI 按钮局部样式 helper。"""
+"""
+gui/utils/button_styles.py
+
+[已废弃] 此模块是过渡兼容层。
+
+新代码应使用：
+    from gui.theme.styles.buttons import btn_primary, btn_subtle, btn_danger, ...
+    from gui.theme.component_registry import get_registry
+
+此文件在迁移完成后将被移除，
+当前保留是为了避免现有页面在迁移期间崩溃。
+"""
+
+import warnings
+
+from gui.theme.styles.buttons import (
+    btn_primary as _btn_primary,
+    btn_subtle as _btn_subtle,
+    btn_success as _btn_success,
+    btn_danger as _btn_danger,
+    btn_warning as _btn_warning,
+    btn_secondary as _btn_secondary,
+)
+from gui.theme.tokens import ThemeTokens
+from gui.theme.themes import resolve_theme_tokens
+
+
+def _make_tokens(theme_mode: str, theme_vars: dict | None = None) -> ThemeTokens:
+    """
+    从旧式 (theme_mode, theme_vars) 参数构造 ThemeTokens。
+    用于兼容期间的参数桥接。
+    """
+    return resolve_theme_tokens(theme_mode)
 
 
 def button_style_template(
@@ -19,6 +51,10 @@ def button_style_template(
     disabled_text: str = "",
     font_size: int = 13,
 ) -> str:
+    """
+    [已废弃] 旧版按钮模板。
+    新代码请使用 gui.theme.styles.buttons 中的函数。
+    """
     is_light = theme_mode == "light"
     v = theme_vars or {}
     radius = 6 if compact else 8
@@ -57,157 +93,35 @@ def button_style_template(
 
 
 def primary_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
-    v = theme_vars or {}
-    if theme_mode == "light":
-        return button_style_template(
-            theme_mode,
-            v,
-            bg=v.get("accent", "#2563eb"),
-            hover_bg="#1d4ed8",
-            pressed_bg="#1e40af",
-            border=v.get("accent", "#2563eb"),
-            hover_border="#1d4ed8",
-            pressed_border="#1e40af",
-            text="#ffffff",
-            compact=compact,
-            disabled_bg="#dbe7ff",
-            disabled_border="#c7d7fe",
-            disabled_text="#8aa1d1",
-        )
-    return button_style_template(
-        theme_mode,
-        v,
-        bg=v.get("accent", "#1f6feb"),
-        hover_bg="#388bfd",
-        pressed_bg="#1b62d1",
-        border=v.get("accent", "#1f6feb"),
-        hover_border="#388bfd",
-        pressed_border="#1b62d1",
-        text="#ffffff",
-        compact=compact,
-    )
-
-
-def danger_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
-    v = theme_vars or {}
-    if theme_mode == "light":
-        return button_style_template(
-            theme_mode,
-            v,
-            bg=v.get("danger_bg", "#fee2e5"),
-            hover_bg="#fecdd3",
-            pressed_bg="#fda4af",
-            border=v.get("danger_border", "#c9525a"),
-            hover_border=v.get("danger", "#b91c1c"),
-            pressed_border=v.get("danger", "#b91c1c"),
-            text=v.get("danger", "#b91c1c"),
-            compact=compact,
-        )
-    return button_style_template(
-        theme_mode,
-        v,
-        bg="#21262d",
-        hover_bg="#3d1a1a",
-        pressed_bg="#4a1d1d",
-        border=v.get("danger_border", "#8f2d2b"),
-        hover_border=v.get("danger", "#f85149"),
-        pressed_border=v.get("danger", "#f85149"),
-        text=v.get("danger", "#f85149"),
-        compact=compact,
-        disabled_border="#21262d",
-    )
-
-
-def warning_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
-    v = theme_vars or {}
-    if theme_mode == "light":
-        return button_style_template(
-            theme_mode,
-            v,
-            bg=v.get("warning_bg", "#fef3c0"),
-            hover_bg="#fde68a",
-            pressed_bg="#fcd34d",
-            border=v.get("warning_border", "#c28b00"),
-            hover_border=v.get("warning", "#92400e"),
-            pressed_border=v.get("warning", "#92400e"),
-            text=v.get("warning", "#92400e"),
-            compact=compact,
-        )
-    return button_style_template(
-        theme_mode,
-        v,
-        bg="#21262d",
-        hover_bg="#3d3200",
-        pressed_bg="#4a3d00",
-        border=v.get("warning_border", "#6e4800"),
-        hover_border=v.get("warning", "#e3b341"),
-        pressed_border=v.get("warning", "#e3b341"),
-        text=v.get("warning", "#e3b341"),
-        compact=compact,
-        disabled_border="#21262d",
-    )
-
-
-def success_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
-    v = theme_vars or {}
-    if theme_mode == "light":
-        return button_style_template(
-            theme_mode,
-            v,
-            bg=v.get("success_bg", "#dcfce7"),
-            hover_bg="#bbf7d0",
-            pressed_bg="#86efac",
-            border=v.get("success_border", "#16a34a"),
-            hover_border=v.get("success", "#166534"),
-            pressed_border=v.get("success", "#166534"),
-            text=v.get("success", "#166534"),
-            compact=compact,
-        )
-    return button_style_template(
-        theme_mode,
-        v,
-        bg="#0f2418",
-        hover_bg="#12351f",
-        pressed_bg="#184828",
-        border=v.get("success_border", "#238636"),
-        hover_border=v.get("success", "#3fb950"),
-        pressed_border=v.get("success", "#3fb950"),
-        text=v.get("success", "#3fb950"),
-        compact=compact,
-        disabled_border="#21262d",
-    )
+    """[已废弃] 请使用 gui.theme.styles.buttons.btn_primary"""
+    t = _make_tokens(theme_mode, theme_vars)
+    size = "compact" if compact else "md"
+    return _btn_primary(t, size=size)
 
 
 def subtle_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
-    v = theme_vars or {}
-    if theme_mode == "light":
-        return button_style_template(
-            theme_mode,
-            v,
-            bg=v.get("bg_elevated", "#edf2f7"),
-            hover_bg="#e2e8f0",
-            pressed_bg="#d9e2ec",
-            border=v.get("border", "#d5deea"),
-            hover_border=v.get("accent", "#2563eb"),
-            pressed_border=v.get("accent", "#2563eb"),
-            text=v.get("text_primary", "#1f2937"),
-            compact=compact,
-            disabled_bg="#f8fafc",
-            disabled_border="#e2e8f0",
-            disabled_text="#94a3b8",
-        )
-    return button_style_template(
-        theme_mode,
-        v,
-        bg=v.get("bg_btn", "#161b22"),
-        hover_bg=v.get("bg_elevated", "#1b2432"),
-        pressed_bg="#0f1724",
-        border=v.get("border", "#30363d"),
-        hover_border=v.get("accent", "#4f8cff"),
-        pressed_border=v.get("accent", "#4f8cff"),
-        text=v.get("text_primary", "#c9d1d9"),
-        compact=compact,
-        disabled_bg="#161b22",
-        disabled_border="#21262d",
-        disabled_text="#484f58",
-    )
+    """[已废弃] 请使用 gui.theme.styles.buttons.btn_subtle"""
+    t = _make_tokens(theme_mode, theme_vars)
+    size = "compact" if compact else "md"
+    return _btn_subtle(t, size=size)
+
+
+def danger_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    """[已废弃] 请使用 gui.theme.styles.buttons.btn_danger"""
+    t = _make_tokens(theme_mode, theme_vars)
+    size = "compact" if compact else "md"
+    return _btn_danger(t, size=size)
+
+
+def success_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    """[已废弃] 请使用 gui.theme.styles.buttons.btn_success"""
+    t = _make_tokens(theme_mode, theme_vars)
+    size = "compact" if compact else "md"
+    return _btn_success(t, size=size)
+
+
+def warning_btn_style(theme_mode: str, theme_vars: dict | None = None, compact: bool = False) -> str:
+    """[已废弃] 请使用 gui.theme.styles.buttons.btn_warning"""
+    t = _make_tokens(theme_mode, theme_vars)
+    size = "compact" if compact else "md"
+    return _btn_warning(t, size=size)

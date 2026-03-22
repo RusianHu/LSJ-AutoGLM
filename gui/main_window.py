@@ -16,12 +16,23 @@ from PySide6.QtWidgets import (
 )
 
 from gui.widgets.nav_button import NavButton
+from gui.theme.manager import ThemeManager
+from gui.theme.preferences import ThemePreference
+from gui.theme.global_shell import GlobalShellStyler
+from gui.theme.page_adapter import PageThemeAdapter
+from gui.theme.tokens import ThemeTokens
 
 
 class MainWindow(QMainWindow):
     """
     主窗口。
     布局：左侧导航栏 (220px) + 右侧内容区（StackedWidget）。
+
+    主题系统：
+      - 由 ThemeManager 统一管理主题解析与广播
+      - GlobalShellStyler 负责应用壳层全局 QSS
+      - PageThemeAdapter 负责将 tokens 推送到各页面
+      - MainWindow.apply_theme 作为兼容入口，内部委托给 ThemeManager
     """
 
     NAV_WIDTH = 200
@@ -40,11 +51,25 @@ class MainWindow(QMainWindow):
         """
         super().__init__(parent)
         self._services = services
+
+        # ---------- ThemeEngine 初始化 ----------
+        self._theme_manager = ThemeManager(self)
+        self._shell_styler = GlobalShellStyler(self)
+        self._page_adapter = PageThemeAdapter(self._theme_manager)
+
+        # 连接主题变化 -> 壳层更新 + 导航更新
+        self._theme_manager.theme_changed.connect(self._on_tokens_changed)
+
+        # 暴露给 services，让需要的服务可以访问
+        self._services["theme_manager"] = self._theme_manager
+
         self.setWindowTitle("LSJ AutoGLM")
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1440, 900)
         self._build_ui()
         self._connect_signals()
+
+        # 应用初始主题（从配置读取偏好）
         self.apply_theme(self._get_current_theme())
 
     # ---------- UI 构建 ----------
@@ -132,19 +157,19 @@ class MainWindow(QMainWindow):
         self._page_settings = SettingsPage(self._services)
         self._page_diag = DiagnosticsPage(self._services)
 
-        pages = [
-            ("dashboard", self._page_dashboard),
-            ("device",    self._page_device),
-            ("history",   self._page_history),
-            ("settings",  self._page_settings),
-            ("diag",      self._page_diag),
-        ]
-        self._pages = {}
-        for key, page in pages:
-            self._stack.addWidget(page)
-            self._pages[key] = page
+        self._pages = {
+            "dashboard": self._page_dashboard,
+            "device":    self._page_device,
+            "history":   self._page_history,
+            "settings":  self._page_settings,
+            "diag":      self._page_diag,
+        }
 
-    # ---------- 信号连接 ----------
+        for page in self._pages.values():
+            self._stack.addWidget(page)
+            self._page_adapter.register_page(page)
+
+        self._stack.setCurrentWidget(self._page_dashboard)
 
     def _connect_signals(self):
         for key, btn in self._nav_buttons.items():
@@ -207,75 +232,7 @@ class MainWindow(QMainWindow):
         elif clicked == btn_takeover and task:
             task.request_takeover("用户响应卡住提示")
 
-    # ---------- 主题常量 ----------
-
-    _DARK_VARS = {
-        "bg_main":       "#0d1117",
-        "bg_nav":        "#101826",
-        "bg_toolbar":    "#111827",
-        "bg_status":     "#0b1220",
-        "bg_secondary":  "#161b22",
-        "bg_elevated":   "#1b2432",
-        "bg_btn":        "#21262d",
-        "bg_console":    "#0a0f18",
-        "sep_color":     "#243042",
-        "text_primary":  "#d7dee7",
-        "text_secondary":"#9ba7b4",
-        "text_muted":    "#66778d",
-        "border":        "#303b4a",
-        "border_hover":  "#4b5b70",
-        "accent":        "#4f8cff",
-        "accent_hover":  "#6aa4ff",
-        "accent_soft":   "rgba(79, 140, 255, 0.16)",
-        "selection_bg":  "#264f78",
-        "success":       "#3fb950",
-        "success_bg":    "#0f2d1a",
-        "success_border": "#1f6d3c",
-        "warning":       "#e3b341",
-        "warning_bg":    "#3d2800",
-        "warning_border": "#6e4800",
-        "danger":        "#f85149",
-        "danger_bg":     "#3d1a1a",
-        "danger_border": "#8f2d2b",
-        "nav_text":      "#a9b5c7",
-        "nav_text_hover": "#e2e8f0",
-        "nav_hover_bg":  "rgba(255,255,255,0.06)",
-    }
-
-    _LIGHT_VARS = {
-        "bg_main":       "#f4f7fb",
-        "bg_nav":        "#edf3fb",
-        "bg_toolbar":    "#ffffff",
-        "bg_status":     "#f7f9fc",
-        "bg_secondary":  "#ffffff",
-        "bg_elevated":   "#eef3f9",
-        "bg_btn":        "#eef2f7",
-        "bg_console":    "#f8fbff",
-        "sep_color":     "#d7dee8",
-        "text_primary":  "#18212f",
-        "text_secondary":"#526273",
-        "text_muted":    "#7b8aa0",
-        "border":        "#d5deea",
-        "border_hover":  "#a9b6c7",
-        "accent":        "#2563eb",
-        "accent_hover":  "#3b82f6",
-        "accent_soft":   "rgba(37, 99, 235, 0.12)",
-        "selection_bg":  "#dbeafe",
-        "success":       "#166534",
-        "success_bg":    "#dcfce7",
-        "success_border": "#16a34a",
-        "warning":       "#92400e",
-        "warning_bg":    "#fef3c0",
-        "warning_border": "#c28b00",
-        "danger":        "#b91c1c",
-        "danger_bg":     "#fee2e5",
-        "danger_border": "#c9525a",
-        "nav_text":      "#60708a",
-        "nav_text_hover": "#1e2a3a",
-        "nav_hover_bg":  "rgba(37, 99, 235, 0.08)",
-    }
-
-    # ---------- 主题切换 ----------
+    # ---------- 主题系统 ----------
 
     def _get_current_theme(self) -> str:
         """从配置服务读取主题设置，默认 system"""
@@ -285,410 +242,66 @@ class MainWindow(QMainWindow):
         return "system"
 
     def apply_theme(self, theme: str = "system"):
-        """应用指定主题（system/dark/light），system 时自动检测操作系统深浅色"""
-        if theme == "system":
-            from PySide6.QtWidgets import QApplication
-            from PySide6.QtGui import QPalette
-            palette = QApplication.instance().palette()
-            is_dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
-            theme = "dark" if is_dark else "light"
+        """
+        应用指定主题（兼容入口）。
 
-        v = self._DARK_VARS if theme == "dark" else self._LIGHT_VARS
-        self._resolved_theme = theme
-        self._theme_vars = v
-        self.setProperty("themeMode", theme)
-        self._apply_global_style(v)
+        内部委托给 ThemeManager.set_preference()，
+        ThemeManager 负责解析 system 模式并广播 theme_changed。
+        """
+        self._theme_manager.set_preference(theme)
 
-        # 更新各子组件内联样式
+    def _on_config_changed(self):
+        """配置变化时重新应用主题。"""
+        self.apply_theme(self._get_current_theme())
+
+    def _on_tokens_changed(self, tokens: ThemeTokens):
+        """
+        ThemeManager.theme_changed 回调。
+        负责：壳层全局 QSS + 导航组件 + 分隔线等壳层局部样式。
+        页面分发由 PageThemeAdapter 处理。
+        """
+        # 应用全局壳层 QSS
+        self._shell_styler.apply(tokens)
+
+        # 更新壳层局部内联样式
         if hasattr(self, "_nav_panel"):
-            self._nav_panel.setStyleSheet(f"background:{v['bg_nav']};")
+            self._nav_panel.setStyleSheet(f"background:{tokens.bg_nav};")
         if hasattr(self, "_sep"):
             self._sep.setStyleSheet(
-                f"background:{v['sep_color']}; border:none; max-width:1px;"
+                f"background:{tokens.sep_color}; border:none; max-width:1px;"
             )
         if hasattr(self, "_stack"):
-            self._stack.setStyleSheet(f"background:{v['bg_main']};")
+            self._stack.setStyleSheet(f"background:{tokens.bg_main};")
         if hasattr(self, "_logo_lbl"):
             self._logo_lbl.setStyleSheet(
-                f"color:{v['accent']}; padding:4px 8px 16px 8px;"
+                f"color:{tokens.accent}; padding:4px 8px 16px 8px;"
             )
         if hasattr(self, "_ver_lbl"):
             self._ver_lbl.setStyleSheet(
-                f"color:{v['text_muted']}; font-size:10px; padding:4px 8px;"
+                f"color:{tokens.text_muted}; font-size:10px; padding:4px 8px;"
             )
+
+        # 更新导航按钮主题
         for btn in getattr(self, "_nav_buttons", {}).values():
-            if hasattr(btn, "apply_theme"):
-                btn.apply_theme(v, theme)
-        for page in getattr(self, "_pages", {}).values():
-            on_theme_changed = getattr(page, "on_theme_changed", None)
-            if callable(on_theme_changed):
-                on_theme_changed(theme, v)
+            apply_fn = getattr(btn, "apply_theme_tokens", None)
+            if callable(apply_fn):
+                apply_fn(tokens)
+            elif hasattr(btn, "apply_theme"):
+                btn.apply_theme(tokens.to_legacy_dict(), tokens.mode)
 
-    def _on_config_changed(self):
-        """配置变化时重新应用主题"""
-        self.apply_theme(self._get_current_theme())
-
-    # ---------- 全局样式 ----------
-
-    def _apply_global_style(self, v: dict):
-        self.setStyleSheet(f"""
-            QMainWindow, QWidget {{
-                background: {v['bg_main']};
-                color: {v['text_primary']};
-                font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-                font-size: 13px;
-            }}
-            QWidget#NavPanel {{
-                background: {v['bg_nav']};
-            }}
-            QStackedWidget#ContentStack {{
-                background: {v['bg_main']};
-            }}
-            QWidget[role="toolbar"] {{
-                background: {v['bg_toolbar']};
-                border-bottom: 1px solid {v['border']};
-            }}
-            QWidget[role="statusBar"] {{
-                background: {v['bg_status']};
-                border-bottom: 1px solid {v['border']};
-            }}
-            QFrame#MainSeparator {{
-                background: {v['sep_color']};
-                border: none;
-                max-width: 1px;
-            }}
-            QFrame[role="separator"] {{
-                background: {v['border']};
-                border: none;
-                max-width: 1px;
-            }}
-            QFrame[role="divider"] {{
-                background: {v['border']};
-                border: none;
-                max-height: 1px;
-            }}
-            QScrollArea {{
-                border: none;
-                background: transparent;
-            }}
-            QScrollArea > QWidget > QWidget {{
-                background: transparent;
-            }}
-            QScrollBar:vertical {{
-                background: {v['bg_elevated']};
-                width: 10px;
-                border-radius: 5px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {v['border']};
-                border-radius: 5px;
-                min-height: 28px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {v['border_hover']};
-            }}
-            QScrollBar:horizontal {{
-                background: {v['bg_elevated']};
-                height: 10px;
-                border-radius: 5px;
-                margin: 2px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: {v['border']};
-                border-radius: 5px;
-                min-width: 28px;
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: {v['border_hover']};
-            }}
-            QScrollBar::add-line, QScrollBar::sub-line {{
-                height: 0;
-                width: 0;
-            }}
-            QPushButton {{
-                background-color: {v['bg_btn']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-                padding: 6px 14px;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border_hover']};
-            }}
-            QPushButton:pressed {{
-                background-color: {v['bg_secondary']};
-            }}
-            QPushButton:disabled {{
-                background-color: {v['bg_elevated']};
-                color: {v['text_muted']};
-                border-color: {v['border']};
-            }}
-            QPushButton[variant="primary"] {{
-                background-color: {v['accent']};
-                border-color: {v['accent']};
-                color: #ffffff;
-                font-weight: 600;
-            }}
-            QPushButton[variant="primary"]:hover {{
-                background-color: {v['accent_hover']};
-                border-color: {v['accent_hover']};
-            }}
-            QPushButton[variant="danger"] {{
-                background-color: {v['danger_bg']};
-                border-color: {v['danger_border']};
-                color: {v['danger']};
-                font-weight: 600;
-            }}
-            QPushButton[variant="danger"]:hover {{
-                background-color: {v['danger_bg']};
-                border-color: {v['danger']};
-            }}
-            QPushButton[variant="danger"]:disabled {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border']};
-                color: {v['text_muted']};
-            }}
-            QPushButton[variant="warning"] {{
-                background-color: {v['warning_bg']};
-                border-color: {v['warning_border']};
-                color: {v['warning']};
-                font-weight: 600;
-            }}
-            QPushButton[variant="warning"]:hover {{
-                background-color: {v['warning_bg']};
-                border-color: {v['warning']};
-            }}
-            QPushButton[variant="warning"]:disabled {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border']};
-                color: {v['text_muted']};
-            }}
-            QPushButton[variant="subtle"] {{
-                background-color: {v['bg_btn']};
-                border-color: {v['border']};
-                color: {v['text_secondary']};
-            }}
-            QPushButton[variant="subtle"]:hover {{
-                background-color: {v['bg_elevated']};
-                color: {v['text_primary']};
-                border-color: {v['border_hover']};
-            }}
-            QPushButton[variant="subtle"]:disabled {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border']};
-                color: {v['text_muted']};
-            }}
-            QPushButton[variant="primary"]:disabled {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border']};
-                color: {v['text_muted']};
-            }}
-            QPushButton[variant="success"] {{
-                background-color: {v['success_bg']};
-                border-color: {v['success_border']};
-                color: {v['success']};
-                font-weight: 600;
-            }}
-            QPushButton[variant="success"]:hover {{
-                background-color: {v['success_bg']};
-                border-color: {v['success']};
-            }}
-            QPushButton[variant="success"]:disabled {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border']};
-                color: {v['text_muted']};
-            }}
-            QLineEdit, QTextEdit, QPlainTextEdit {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-                padding: 6px 10px;
-                selection-background-color: {v['selection_bg']};
-            }}
-            QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
-                border-color: {v['accent']};
-            }}
-            QLineEdit[readOnly="true"] {{
-                background: {v['bg_elevated']};
-                color: {v['text_muted']};
-            }}
-            QLabel {{
-                color: {v['text_primary']};
-                background: transparent;
-            }}
-            QLabel[role="pageTitle"] {{
-                color: {v['text_primary']};
-                font-size: 18px;
-                font-weight: 700;
-            }}
-            QLabel[role="muted"] {{
-                color: {v['text_secondary']};
-                font-size: 12px;
-            }}
-            QLabel[role="subtle"] {{
-                color: {v['text_muted']};
-                font-size: 12px;
-            }}
-            QLabel[role="summaryCard"] {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                padding: 8px;
-            }}
-            QLabel[role="warningBanner"] {{
-                background: {v['warning_bg']};
-                border: 1px solid {v['warning_border']};
-                color: {v['warning']};
-                border-radius: 6px;
-                padding: 6px;
-                font-size: 12px;
-            }}
-            QGroupBox {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 10px;
-                margin-top: 14px;
-                padding: 12px 10px 10px 10px;
-                color: {v['text_secondary']};
-                font-size: 12px;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
-                color: {v['text_secondary']};
-                background: {v['bg_main']};
-            }}
-            QComboBox {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-                padding: 5px 10px;
-            }}
-            QComboBox:hover {{
-                border-color: {v['border_hover']};
-            }}
-            QComboBox:focus {{
-                border-color: {v['accent']};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 24px;
-            }}
-            QComboBox QAbstractItemView {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                selection-background-color: {v['selection_bg']};
-                color: {v['text_primary']};
-                outline: none;
-            }}
-            QListWidget {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-                padding: 4px;
-            }}
-            QListWidget::item:selected {{
-                background: {v['selection_bg']};
-            }}
-            QListWidget::item:hover {{
-                background: {v['accent_soft']};
-            }}
-            QWidget[surface="console"] {{
-                background: {v['bg_console']};
-                border-radius: 8px;
-            }}
-            QPlainTextEdit[surface="console"],
-            QListWidget[surface="console"] {{
-                background: {v['bg_console']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-            }}
-            QListWidget[surface="console"]::item {{
-                border-bottom: 1px solid {v['bg_elevated']};
-            }}
-            QSplitter::handle {{
-                background: {v['bg_btn']};
-            }}
-            QSplitter::handle:horizontal {{
-                width: 4px;
-            }}
-            QSplitter::handle:vertical {{
-                height: 4px;
-            }}
-            QTableWidget {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                gridline-color: {v['border']};
-                color: {v['text_primary']};
-            }}
-            QTableWidget::item:selected {{
-                background: {v['selection_bg']};
-            }}
-            QHeaderView::section {{
-                background: {v['bg_elevated']};
-                color: {v['text_secondary']};
-                border: none;
-                border-bottom: 1px solid {v['border']};
-                padding: 6px 10px;
-                font-size: 12px;
-            }}
-            QTabWidget::pane {{
-                background: {v['bg_secondary']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-            }}
-            QTabBar::tab {{
-                background: {v['bg_elevated']};
-                color: {v['text_secondary']};
-                border: 1px solid {v['border']};
-                border-bottom: none;
-                padding: 6px 16px;
-                border-radius: 8px 8px 0 0;
-            }}
-            QTabBar::tab:selected {{
-                background: {v['bg_secondary']};
-                color: {v['text_primary']};
-                border-color: {v['border_hover']};
-            }}
-            QTabBar::tab:hover {{
-                background: {v['bg_btn']};
-            }}
-        """)
+        # 更新 themeMode 属性（用于 QSS 属性选择器）
+        self.setProperty("themeMode", tokens.mode)
 
     def _dialog_style(self) -> str:
-        v = getattr(self, "_theme_vars", self._DARK_VARS)
-        return f"""
-            QMessageBox {{
-                background: {v['bg_secondary']};
-                color: {v['text_primary']};
-            }}
-            QMessageBox QLabel {{
-                color: {v['text_primary']};
-            }}
-            QPushButton {{
-                background-color: {v['bg_btn']};
-                border: 1px solid {v['border']};
-                border-radius: 8px;
-                color: {v['text_primary']};
-                padding: 6px 18px;
-                min-width: 80px;
-            }}
-            QPushButton:hover {{
-                background-color: {v['bg_elevated']};
-                border-color: {v['border_hover']};
-            }}
-        """
+        """获取当前主题的 QMessageBox 样式。"""
+        from gui.theme.styles.dialogs import dialog_message_box
+        tokens = self._theme_manager.get_tokens()
+        return dialog_message_box(tokens)
+
+    # ---------- 窗口关闭 ----------
 
     def closeEvent(self, event):
-        """窗口关闭时统一清理资源（按顺序：page -> task -> mirror -> device）"""
+        """窗口关闭时统一清理资源（按顺序：page -> task -> mirror -> device -> theme）"""
         for page in getattr(self, "_pages", {}).values():
             shutdown = getattr(page, "shutdown", None)
             if callable(shutdown):
@@ -706,5 +319,8 @@ class MainWindow(QMainWindow):
         device = self._services.get("device")
         if device:
             device.stop()
+
+        # 停止系统主题监听
+        self._theme_manager.stop()
 
         super().closeEvent(event)

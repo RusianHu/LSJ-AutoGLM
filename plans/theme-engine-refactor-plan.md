@@ -1,64 +1,49 @@
-# ThemeEngine 重构方案
+# ThemeEngine 重构方案（检查清单版）
 
-## 目标
-
-把当前分散在主窗口、页面、局部 helper 里的主题切换逻辑，重构为一套可扩展、可测试、可渐进迁移的 ThemeEngine 基础设施。
-
-重点解决以下问题：
-
-- 全局 QSS 与页面局部样式并存，优先级不稳定
-- 主题变量是大字典，语义边界不清晰
-- 页面各自实现 `on_theme_changed`，风格不统一
-- 跟随系统主题只是在切换时读取一次，而非持续监听
-- 组件状态、业务状态、视觉状态耦合严重
-- 新增页面、弹窗、组件时，主题适配成本高
+> 评估基线：基于当前工作区实现状态整理。
+>
+> 复选框说明：
+> - `[x]` 已完成
+> - `[ ]` 未完成或尚未达到本方案的验收标准
+> - 若为部分完成，会在条目后补充说明
 
 ---
 
-## 当前架构痛点
+## 一、总体目标
+
+- [ ] 把当前分散在主窗口、页面、局部 helper 里的主题切换逻辑，重构为一套可扩展、可测试、可渐进迁移的 ThemeEngine 基础设施。
+- [ ] 全局 QSS 与页面局部样式优先级稳定。
+- [ ] 主题变量从大字典演进为稳定、清晰的语义化对象。（部分完成：已引入 `ThemeTokens`，但页面仍保留 legacy dict 兼容访问）
+- [ ] 页面统一主题刷新方式，不再各自实现风格不同的 `on_theme_changed`。
+- [ ] `system` 主题支持运行中持续跟随系统变化。（部分完成：已有 watcher + 轮询，但还不是最终成熟形态）
+- [ ] 组件状态、业务状态、视觉状态解耦。
+- [ ] 新增页面、弹窗、组件时，主题适配成本显著降低。
+
+---
+
+## 二、当前架构痛点评估
 
 ### 1. 入口职责过重
 
-当前主题入口集中在 `MainWindow.apply_theme`，同时负责：
-
-- 解析主题偏好
-- 解析 system 主题的实际模式
-- 组装主题变量
-- 渲染全局 QSS
-- 推送页面级 `on_theme_changed`
-- 更新部分导航和壳层局部样式
-
-这会导致主题系统无法独立演进，也不利于测试。
+- [ ] `MainWindow.apply_theme` 完全退化为兼容入口且不再承担主题应用细节。（部分完成：已委托 `ThemeManager`，但壳层局部更新仍在主窗口内）
+- [x] 主题解析权已经集中到 `ThemeManager`。
+- [ ] 主窗口不再承担壳层外的主题分发与页面刷新控制。（部分完成：页面分发已交给 `PageThemeAdapter`，但主窗口仍保留部分局部更新逻辑）
 
 ### 2. 机制混杂
 
-当前至少有三套机制同时存在：
-
-- 全局 QSS
-- 页面级 `on_theme_changed`
-- 局部 helper 直接生成 `setStyleSheet`
-
-这种混合模式在短期可修问题，但长期一定会导致：
-
-- 谁是主题权威来源不清晰
-- 组件样式规则无法预测
-- 同一语义按钮在不同页面表现不同
+- [ ] 全局 QSS、页面级 `on_theme_changed`、局部 helper 三套机制完成收口。
+- [ ] 主题权威来源对全项目清晰且唯一。
+- [ ] 同一语义组件在不同页面表现一致。
 
 ### 3. 缺少统一语义层
 
-目前主题变量直接以 `accent`、`border`、`warning_bg` 等原始键暴露给页面，页面可以任意组合，缺少约束。
-
-长期来看，应当转为：
-
-- 基础色板 tokens
-- 语义 tokens
-- 组件 tokens
-
-页面只消费组件语义，不直接拼原始颜色。
+- [ ] 页面不再直接消费原始颜色键名。
+- [ ] 主题模型完成“基础色板 tokens / 语义 tokens / 组件 tokens”分层。
+- [ ] 页面只消费组件语义，不直接拼原始颜色。
 
 ---
 
-## 未来目标架构
+## 三、未来目标架构
 
 ```mermaid
 flowchart TD
@@ -73,577 +58,436 @@ flowchart TD
     G --> I[Pages and Dialogs]
 ```
 
----
-
-## 模块拆分方案
-
-## 一、主题核心层
-
-### 1. `gui/theme/tokens.py`
-
-职责：
-
-- 定义主题令牌结构
-- 定义颜色、间距、圆角、字体、状态色等数据模型
-- 把当前无约束的 dict 升级为明确字段的主题对象
-
-建议结构：
-
-- `BasePalette`
-- `SemanticColors`
-- `ComponentTokens`
-- `ThemeTokens`
-
-建议要求：
-
-- 页面不能直接构造或修改 tokens
-- 所有组件样式只能消费 `ThemeTokens`
-- 保证字段命名稳定，避免字符串键散落全项目
-
-### 2. `gui/theme/themes.py`
-
-职责：
-
-- 定义内置主题
-- 提供 light、dark、未来品牌主题或高对比度主题
-
-建议内容：
-
-- `build_light_theme_tokens`
-- `build_dark_theme_tokens`
-- `resolve_theme_tokens`
-
-扩展方向：
-
-- 支持品牌定制
-- 支持用户主题包
-- 支持高对比度无障碍主题
-
-### 3. `gui/theme/preferences.py`
-
-职责：
-
-- 定义主题偏好枚举
-- 管理 `system / light / dark / custom`
-- 统一配置映射逻辑
-
-建议结构：
-
-- `ThemePreference`
-- `ResolvedThemeMode`
-
-### 4. `gui/theme/system_watcher.py`
-
-职责：
-
-- 监听系统深浅色变化
-- 对 Windows 主题切换做统一封装
-- 触发主题管理器刷新
-
-建议要求：
-
-- 与 UI 解耦
-- 只负责检测与发信号，不做样式应用
-- 在不可监听的平台上降级为轮询或手动刷新
-
-### 5. `gui/theme/manager.py`
-
-职责：
-
-- 作为整个主题系统唯一入口
-- 管理当前主题偏好和当前解析后的 tokens
-- 向 UI 广播 `theme_changed`
-- 协调配置层与系统监听层
-
-建议公开能力：
-
-- `set_preference`
-- `get_preference`
-- `get_resolved_mode`
-- `get_tokens`
-- `refresh_from_system`
-- `theme_changed` signal
-
-关键原则：
-
-- 主窗口不再负责主题解析
-- 页面不直接读取配置服务判断当前主题
-- 所有主题变化都经 ThemeManager 广播
+- [x] `Config Preference -> ThemeManager -> ThemeTokens` 主链路已落地。
+- [x] `ThemeTokens -> Global Shell Styler` 主链路已落地。
+- [x] `ThemeTokens -> Page Theme Adapter -> Pages` 主链路已落地。
+- [ ] `ThemeTokens -> Component Style Registry -> Theme Aware Widgets` 主链路全面落地。
+- [ ] `Pages and Dialogs` 全面采用统一 ThemeAware 协议。
 
 ---
 
-## 二、样式基础设施层
+## 四、模块拆分方案检查
 
-### 6. `gui/theme/global_shell.py`
+## 1. 主题核心层
 
-职责：
+### `gui/theme/tokens.py`
 
-- 只负责应用壳层全局样式
-- 包括窗口背景、导航区、容器、滚动条、基础分隔线
+- [x] 已定义 `ThemeTokens` 聚合对象。
+- [x] 已定义 `BasePalette` 与 `SemanticColors` 数据结构。
+- [ ] 已定义并实际接入 `ComponentTokens`。（未完成）
+- [ ] 页面不能直接构造或修改 tokens。（部分完成：约定如此，但尚未完全强制）
+- [ ] 页面完全不再依赖字符串键散落访问。（未完成）
 
-不再负责：
+### `gui/theme/themes.py`
 
-- 复杂业务按钮
-- 页面局部组件
-- 弹窗业务按钮层级
+- [x] 已提供 `build_light_theme_tokens`。
+- [x] 已提供 `build_dark_theme_tokens`。
+- [x] 已提供 `resolve_theme_tokens`。
+- [ ] 支持品牌主题。
+- [ ] 支持用户主题包。
+- [ ] 支持高对比度无障碍主题。
 
-目标：
+### `gui/theme/preferences.py`
 
-把当前巨大的 `_apply_global_style` 缩减为真正适合全局化的部分。
+- [x] 已定义 `ThemePreference`。
+- [x] 已定义 `ResolvedThemeMode`。
+- [ ] 支持 `custom` 偏好。（未完成）
 
-### 7. `gui/theme/component_registry.py`
+### `gui/theme/system_watcher.py`
 
-职责：
+- [x] 已实现 `SystemThemeWatcher`。
+- [x] 已与 UI 解耦，只负责检测与发信号。
+- [x] 在当前实现中不做样式应用。
+- [ ] 在 Windows 上具备更可靠的事件级监听。（当前为轮询方案）
+- [ ] 在不可监听的平台上提供更明确的降级策略说明与测试。
 
-- 统一注册组件语义样式生成器
-- 按组件类型和语义名称返回样式
+### `gui/theme/manager.py`
 
-建议形式：
-
-- `button.primary`
-- `button.subtle`
-- `button.danger`
-- `input.default`
-- `list.console`
-- `banner.success`
-- `dialog.surface`
-
-关键价值：
-
-- 页面不再自己拼 QSS
-- 组件风格可以集中演进
-- 将来支持切换实现策略
-
-### 8. `gui/theme/styles/`
-
-建议拆分子模块：
-
-- `buttons.py`
-- `inputs.py`
-- `lists.py`
-- `cards.py`
-- `dialogs.py`
-- `banners.py`
-- `navigation.py`
-- `shell.py`
-
-每个模块只负责单一组件类别。
-
-### 9. `gui/theme/contracts.py`
-
-职责：
-
-- 定义统一主题接口协议
-- 约束页面、弹窗、语义组件如何响应主题变化
-
-建议定义：
-
-- `ThemeAware`
-- `ThemeAwareWidget`
-- `ThemeAwareDialog`
+- [x] 已作为主题系统唯一入口落地。
+- [x] 已管理当前主题偏好。
+- [x] 已管理当前解析后的 tokens。
+- [x] 已广播 `theme_changed`。
+- [x] 已协调 preference 与 system watcher。
+- [x] 已提供 `set_preference`。
+- [x] 已提供 `get_preference`。
+- [x] 已提供 `get_resolved_mode`。
+- [x] 已提供 `get_tokens`。
+- [x] 已提供 `refresh_from_system`。
+- [ ] 页面不再直接读取配置服务判断当前主题。（部分完成）
 
 ---
 
-## 三、组件语义层
+## 2. 样式基础设施层
 
-### 10. `gui/widgets/themed_button.py`
+### `gui/theme/global_shell.py`
 
-职责：
+- [x] 已落地 `GlobalShellStyler`。
+- [x] 已通过 `shell.py` 生成壳层 QSS。
+- [ ] 全局样式只保留窗口背景、导航区、容器、滚动条、基础分隔线等壳层样式。（部分完成：仍保留输入框 fallback 和按钮 variant fallback）
+- [ ] 不再在这里处理复杂业务按钮。
+- [ ] 不再在这里处理页面局部组件。
+- [ ] 不再在这里处理弹窗业务按钮层级。
 
-- 封装应用按钮
-- 内部支持语义类型、尺寸、紧凑模式、禁用态、危险态、成功态
-- 自动响应主题变化
+### `gui/theme/component_registry.py`
 
-建议接口：
+- [x] 已落地 `ComponentStyleRegistry`。
+- [x] 已注册按钮样式。
+- [x] 已注册输入框样式。
+- [x] 已注册列表样式。
+- [x] 已注册横幅样式。
+- [x] 已注册对话框样式。
+- [ ] 页面统一通过 registry 获取样式。（未完成）
+- [ ] registry 成为组件样式唯一权威入口。（未完成）
 
-- `set_variant`
-- `set_compact`
-- `set_theme_tokens`
+### `gui/theme/styles/`
 
-未来页面中尽量不再直接 new 普通 `QPushButton` 再设置样式。
+- [x] 已拆分 `buttons.py`。
+- [x] 已拆分 `inputs.py`。
+- [x] 已拆分 `lists.py`。
+- [x] 已拆分 `dialogs.py`。
+- [x] 已拆分 `banners.py`。
+- [x] 已拆分 `navigation.py`。
+- [x] 已拆分 `shell.py`。
+- [ ] 已补齐 `cards.py`。（未完成）
 
-### 11. `gui/widgets/themed_input.py`
+### `gui/theme/contracts.py`
 
-职责：
-
-- 统一输入框样式、聚焦态、错误态、只读态
-
-### 12. `gui/widgets/themed_list.py`
-
-职责：
-
-- 统一 console list、event list、普通 list 的视觉层级
-
-### 13. `gui/widgets/themed_banner.py`
-
-职责：
-
-- 统一成功、警告、错误、信息横幅
-
-### 14. `gui/widgets/themed_dialog.py`
-
-职责：
-
-- 为对话框提供统一主题外观
-- 统一标题、说明文、操作按钮区的视觉规范
+- [x] 已定义 `ThemeAware`。
+- [x] 已定义 `ThemeAwareWidget`。
+- [x] 已定义 `ThemeAwareDialog`。
+- [ ] 页面与弹窗已统一采用该协议。（未完成）
+- [ ] 主题刷新统一使用 `apply_theme_tokens / refresh_theme_surfaces / refresh_theme_states` 三段式接口。（未完成）
 
 ---
 
-## 四、页面适配层
+## 3. 组件语义层
 
-### 15. `gui/theme/page_adapter.py`
+### `gui/widgets/themed_button.py`
 
-职责：
+- [ ] 已创建 `ThemedButton`。
+- [ ] 支持语义类型。
+- [ ] 支持尺寸与紧凑模式。
+- [ ] 自动响应主题变化。
+- [ ] 页面中尽量不再直接 new 普通 `QPushButton` 再设置样式。
 
-- 统一将 ThemeManager 广播的 tokens 应用到页面
-- 调用页面定义的受控刷新入口
+### `gui/widgets/themed_input.py`
 
-页面不再自行决定全部刷新顺序，而是由 adapter 驱动。
+- [ ] 已创建 `ThemedInput`。
+- [ ] 统一输入框样式、聚焦态、错误态、只读态。
 
-### 16. 页面统一接口约定
+### `gui/widgets/themed_list.py`
 
-建议所有页面统一实现：
+- [ ] 已创建 `ThemedList`。
+- [ ] 统一 console list、event list、普通 list 的视觉层级。
 
-- `apply_theme_tokens(tokens)`
-- `refresh_theme_surfaces()`
-- `refresh_theme_states()`
+### `gui/widgets/themed_banner.py`
 
-含义：
+- [ ] 已创建 `ThemedBanner`。
+- [ ] 统一成功、警告、错误、信息横幅。
 
-- `apply_theme_tokens` 只接收主题对象并缓存
-- `refresh_theme_surfaces` 刷容器、列表、面板等静态外观
-- `refresh_theme_states` 刷按钮、状态横幅、运行态、禁用态等动态外观
+### `gui/widgets/themed_dialog.py`
 
-这样可以取代当前风格不一的 `on_theme_changed`。
+- [ ] 已创建 `ThemedDialog`。
+- [ ] 为对话框提供统一主题外观。
+- [ ] 统一标题、说明文、操作按钮区的视觉规范。
 
 ---
 
-## 组件语义体系规划
+## 4. 页面适配层
+
+### `gui/theme/page_adapter.py`
+
+- [x] 已落地 `PageThemeAdapter`。
+- [x] 已订阅 `ThemeManager.theme_changed`。
+- [x] 已支持注册页面。
+- [x] 已支持分发 tokens。
+- [x] 已兼容旧版 `on_theme_changed(mode, vars_dict)`。
+- [ ] 分发失败具备充分可观测性。（当前异常仍被静默吞掉）
+
+### 页面统一接口约定
+
+- [x] `DashboardPage` 已接入 `apply_theme_tokens`。
+- [x] `DevicePage` 已接入 `apply_theme_tokens`。
+- [x] `SettingsPage` 已接入 `apply_theme_tokens`。
+- [x] `HistoryPage` 已接入 `apply_theme_tokens`。
+- [x] `DiagnosticsPage` 已接入 `apply_theme_tokens`。
+- [ ] 页面统一实现 `refresh_theme_surfaces()`。（未完成）
+- [ ] 页面统一实现 `refresh_theme_states()`。（未完成）
+- [ ] 页面不再自行决定全部刷新顺序，而是由 adapter 驱动。（部分完成）
+- [ ] 分散的 `on_theme_changed` 已完成迁移并删除。（未完成）
+
+---
+
+## 五、组件语义体系规划检查
 
 ## 按钮
 
-统一语义：
+### 统一语义
 
-- `primary`
-- `secondary`
-- `subtle`
-- `success`
-- `warning`
-- `danger`
-- `ghost`
-- `link`
+- [x] `primary`
+- [x] `secondary`
+- [x] `subtle`
+- [x] `success`
+- [x] `warning`
+- [x] `danger`
+- [x] `ghost`
+- [ ] `link`
 
-统一状态：
+### 统一状态
 
-- default
-- hover
-- pressed
-- disabled
-- selected
-- loading
+- [x] default
+- [x] hover
+- [x] pressed
+- [x] disabled
+- [ ] selected
+- [ ] loading
 
-统一尺寸：
+### 统一尺寸
 
-- sm
-- md
-- lg
-- compact
+- [x] `sm`
+- [x] `md`
+- [x] `lg`
+- [x] `compact`
+- [ ] 页面层已普遍按统一尺寸语义使用。（部分完成）
 
 ## 输入框
 
-统一语义：
+### 统一语义
 
-- default
-- readonly
-- invalid
-- success
-- search
+- [x] `default`
+- [x] `readonly`
+- [x] `invalid`
+- [x] `success`
+- [x] `search`
+- [ ] 页面层已统一迁移到输入框语义样式层。
 
 ## 列表
 
-统一语义：
+### 统一语义
 
-- default list
-- console list
-- event list
-- side list
+- [x] `default list`
+- [x] `console list`
+- [x] `event list`
+- [x] `side list`
+- [ ] 页面层已统一迁移到列表语义样式层。
 
 ## 横幅
 
-统一语义：
+### 统一语义
 
-- info
-- success
-- warning
-- error
+- [x] `info`
+- [x] `success`
+- [x] `warning`
+- [x] `error`
+- [ ] 页面层已统一迁移到横幅语义样式层。
 
 ## 对话框
 
-统一语义：
+### 统一语义
 
-- default dialog
-- confirm dialog
-- wizard dialog
-- utility dialog
-
----
-
-## 跟随系统主题机制重构
-
-当前的 `system` 更接近“取值一次”。
-
-未来建议：
-
-1. ThemeManager 保存用户偏好为 `system`
-2. SystemThemeWatcher 负责监听 Windows 主题变化
-3. 当系统主题变化时，ThemeManager 重新解析实际 mode
-4. ThemeManager 发出统一 `theme_changed(tokens)`
-5. Shell 和页面统一响应，不允许各自重复判断系统主题
-
-关键要求：
-
-- 不在页面中直接读取 QApplication palette 推断主题
-- 不在页面中重复写 `theme == system` 的逻辑
-- system 主题的解析权只归 ThemeManager
+- [ ] `default dialog` 全面落地。
+- [ ] `confirm dialog` 全面落地。
+- [ ] `wizard dialog` 全面落地。
+- [ ] `utility dialog` 全面落地。
+- [x] `QMessageBox` 已接入统一 message box 样式。
+- [ ] `QrCodeScanDialog` 已迁移到统一 dialog 语义体系。
+- [ ] `QrPairDialog` 已迁移到统一 dialog 语义体系。
 
 ---
 
-## 测试体系规划
+## 六、跟随系统主题机制重构检查
+
+- [x] ThemeManager 保存用户偏好为 `system / light / dark`。
+- [x] `SystemThemeWatcher` 负责监听并触发刷新。
+- [x] 系统主题变化时，ThemeManager 会重新解析实际 mode。
+- [x] ThemeManager 会发出统一 `theme_changed(tokens)`。
+- [x] Shell 和页面已经统一响应 ThemeManager 广播。（部分完成：页面仍有兼容层）
+- [ ] 页面中不再直接读取 `QApplication palette` 推断主题。（部分完成：watcher 仍基于 palette 轮询）
+- [ ] 页面中不再重复写 `theme == system` 逻辑。（大体完成，但仍需持续检查）
+- [ ] `system` 主题解析仅保留最终形态实现。（当前为可用版，还未完全定型）
+
+---
+
+## 七、测试体系规划检查
 
 ## 1. 主题切换单元测试
 
-验证：
-
-- `system / dark / light` 的解析逻辑正确
-- tokens 生成稳定
-- ThemeManager 在 preference 变化和系统主题变化时广播正确
+- [ ] 覆盖 `system / dark / light` 解析逻辑。
+- [ ] 覆盖 tokens 生成稳定性。
+- [ ] 覆盖 ThemeManager 在 preference / system 变化时广播行为。
 
 ## 2. 组件样式快照测试
 
-验证：
-
-- 按钮在 light / dark 下的 primary、danger、disabled 样式一致
-- 输入框、列表、横幅、对话框样式一致
+- [ ] 覆盖按钮在 light / dark 下的 primary、danger、disabled 样式。
+- [ ] 覆盖输入框、列表、横幅、对话框样式。
 
 ## 3. 关键页面截图回归
 
-优先覆盖：
-
-- DashboardPage
-- DevicePage
-- SettingsPage
-- HistoryPage
-- DiagnosticsPage
-- QrCodeScanDialog
-- QrPairDialog
-
-建议做法：
-
-- 每页浅色和深色各一组截图
-- 关键状态额外覆盖
-- 对比按钮填充、边框、禁用态、对比度
+- [ ] 覆盖 `DashboardPage`。
+- [ ] 覆盖 `DevicePage`。
+- [ ] 覆盖 `SettingsPage`。
+- [ ] 覆盖 `HistoryPage`。
+- [ ] 覆盖 `DiagnosticsPage`。
+- [ ] 覆盖 `QrCodeScanDialog`。
+- [ ] 覆盖 `QrPairDialog`。
+- [ ] 每页浅色和深色各一组截图。
+- [ ] 对关键状态做额外覆盖。
 
 ## 4. 主题切换流程测试
 
-验证：
-
-- 应用运行中切换主题不会丢状态
-- 对话框打开时切换主题不会残留旧样式
-- 列表、按钮、输入框不会局部失效
+- [ ] 验证应用运行中切换主题不会丢状态。
+- [ ] 验证对话框打开时切换主题不会残留旧样式。
+- [ ] 验证列表、按钮、输入框不会局部失效。
 
 ---
 
-## 分阶段迁移顺序
+## 八、分阶段迁移顺序检查
 
 ## Phase 0 观测与护栏
 
-目标：
-
-- 先把当前主题问题可观测化
-- 建立基准截图和关键页面清单
-
-输出：
-
-- 关键页面主题截图基线
-- 主题热点页面列表
-- 现有 variant 和局部 helper 清单
+- [ ] 建立关键页面主题截图基线。
+- [ ] 输出主题热点页面列表。
+- [ ] 输出现有 variant 和局部 helper 清单。
 
 ## Phase 1 建立 ThemeEngine 基础设施
 
-目标：
-
-- 新建 ThemeManager、ThemeTokens、SystemThemeWatcher、ComponentStyleRegistry
-- 不立即大面积改页面
-
-输出：
-
-- 新主题基础设施落地
-- 旧入口保留兼容层
+- [x] 新建 ThemeManager。
+- [x] 新建 ThemeTokens。
+- [x] 新建 SystemThemeWatcher。
+- [x] 新建 ComponentStyleRegistry。
+- [x] 保留旧入口兼容层。
+- [x] 新主题基础设施已落地。
 
 ## Phase 2 收缩全局 QSS
 
-目标：
-
-- 把壳层样式保留在 global shell
-- 移除不稳定的复杂组件全局语义渲染逻辑
-
-重点迁移：
-
-- 按钮 variant 的复杂规则
-- 对话框按钮样式
-- 部分页内 role + variant 混搭逻辑
+- [x] 壳层样式已保留在 global shell。
+- [ ] 已移除复杂组件的全局语义渲染逻辑。（未完成）
+- [ ] 已移除按钮 variant 的复杂全局规则。（未完成）
+- [ ] 已完成对话框按钮样式迁移。（未完成）
+- [ ] 已清理页内 role + variant 混搭逻辑。（未完成）
 
 ## Phase 3 完成按钮系统迁移
 
-目标：
-
-- 用组件样式注册层或 ThemedButton 接管所有业务按钮
-
-优先迁移页面：
-
-1. DashboardPage
-2. DevicePage
-3. SettingsPage
-4. HistoryPage
-5. DiagnosticsPage
-
-原因：
-
-- 当前主题问题最集中
-- 这些页面已经有局部样式化的现实基础
+- [x] `DashboardPage` 按钮迁移到新样式函数。
+- [x] `DevicePage` 按钮迁移到新样式函数。
+- [x] `SettingsPage` 按钮迁移到新样式函数。
+- [x] `HistoryPage` 按钮迁移到新样式函数。
+- [x] `DiagnosticsPage` 按钮迁移到新样式函数。
+- [ ] 所有业务按钮统一由组件注册层或 `ThemedButton` 接管。（未完成）
 
 ## Phase 4 输入框、列表、横幅、弹窗迁移
 
-目标：
-
-- 统一输入、列表、横幅和对话框体系
-
-优先迁移：
-
-- QrCodeScanDialog
-- QrPairDialog
-- QMessageBox 主题外观
-- 各页面日志面板和状态横幅
+- [ ] 输入框统一迁移完成。
+- [ ] 列表统一迁移完成。
+- [ ] 横幅统一迁移完成。
+- [ ] `QrCodeScanDialog` 迁移完成。
+- [ ] `QrPairDialog` 迁移完成。
+- [ ] `QMessageBox` 以外的 dialog 体系迁移完成。
 
 ## Phase 5 页面统一主题接口迁移
 
-目标：
-
-- 把现有分散的 `on_theme_changed` 迁移到统一页面主题接口
-- 页面只描述主题应用点，不再自行决定全部 QSS 拼接细节
+- [ ] 页面统一迁移到 `apply_theme_tokens / refresh_theme_surfaces / refresh_theme_states`。
+- [ ] 页面只描述主题应用点，不再自行决定全部 QSS 拼接细节。
+- [ ] 现有分散的 `on_theme_changed` 已迁移完成并删除。
 
 ## Phase 6 系统主题监听上线
 
-目标：
-
-- 真正支持运行中跟随 Windows 深浅色切换
-- 验证页面和对话框无残留状态
+- [ ] 真正支持运行中跟随 Windows 深浅色切换的最终实现已完成验证。
+- [ ] 页面切换时无残留状态。
+- [ ] 对话框切换时无残留状态。
+- [ ] 列表、按钮、输入框切换稳定。
 
 ## Phase 7 清理兼容层
 
-目标：
-
-- 移除旧的 variant 依赖
-- 移除冗余局部 helper
-- 移除页面里残留的硬编码颜色
+- [ ] 移除旧的 variant 依赖。
+- [ ] 移除冗余局部 helper。
+- [ ] 移除页面里残留的硬编码颜色。
+- [ ] 移除 `gui/utils/button_styles.py`。
+- [ ] 移除 legacy dict 兼容依赖。
 
 ---
 
-## 推荐实施顺序细化
+## 九、推荐实施顺序细化检查
 
 ### 第一步
 
-先实现：
-
-- `ThemeTokens`
-- `ThemeManager`
-- `themes.py`
-- `component_registry.py`
-
-但暂时保留现有页面 `on_theme_changed` 兼容。
+- [x] 实现 `ThemeTokens`。
+- [x] 实现 `ThemeManager`。
+- [x] 实现 `themes.py`。
+- [x] 实现 `component_registry.py`。
+- [x] 暂时保留现有页面 `on_theme_changed` 兼容。
 
 ### 第二步
 
-把当前已有的按钮 helper 合并到统一组件样式层：
-
-- 把 `gui/utils/button_styles.py` 升级为 `gui/theme/styles/buttons.py`
-- 把 DashboardPage 内部重复按钮 helper 清出页面
-- DevicePage 私有按钮 helper 改为统一引用组件样式层
+- [x] 把已有按钮 helper 合并到统一按钮样式层。（部分完成：业务页面按钮主路径已切到新样式函数，但兼容文件仍保留）
+- [x] `DashboardPage` 页面内重复按钮 helper 已清出页面。
+- [x] `DevicePage` 私有按钮 helper 已清出页面。
+- [ ] `gui/utils/button_styles.py` 已删除。
 
 ### 第三步
 
-迁移最容易出问题的页面：
-
-- DashboardPage
-- DevicePage
-
-这两个页面覆盖了：
-
-- 动态按钮状态
-- 弹窗
-- 输入框
-- 列表
-- 状态栏
-
-它们适合作为重构样板。
+- [x] `DashboardPage` 作为第一批迁移样板。
+- [x] `DevicePage` 作为第一批迁移样板。
+- [ ] 两页已同时完成按钮、弹窗、输入框、列表、状态栏的完整主题迁移。（未完成）
 
 ### 第四步
 
-迁移中低复杂页面：
-
-- SettingsPage
-- HistoryPage
-- DiagnosticsPage
+- [x] `SettingsPage` 按钮迁移完成。
+- [x] `HistoryPage` 按钮迁移完成。
+- [x] `DiagnosticsPage` 按钮迁移完成。
+- [ ] 中低复杂页面完成统一主题接口迁移。（未完成）
 
 ### 第五步
 
-统一对话框与消息框体系：
-
-- QrCodeScanDialog
-- QrPairDialog
-- QMessageBox
-- 未来所有 utility dialogs
+- [ ] 统一对话框与消息框体系。
+- [ ] `QrCodeScanDialog` 迁移完成。
+- [ ] `QrPairDialog` 迁移完成。
+- [x] `QMessageBox` 已统一到 message box 样式入口。
+- [ ] 未来 utility dialogs 统一纳入。
 
 ### 第六步
 
-接入系统主题监听和截图回归。
+- [ ] 接入系统主题监听最终形态。
+- [ ] 接入截图回归。
 
 ---
 
-## 迁移中的兼容策略
-
-为了支持渐进替换，建议保留三层兼容：
+## 十、迁移中的兼容策略检查
 
 ### 兼容层 A
 
-`MainWindow.apply_theme` 暂时继续存在，但内部逐步改为委托 ThemeManager。
+- [x] `MainWindow.apply_theme` 暂时继续存在。
+- [x] `MainWindow.apply_theme` 内部已改为委托 `ThemeManager`。
 
 ### 兼容层 B
 
-页面暂时仍可保留 `on_theme_changed`，但实现内部改为调用统一 adapter。
+- [x] 页面暂时仍保留 `on_theme_changed`。
+- [ ] 页面内部已统一改为调用 adapter + 三段式刷新协议。（未完成）
 
 ### 兼容层 C
 
-保留旧按钮 helper 一段时间，但必须标记 deprecated，并限制新代码继续使用。
+- [x] 保留旧按钮 helper 一段时间。
+- [x] 旧按钮 helper 已标记 deprecated。
+- [ ] 已限制新代码继续使用旧 helper。（部分完成：已有约定，但仍待彻底清理）
 
 ---
 
-## 重构完成后的验收标准
+## 十一、重构完成后的验收标准检查
 
-- 主题偏好解析只有一个权威入口
-- 系统主题监听只有一个权威入口
-- 页面不再直接拼接核心语义按钮样式
-- 新页面接入主题不需要复制旧页面 `on_theme_changed`
-- 关键页面深浅色截图稳定
-- 对话框与主页面主题表现一致
-- 运行中切换主题不会出现局部残留和失效
+- [x] 主题偏好解析只有一个权威入口。
+- [ ] 系统主题监听只有一个成熟稳定的权威入口。（部分完成）
+- [ ] 页面不再直接拼接核心语义按钮样式。（部分完成：按钮已大幅迁移，但其他组件仍有手写 QSS）
+- [ ] 新页面接入主题不需要复制旧页面 `on_theme_changed`。
+- [ ] 关键页面深浅色截图稳定。
+- [ ] 对话框与主页面主题表现一致。
+- [ ] 运行中切换主题不会出现局部残留和失效。
 
 ---
 
-## 推荐下一步实施任务
+## 十二、推荐下一步实施任务
 
-1. 搭建 `gui/theme/` 目录与核心数据结构
-2. 将 `MainWindow.apply_theme` 重构为委托 ThemeManager
-3. 将按钮样式迁移到统一的组件样式层
-4. 用 DashboardPage 和 DevicePage 作为第一批迁移样板
-5. 建立主题截图回归基线
+- [ ] 把页面刷新协议统一到 `apply_theme_tokens / refresh_theme_surfaces / refresh_theme_states`。
+- [ ] 把列表、输入框、横幅、对话框从页面手写 QSS 迁到 `gui/theme/styles/` 或 themed widgets。
+- [ ] 清理 `shell.py` 中仍保留的业务按钮 fallback 与旧 variant 规则。
+- [ ] 为 `PageThemeAdapter` 增加主题分发失败日志与可观测性。
+- [ ] 建立主题切换单元测试、样式快照与截图回归基线。

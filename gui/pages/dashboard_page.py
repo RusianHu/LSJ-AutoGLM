@@ -36,6 +36,15 @@ from PySide6.QtWidgets import (
 
 from gui.services.task_service import TaskState
 from gui.services.mirror_service import MirrorMode, MirrorState
+from gui.theme.tokens import ThemeTokens
+from gui.theme.themes import resolve_theme_tokens
+from gui.theme.styles.buttons import (
+    btn_primary,
+    btn_danger,
+    btn_warning,
+    btn_success,
+    btn_subtle,
+)
 
 
 # 任务状态 -> (显示文字, 颜色)
@@ -71,7 +80,8 @@ class DashboardPage(QWidget):
         self._mirror = services.get("mirror")
         self._config = services.get("config")
         self._theme_mode = "dark"
-        self._theme_vars = {}
+        self._theme_tokens = resolve_theme_tokens(self._theme_mode)
+        self._theme_vars = self._theme_tokens.to_legacy_dict()
         self._last_task_status = ("空闲", "#8b949e")
         self._last_device_status = ("未检测", "#8b949e")
         self._last_mirror_status = ("未启动", "#8b949e")
@@ -420,9 +430,19 @@ class DashboardPage(QWidget):
             }}
         """
 
+    def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
+        """
+        新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
+        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        """
+        self._theme_tokens = tokens
+        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
+
     def on_theme_changed(self, theme: str, theme_vars: dict):
         self._theme_mode = theme
-        self._theme_vars = theme_vars or {}
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
         v = self._theme_vars
 
         # 工具栏与状态栏仍由全局 role 选择器控制容器外观；
@@ -1008,17 +1028,17 @@ class DashboardPage(QWidget):
             mirror_running = bool(self._mirror and self._mirror.is_running)
 
         btn_specs = (
-            (getattr(self, "_btn_start", None), self._btn_primary_style()),
-            (getattr(self, "_btn_stop", None), self._btn_danger_style()),
+            (getattr(self, "_btn_start", None), btn_primary(self._theme_tokens)),
+            (getattr(self, "_btn_stop", None), btn_danger(self._theme_tokens)),
             (
                 getattr(self, "_btn_pause", None),
-                self._btn_success_style() if task_state == TaskState.PAUSED else self._btn_warning_style(),
+                btn_success(self._theme_tokens) if task_state == TaskState.PAUSED else btn_warning(self._theme_tokens),
             ),
-            (getattr(self, "_btn_takeover", None), self._btn_warning_style()),
-            (getattr(self, "_btn_resume_exec", None), self._btn_primary_style()),
+            (getattr(self, "_btn_takeover", None), btn_warning(self._theme_tokens)),
+            (getattr(self, "_btn_resume_exec", None), btn_primary(self._theme_tokens)),
             (
                 getattr(self, "_btn_mirror_toggle", None),
-                self._btn_danger_style(compact=True) if mirror_running else self._btn_subtle_style(compact=True),
+                btn_danger(self._theme_tokens, size="compact") if mirror_running else btn_subtle(self._theme_tokens, size="compact"),
             ),
         )
         for btn, style in btn_specs:
@@ -1026,185 +1046,4 @@ class DashboardPage(QWidget):
                 btn.setStyleSheet(style)
                 btn.update()
 
-    def _btn_style_template(
-        self,
-        *,
-        bg: str,
-        hover_bg: str,
-        pressed_bg: str,
-        border: str,
-        hover_border: str,
-        pressed_border: str,
-        text: str,
-        compact: bool = False,
-        disabled_bg: str = "",
-        disabled_border: str = "",
-        disabled_text: str = "",
-    ) -> str:
-        is_light = self._theme_mode == "light"
-        v = self._theme_vars or {}
-        radius = 6 if compact else 8
-        min_height = 22 if compact else 32
-        padding = "0 10px" if compact else "0 14px"
-        font_weight = 500 if compact else 600
-        disabled_bg = disabled_bg or ("#eef2f7" if is_light else "#161b22")
-        disabled_border = disabled_border or ("#d5deea" if is_light else "#21262d")
-        disabled_text = disabled_text or v.get("text_muted", "#94a3b8" if is_light else "#484f58")
 
-        return f"""
-            QPushButton {{
-                background-color:{bg};
-                border:1px solid {border};
-                border-radius:{radius}px;
-                color:{text};
-                padding:{padding};
-                min-height:{min_height}px;
-                font-size:12px;
-                font-weight:{font_weight};
-            }}
-            QPushButton:hover {{
-                background-color:{hover_bg};
-                border-color:{hover_border};
-            }}
-            QPushButton:pressed {{
-                background-color:{pressed_bg};
-                border-color:{pressed_border};
-            }}
-            QPushButton:disabled {{
-                background-color:{disabled_bg};
-                border-color:{disabled_border};
-                color:{disabled_text};
-            }}
-        """
-
-    def _btn_primary_style(self, compact: bool = False) -> str:
-        v = self._theme_vars or {}
-        if self._theme_mode == "light":
-            return self._btn_style_template(
-                bg=v.get("accent", "#2563eb"),
-                hover_bg="#1d4ed8",
-                pressed_bg="#1e40af",
-                border=v.get("accent", "#2563eb"),
-                hover_border="#1d4ed8",
-                pressed_border="#1e40af",
-                text="#ffffff",
-                compact=compact,
-                disabled_bg="#dbe7ff",
-                disabled_border="#c7d7fe",
-                disabled_text="#8aa1d1",
-            )
-        return self._btn_style_template(
-            bg=v.get("accent", "#1f6feb"),
-            hover_bg="#388bfd",
-            pressed_bg="#1b62d1",
-            border=v.get("accent", "#1f6feb"),
-            hover_border="#388bfd",
-            pressed_border="#1b62d1",
-            text="#ffffff",
-            compact=compact,
-        )
-
-    def _btn_danger_style(self, compact: bool = False) -> str:
-        v = self._theme_vars or {}
-        if self._theme_mode == "light":
-            return self._btn_style_template(
-                bg=v.get("danger_bg", "#fee2e5"),
-                hover_bg="#fecdd3",
-                pressed_bg="#fda4af",
-                border=v.get("danger_border", "#c9525a"),
-                hover_border=v.get("danger", "#b91c1c"),
-                pressed_border=v.get("danger", "#b91c1c"),
-                text=v.get("danger", "#b91c1c"),
-                compact=compact,
-            )
-        return self._btn_style_template(
-            bg="#21262d",
-            hover_bg="#3d1a1a",
-            pressed_bg="#4a1d1d",
-            border=v.get("danger_border", "#6e2b32"),
-            hover_border=v.get("danger", "#f85149"),
-            pressed_border=v.get("danger", "#f85149"),
-            text=v.get("danger", "#f85149"),
-            compact=compact,
-            disabled_border="#21262d",
-        )
-
-    def _btn_warning_style(self, compact: bool = False) -> str:
-        v = self._theme_vars or {}
-        if self._theme_mode == "light":
-            return self._btn_style_template(
-                bg=v.get("warning_bg", "#fef3c0"),
-                hover_bg="#fde68a",
-                pressed_bg="#fcd34d",
-                border=v.get("warning_border", "#c28b00"),
-                hover_border=v.get("warning", "#92400e"),
-                pressed_border=v.get("warning", "#92400e"),
-                text=v.get("warning", "#92400e"),
-                compact=compact,
-            )
-        return self._btn_style_template(
-            bg="#21262d",
-            hover_bg="#3d3200",
-            pressed_bg="#4a3d00",
-            border=v.get("warning_border", "#6e4800"),
-            hover_border=v.get("warning", "#e3b341"),
-            pressed_border=v.get("warning", "#e3b341"),
-            text=v.get("warning", "#e3b341"),
-            compact=compact,
-            disabled_border="#21262d",
-        )
-
-    def _btn_success_style(self, compact: bool = False) -> str:
-        v = self._theme_vars or {}
-        if self._theme_mode == "light":
-            return self._btn_style_template(
-                bg=v.get("success_bg", "#dcfce7"),
-                hover_bg="#bbf7d0",
-                pressed_bg="#86efac",
-                border=v.get("success_border", "#16a34a"),
-                hover_border=v.get("success", "#166534"),
-                pressed_border=v.get("success", "#166534"),
-                text=v.get("success", "#166534"),
-                compact=compact,
-            )
-        return self._btn_style_template(
-            bg="#0f2418",
-            hover_bg="#12351f",
-            pressed_bg="#184828",
-            border=v.get("success_border", "#238636"),
-            hover_border=v.get("success", "#3fb950"),
-            pressed_border=v.get("success", "#3fb950"),
-            text=v.get("success", "#3fb950"),
-            compact=compact,
-            disabled_border="#21262d",
-        )
-
-    def _btn_subtle_style(self, compact: bool = False) -> str:
-        v = self._theme_vars or {}
-        if self._theme_mode == "light":
-            return self._btn_style_template(
-                bg=v.get("bg_elevated", "#edf2f7"),
-                hover_bg="#e2e8f0",
-                pressed_bg="#d9e2ec",
-                border=v.get("border", "#d5deea"),
-                hover_border=v.get("accent", "#2563eb"),
-                pressed_border=v.get("accent", "#2563eb"),
-                text=v.get("text_primary", "#1f2937"),
-                compact=compact,
-                disabled_bg="#f8fafc",
-                disabled_border="#e2e8f0",
-                disabled_text="#94a3b8",
-            )
-        return self._btn_style_template(
-            bg=v.get("bg_btn", "#161b22"),
-            hover_bg=v.get("bg_elevated", "#1b2432"),
-            pressed_bg="#0f1724",
-            border=v.get("border", "#30363d"),
-            hover_border=v.get("accent", "#4f8cff"),
-            pressed_border=v.get("accent", "#4f8cff"),
-            text=v.get("text_primary", "#c9d1d9"),
-            compact=compact,
-            disabled_bg="#161b22",
-            disabled_border="#21262d",
-            disabled_text="#484f58",
-        )

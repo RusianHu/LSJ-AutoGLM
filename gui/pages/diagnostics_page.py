@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.utils.button_styles import primary_btn_style
+from gui.theme.tokens import ThemeTokens
+from gui.theme.themes import resolve_theme_tokens
+from gui.theme.styles.buttons import btn_primary
 
 
 class _DiagWorker(QThread):
@@ -175,7 +177,8 @@ class DiagnosticsPage(QWidget):
         self._config = services.get("config")
         self._worker: _DiagWorker = None
         self._theme_mode = "dark"
-        self._theme_vars = {}
+        self._theme_tokens = resolve_theme_tokens(self._theme_mode)
+        self._theme_vars = self._theme_tokens.to_legacy_dict()
         self._last_summary_state = ("点击「一键检查」开始诊断", "idle")
         self._build_ui()
         self._apply_action_button_styles()
@@ -250,12 +253,22 @@ class DiagnosticsPage(QWidget):
 
     def _apply_action_button_styles(self):
         if hasattr(self, "_btn_run"):
-            self._btn_run.setStyleSheet(primary_btn_style(self._theme_mode, self._theme_vars))
+            self._btn_run.setStyleSheet(btn_primary(self._theme_tokens))
             self._btn_run.update()
+
+    def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
+        """
+        新版主题接口 - 由 PageThemeAdapter / ThemeManager 驱动。
+        直接缓存 ThemeTokens，再兼容旧式局部样式刷新逻辑。
+        """
+        self._theme_tokens = tokens
+        self.on_theme_changed(tokens.mode, tokens.to_legacy_dict())
 
     def on_theme_changed(self, theme: str, theme_vars: dict):
         self._theme_mode = theme
-        self._theme_vars = theme_vars or {}
+        if getattr(self, "_theme_tokens", None) is None or self._theme_tokens.mode != theme:
+            self._theme_tokens = resolve_theme_tokens(theme)
+        self._theme_vars = theme_vars or self._theme_tokens.to_legacy_dict()
         self._apply_action_button_styles()
         if hasattr(self, "_result_list"):
             self._result_list.setStyleSheet(self._result_list_style())
