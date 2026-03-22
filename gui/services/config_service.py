@@ -78,15 +78,18 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_MODELSCOPE_API_KEY": {"label": "ModelScope Key", "sensitive": True, "editable": True},
         "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": {"label": "ModelScope 备用 Key", "sensitive": True, "editable": True},
         "OPEN_AUTOGLM_ZHIPU_API_KEY": {"label": "智谱 API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_API_KEY": {"label": "中转站 API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_BASE_URL": {"label": "中转站 Base URL", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_MODEL": {"label": "中转站模型", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_API_KEY": {"label": "API Key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": {"label": "API Key (可选)", "sensitive": True, "editable": True},
         "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LANG": {"label": "语言", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_MAX_STEPS": {"label": "最大步数", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出 (think/answer 标签)", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "sensitive": False, "editable": True, "boolean": True},
         "OPEN_AUTOGLM_THEME": {"label": "界面主题", "sensitive": False, "editable": False},
     }
 
@@ -138,8 +141,8 @@ class ConfigService(QObject):
         {
             "id": "local",
             "name": "本地 (localhost)",
-            "url_field": "",
-            "model_field": "",
+            "url_field": "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL",
+            "model_field": "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL",
             "default_url": "http://127.0.0.1:8000/v1",
             "default_model": "local-model",
             "use_thirdparty": True,
@@ -435,11 +438,11 @@ class ConfigService(QObject):
 
     def set_active_channel(self, channel_id: str) -> bool:
         """
-        切换到指定渠道预设，并写回 .env。
+        快速切换到指定渠道，并写回当前生效配置。
         - BASE_URL/MODEL 使用该渠道在 .env 中的专用字段值（或 default 值）
         - 若渠道对应的 api_key_field 已有值，同步到 OPEN_AUTOGLM_API_KEY
-        - 更新 USE_THIRDPARTY_PROMPT / COMPRESS_IMAGE
-        - 「自定义」模式不覆盖 url/model，仅更新提示词标志
+        - 不覆盖 USE_THIRDPARTY_PROMPT / COMPRESS_IMAGE 等用户单独保存的运行开关
+        - 「自定义」模式不主动改写当前配置
         返回 True 表示切换成功。
         """
         preset = next(
@@ -449,11 +452,6 @@ class ConfigService(QObject):
             return False
 
         if channel_id == "custom":
-            # 自定义模式：不覆盖 url/model，仅重置提示词标志
-            try:
-                self.set_many({"OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false"})
-            except Exception:
-                pass
             return True
 
         # 动态读取该渠道实际的 URL 和模型（含用户在 .env 中已自定义的值）
@@ -463,8 +461,6 @@ class ConfigService(QObject):
         updates: Dict[str, str] = {
             "OPEN_AUTOGLM_BASE_URL": resolved_url,
             "OPEN_AUTOGLM_MODEL": resolved_model,
-            "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "true" if preset["use_thirdparty"] else "false",
-            "OPEN_AUTOGLM_COMPRESS_IMAGE": "true" if preset["compress_image"] else "false",
         }
         # 若渠道专用 api_key_field 有值，同步到通用 API_KEY
         key_field = preset.get("api_key_field", "")
