@@ -25,6 +25,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Callable, List, Optional
 
+try:
+    import psutil as _psutil
+except ImportError:  # psutil 未安装时优雅降级（进程挂起不可用）
+    _psutil = None
+
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
 from gui.utils.runtime import app_root
@@ -287,19 +292,33 @@ class TaskService(QObject):
         self._terminate_process()
 
     def pause_task(self, reason: str = "用户暂停"):
-        """暂停任务（逻辑暂停，进程继续运行但 GUI 标记暂停态）"""
+        """暂停任务：挂起子进程（自动化真正停止）并标记 PAUSED 态。
+
+        先尝试系统级挂起整个进程树，无论是否成功都标记 GUI 为暂停态。
+        挂起失败时（psutil 不可用或权限不足）向日志输出警告。
+        """
         if self._state != TaskState.RUNNING:
             return
+        # 停止卡住检测
+        self._stuck_timer.stop()
+        # 先做系统调用再改状态（避免假 PAUSED）
+        suspended = self._suspend_process()
+        if not suspended and self._process is not None and _psutil is not None:
+            self.log_line.emit("[WARN] 进程树挂起失败，人工接管可能无法完全停止自动化")
         self._set_state(TaskState.PAUSED)
         self._add_event("user_pause", f"任务暂停: {reason}",
                         message_key="event.user_pause", message_params={})
-        # 暂停时停止卡住检测
-        self._stuck_timer.stop()
 
     def resume_task(self):
-        """恢复任务"""
+        """恢复任务：检查进程存活 -> 恢复进程树 -> 切回 RUNNING 态。"""
         if self._state != TaskState.PAUSED:
             return
+        # 若进程在暂停期间已退出，直接走收尾流程而非强切 RUNNING
+        if self._process is not None and self._process.poll() is not None:
+            self._poll_process(force=True)
+            return
+        # 先恢复被挂起的进程树，再改状态
+        self._resume_process()
         self._set_state(TaskState.RUNNING)
         self._add_event("user_resume", "任务恢复执行",
                         message_key="event.user_resume", message_params={})
@@ -461,6 +480,10 @@ class TaskService(QObject):
         if self._process is None:
             return
 
+        # 若进程处于挂起状态，先恢复再发送终止信号
+        # （挂起的进程在部分系统上无法接收 SIGTERM）
+        self._resume_process()
+
         # 阶段 1：优雅终止
         try:
             if sys.platform == "win32":
@@ -475,6 +498,74 @@ class TaskService(QObject):
 
         # 阶段 2：等待（非阻塞，通过 QTimer 延迟强杀）
         QTimer.singleShot(self.TERMINATE_WAIT_MS, self._force_kill_process)
+
+    def _suspend_process(self) -> bool:
+        """递归挂起整个进程树（父进程 + 所有后代）。
+
+        Windows: SuspendThread；Linux/macOS: SIGSTOP。
+        先挂起叶子节点再挂起父节点，避免父挂起后无法枚举子进程。
+
+        Returns:
+            True  - 至少父进程挂起成功
+            False - psutil 不可用或权限不足等原因失败
+        """
+        if self._process is None or _psutil is None:
+            return False
+        try:
+            parent = _psutil.Process(self._process.pid)
+        except _psutil.NoSuchProcess:
+            return False
+        # 先递归挂起所有子进程（避免父挂起后子进程继续独立运行）
+        try:
+            children = parent.children(recursive=True)
+        except Exception:
+            children = []
+        for child in reversed(children):  # 叶子节点优先
+            try:
+                child.suspend()
+            except Exception:
+                pass
+        # 最后挂起父进程
+        try:
+            parent.suspend()
+            return True
+        except Exception as exc:
+            self.log_line.emit(f"[WARN] _suspend_process 失败: {exc}")
+            return False
+
+    def _resume_process(self) -> bool:
+        """递归恢复整个进程树（父进程 + 所有后代）。
+
+        先恢复父进程，再恢复子进程；对未挂起进程调用是幂等的。
+
+        Returns:
+            True  - 至少父进程恢复成功（或进程已不存在）
+            False - psutil 不可用或权限不足等原因失败
+        """
+        if self._process is None or _psutil is None:
+            return False
+        try:
+            parent = _psutil.Process(self._process.pid)
+        except _psutil.NoSuchProcess:
+            return True  # 进程已退出，视为无需恢复
+        # 先恢复父进程
+        ok = True
+        try:
+            parent.resume()
+        except Exception as exc:
+            self.log_line.emit(f"[WARN] _resume_process 失败: {exc}")
+            ok = False
+        # 再恢复子进程
+        try:
+            children = parent.children(recursive=True)
+        except Exception:
+            children = []
+        for child in children:
+            try:
+                child.resume()
+            except Exception:
+                pass
+        return ok
 
     def _force_kill_process(self):
         """若进程仍未退出，强制 SIGKILL"""
