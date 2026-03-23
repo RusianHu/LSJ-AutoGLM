@@ -361,3 +361,68 @@ class TestConfigServiceBuildCommandArgs:
 
         idx = args.index("--lang")
         assert args[idx + 1] == "cn"
+
+
+class TestConfigServiceChannelPersistence:
+    """验证 GUI 渠道配置会持久化到渠道专属 .env 字段。"""
+
+    @staticmethod
+    def _make_service(values: dict):
+        svc = ConfigService.__new__(ConfigService)
+        svc._cache = dict(values)
+        svc.CHANNEL_PRESETS = ConfigService.CHANNEL_PRESETS
+        svc.get = lambda key, default="": svc._cache.get(key, default)
+        return svc
+
+    def test_build_channel_updates_copies_effective_values_to_modelscope_fields(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_BASE_URL": "https://modelscope.custom/v1",
+                "OPEN_AUTOGLM_MODEL": "custom-ms-model",
+                "OPEN_AUTOGLM_API_KEY": "ms-primary",
+                "OPEN_AUTOGLM_BACKUP_API_KEY": "ms-backup",
+                "OPEN_AUTOGLM_MODELSCOPE_BASE_URL": "https://api-inference.modelscope.cn/v1",
+                "OPEN_AUTOGLM_MODELSCOPE_MODEL": "ZhipuAI/AutoGLM-Phone-9B",
+                "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
+                "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
+            }
+        )
+
+        updates = ConfigService.build_channel_updates(svc, "modelscope")
+
+        assert updates == {
+            "OPEN_AUTOGLM_MODELSCOPE_BASE_URL": "https://modelscope.custom/v1",
+            "OPEN_AUTOGLM_MODELSCOPE_MODEL": "custom-ms-model",
+            "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "ms-primary",
+            "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "ms-backup",
+        }
+
+    def test_set_active_channel_reads_saved_local_channel_values(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_BASE_URL": "https://api-inference.modelscope.cn/v1",
+                "OPEN_AUTOGLM_MODEL": "ZhipuAI/AutoGLM-Phone-9B",
+                "OPEN_AUTOGLM_API_KEY": "ms-key",
+                "OPEN_AUTOGLM_BACKUP_API_KEY": "ms-backup",
+                "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": "http://127.0.0.1:2345/v1",
+                "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": "blcacola/autoglm-phone-9b",
+                "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": "local-key",
+            }
+        )
+        captured = {}
+
+        def _set_many(updates: dict):
+            captured.update(updates)
+            svc._cache.update(updates)
+
+        svc.set_many = _set_many
+
+        ok = ConfigService.set_active_channel(svc, "local")
+
+        assert ok is True
+        assert captured == {
+            "OPEN_AUTOGLM_BASE_URL": "http://127.0.0.1:2345/v1",
+            "OPEN_AUTOGLM_MODEL": "blcacola/autoglm-phone-9b",
+            "OPEN_AUTOGLM_API_KEY": "local-key",
+            "OPEN_AUTOGLM_BACKUP_API_KEY": "",
+        }

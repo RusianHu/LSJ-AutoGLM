@@ -250,7 +250,17 @@ class MainWindow(QMainWindow):
         """主题切换按钮点击 -> 写入配置 -> ThemeManager 广播"""
         cfg = self._services.get("config")
         if cfg:
-            cfg.set("OPEN_AUTOGLM_THEME", mode)
+            try:
+                cfg.set("OPEN_AUTOGLM_THEME", mode)
+            except Exception as e:
+                from PySide6.QtWidgets import QMessageBox
+                msg = QMessageBox(self)
+                msg.setWindowTitle("保存失败")
+                msg.setText(str(e))
+                msg.setIcon(QMessageBox.Warning)
+                msg.setStyleSheet(self._dialog_style())
+                msg.exec()
+                self._sync_theme_switcher()
         else:
             self.apply_theme(mode)
 

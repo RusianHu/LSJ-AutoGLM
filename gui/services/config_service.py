@@ -13,6 +13,7 @@
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -49,12 +50,16 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false",
         "OPEN_AUTOGLM_THIRDPARTY_THINKING": "true",
         "OPEN_AUTOGLM_COMPRESS_IMAGE": "false",
+        "OPEN_AUTOGLM_MODELSCOPE_BASE_URL": "https://api-inference.modelscope.cn/v1",
+        "OPEN_AUTOGLM_MODELSCOPE_MODEL": "ZhipuAI/AutoGLM-Phone-9B",
+        "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
+        "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
+        "OPEN_AUTOGLM_ZHIPU_BASE_URL": "https://open.bigmodel.cn/api/paas/v4",
+        "OPEN_AUTOGLM_ZHIPU_MODEL": "AutoGLM-Phone-9B",
+        "OPEN_AUTOGLM_ZHIPU_API_KEY": "",
         "OPEN_AUTOGLM_NEWAPI_API_KEY": "",
         "OPEN_AUTOGLM_NEWAPI_BASE_URL": "https://ai.yanshanlaosiji.top/v1",
         "OPEN_AUTOGLM_NEWAPI_MODEL": "Qwen/Qwen3-VL-235B-A22B-Instruct",
-        "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
-        "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
-        "OPEN_AUTOGLM_ZHIPU_API_KEY": "",
         "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": "http://127.0.0.1:1234",
         "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": "autoglm-phone-9b",
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": "",
@@ -111,19 +116,20 @@ class ConfigService(QObject):
         {
             "id": "modelscope",
             "name": "ModelScope",
-            "url_field": "",
-            "model_field": "",
+            "url_field": "OPEN_AUTOGLM_MODELSCOPE_BASE_URL",
+            "model_field": "OPEN_AUTOGLM_MODELSCOPE_MODEL",
             "default_url": "https://api-inference.modelscope.cn/v1",
             "default_model": "ZhipuAI/AutoGLM-Phone-9B",
             "use_thirdparty": False,
             "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_MODELSCOPE_API_KEY",
+            "backup_api_key_field": "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY",
         },
         {
             "id": "zhipu",
             "name": "智谱",
-            "url_field": "",
-            "model_field": "",
+            "url_field": "OPEN_AUTOGLM_ZHIPU_BASE_URL",
+            "model_field": "OPEN_AUTOGLM_ZHIPU_MODEL",
             "default_url": "https://open.bigmodel.cn/api/paas/v4",
             "default_model": "AutoGLM-Phone-9B",
             "use_thirdparty": False,
@@ -146,8 +152,8 @@ class ConfigService(QObject):
             "name": "本地 (localhost)",
             "url_field": "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL",
             "model_field": "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL",
-            "default_url": "http://127.0.0.1:8000/v1",
-            "default_model": "local-model",
+            "default_url": "http://127.0.0.1:1234",
+            "default_model": "autoglm-phone-9b",
             "use_thirdparty": True,
             "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY",
@@ -409,11 +415,45 @@ class ConfigService(QObject):
                 new_lines.append(f"{k}={self._quote_value(self._cache[k])}\n")
 
         # 原子替换：先写临时文件，再 replace
-        tmp_path = self._env_file.with_suffix(".env.tmp")
+        # Windows 下某些安全软件、同步盘或索引进程会短暂占用目标文件，
+        # 导致 replace 抛 PermissionError。这里增加短暂重试；若仍失败，
+        # 回退为直接覆盖写入，尽量避免 GUI 因瞬时占用而保存失败。
+        tmp_path = self._env_file.parent / f"{self._env_file.name}.tmp"
+        replace_error: Optional[Exception] = None
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
                 f.writelines(new_lines)
-            tmp_path.replace(self._env_file)
+
+            retry_count = 5 if os.name == "nt" else 1
+            for attempt in range(retry_count):
+                try:
+                    tmp_path.replace(self._env_file)
+                    replace_error = None
+                    break
+                except PermissionError as e:
+                    replace_error = e
+                    if os.name != "nt" or attempt >= retry_count - 1:
+                        break
+                    time.sleep(0.05 * (attempt + 1))
+                except Exception as e:
+                    replace_error = e
+                    break
+
+            if replace_error is not None:
+                try:
+                    with open(self._env_file, "w", encoding="utf-8") as f:
+                        f.writelines(new_lines)
+                    replace_error = None
+                except Exception as overwrite_error:
+                    replace_error = overwrite_error
+                finally:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
+            if replace_error is not None:
+                raise replace_error
         except Exception as e:
             try:
                 tmp_path.unlink(missing_ok=True)
@@ -474,6 +514,49 @@ class ConfigService(QObject):
 
     # ---------- 渠道预设 ----------
 
+    def build_channel_updates(
+        self,
+        channel_id: str,
+        updates: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """
+        基于当前生效配置构建渠道专属持久化字段。
+
+        作用：
+        - 设置页在保存“模型与 API”区后，将当前渠道的 URL / MODEL / API Key
+          同步回该渠道的专属 .env 字段
+        - 后续点击“快速切换渠道”卡片时，读取到的是用户在 .env 中最后保存的该渠道配置
+        """
+        preset = next(
+            (p for p in self.CHANNEL_PRESETS if p["id"] == channel_id), None
+        )
+        if preset is None or channel_id == "custom":
+            return {}
+
+        merged = dict(self._cache)
+        if updates:
+            merged.update(updates)
+
+        channel_updates: Dict[str, str] = {}
+
+        url_field = (preset.get("url_field") or "").strip()
+        if url_field:
+            channel_updates[url_field] = merged.get("OPEN_AUTOGLM_BASE_URL", "") or ""
+
+        model_field = (preset.get("model_field") or "").strip()
+        if model_field:
+            channel_updates[model_field] = merged.get("OPEN_AUTOGLM_MODEL", "") or ""
+
+        api_key_field = (preset.get("api_key_field") or "").strip()
+        if api_key_field:
+            channel_updates[api_key_field] = merged.get("OPEN_AUTOGLM_API_KEY", "") or ""
+
+        backup_api_key_field = (preset.get("backup_api_key_field") or "").strip()
+        if backup_api_key_field:
+            channel_updates[backup_api_key_field] = merged.get("OPEN_AUTOGLM_BACKUP_API_KEY", "") or ""
+
+        return channel_updates
+
     def get_preset_url(self, preset: Dict) -> str:
         """读取渠道预设的实际 Base URL（优先 .env 专用字段，兜底用 default_url）"""
         field = preset.get("url_field", "")
@@ -512,8 +595,8 @@ class ConfigService(QObject):
     def set_active_channel(self, channel_id: str) -> bool:
         """
         快速切换到指定渠道，并写回当前生效配置。
-        - BASE_URL/MODEL 使用该渠道在 .env 中的专用字段值（或 default 值）
-        - 若渠道对应的 api_key_field 已有值，同步到 OPEN_AUTOGLM_API_KEY
+        - BASE_URL / MODEL 从该渠道在 .env 中保存的专属字段读取
+        - OPEN_AUTOGLM_API_KEY / OPEN_AUTOGLM_BACKUP_API_KEY 同步为该渠道已保存值
         - 不覆盖 USE_THIRDPARTY_PROMPT / COMPRESS_IMAGE 等用户单独保存的运行开关
         - 「自定义」模式不主动改写当前配置
         返回 True 表示切换成功。
@@ -527,20 +610,19 @@ class ConfigService(QObject):
         if channel_id == "custom":
             return True
 
-        # 动态读取该渠道实际的 URL 和模型（含用户在 .env 中已自定义的值）
+        # 动态读取该渠道实际的 URL / 模型 / Key（含用户在 .env 中已自定义的值）
         resolved_url = self.get_preset_url(preset)
         resolved_model = self.get_preset_model(preset)
+
+        key_field = (preset.get("api_key_field") or "").strip()
+        backup_key_field = (preset.get("backup_api_key_field") or "").strip()
 
         updates: Dict[str, str] = {
             "OPEN_AUTOGLM_BASE_URL": resolved_url,
             "OPEN_AUTOGLM_MODEL": resolved_model,
+            "OPEN_AUTOGLM_API_KEY": self.get(key_field) if key_field else "",
+            "OPEN_AUTOGLM_BACKUP_API_KEY": self.get(backup_key_field) if backup_key_field else "",
         }
-        # 若渠道专用 api_key_field 有值，同步到通用 API_KEY
-        key_field = preset.get("api_key_field", "")
-        if key_field:
-            channel_key = self.get(key_field)
-            if channel_key:
-                updates["OPEN_AUTOGLM_API_KEY"] = channel_key
         try:
             self.set_many(updates)
         except Exception:

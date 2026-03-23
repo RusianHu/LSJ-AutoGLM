@@ -467,7 +467,7 @@ class SettingsPage(QWidget):
         scroll.setWidget(scroll_widget)
         root.addWidget(scroll, 1)
 
-        # ---- 快捷预设 ----
+        # ---- 快速切换渠道 ----
         preset_switch_group = self._build_preset_switch_group()
         scroll_layout.addWidget(preset_switch_group)
 
@@ -585,11 +585,11 @@ class SettingsPage(QWidget):
             self._rebuild_channel_detail(active_id)
 
     # ----------------------------------------------------------------
-    # 快捷预设卡片区
+    # 快速切换渠道卡片区
     # ----------------------------------------------------------------
 
     def _build_preset_switch_group(self) -> QGroupBox:
-        """构建快速切换卡片组"""
+        """构建快速切换渠道卡片组"""
         self._quick_switch_group = QGroupBox(self._t("page.settings.section.quick_switch"))
         group = self._quick_switch_group
         outer = QVBoxLayout(group)
@@ -1005,6 +1005,62 @@ class SettingsPage(QWidget):
             )
             return
 
+    def _sync_active_channel_updates(self, updates: dict) -> dict:
+        """
+        将“模型与 API”区当前保存值同步回当前活动渠道的专属 .env 字段。
+
+        目的：
+        - 点击“快速切换渠道”卡片时，读取的是该渠道上次保存到 .env 的值
+        - 避免保存后再次点击卡片，又被旧预设值/默认值覆盖
+        - 若当前渠道在下方面板展示了专属 Key 字段，则优先采用用户刚编辑的专属值
+        """
+        if not self._config:
+            return updates
+
+        active = self._config.get_active_channel()
+        active_id = active.get("id", "") if active else ""
+        if not active_id or active_id == "custom":
+            return updates
+
+        preset = next(
+            (p for p in self._config.CHANNEL_PRESETS if p["id"] == active_id), None
+        )
+        if preset is None:
+            return updates
+
+        merged_updates = dict(updates)
+
+        def _sync_key_pair(global_key: str, channel_key: str):
+            if not channel_key:
+                return
+            old_global = self._config.get(global_key) or ""
+            old_channel = self._config.get(channel_key) or ""
+            new_global = merged_updates.get(global_key, old_global)
+            new_channel = merged_updates.get(channel_key, old_channel)
+            channel_field_visible = channel_key in self._field_widgets
+
+            if channel_field_visible and new_channel != old_channel and new_global == old_global:
+                merged_updates[global_key] = new_channel
+                return
+            if channel_field_visible and new_channel != old_channel and new_global != new_channel:
+                merged_updates[global_key] = new_channel
+                merged_updates[channel_key] = new_channel
+                return
+            if new_global != old_global:
+                merged_updates[channel_key] = new_global
+
+        _sync_key_pair(
+            "OPEN_AUTOGLM_API_KEY",
+            (preset.get("api_key_field") or "").strip(),
+        )
+        _sync_key_pair(
+            "OPEN_AUTOGLM_BACKUP_API_KEY",
+            (preset.get("backup_api_key_field") or "").strip(),
+        )
+
+        merged_updates.update(self._config.build_channel_updates(active_id, merged_updates))
+        return merged_updates
+
     def _on_save(self):
         """收集界面值，批量写入（只写一次文件），失败时全量回滚"""
         if not self._config:
@@ -1016,6 +1072,9 @@ class SettingsPage(QWidget):
         # 将语言下拉选择单独合并进 updates
         if hasattr(self, "_lang_combo"):
             updates["OPEN_AUTOGLM_LANG"] = self._lang_combo.currentData() or "cn"
+
+        updates = self._sync_active_channel_updates(updates)
+
         # 先做校验（不污染缓存）
         errors = self._config.validate(updates)
         if errors:
@@ -1326,8 +1385,13 @@ class SettingsPage(QWidget):
             return
         value = self._theme_combo.itemData(index)
         self._update_theme_hint()
-        if value:
+        if not value:
+            return
+        try:
             self._config.set("OPEN_AUTOGLM_THEME", value)
+        except Exception as e:
+            QMessageBox.warning(self, self._t("page.settings.dialog.save_fail"), str(e))
+            self._load_theme_combo()
 
     def on_page_activated(self):
         self._load_values()

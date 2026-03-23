@@ -930,7 +930,10 @@ class DevicePage(QWidget):
         if device_id and self._device:
             self._device.select_device(device_id)
             if self._config:
-                self._config.set("OPEN_AUTOGLM_DEVICE_ID", device_id)
+                try:
+                    self._config.set("OPEN_AUTOGLM_DEVICE_ID", device_id)
+                except Exception as e:
+                    self._log(f"[配置保存失败] {e}")
             self._log(self._t("page.device.selected", device_id=device_id))
             self._update_action_button_states()
 

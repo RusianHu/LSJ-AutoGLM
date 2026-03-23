@@ -8,13 +8,14 @@
 
 - **[官方说明文档 (Original README)](README_official.md)**
 - [English README](README_en.md)
-- [Agent 规则说明 (AGENTS.md)](AGENTS.md)
 
 ---
 
 ## 定制化更改说明
 
-本版本在原版基础上进行了以下修改，以适配特定的开发流程和硬件环境：
+普通用户检查 [GitHub Release](https://github.com/RusianHu/LSJ-AutoGLM/releases) 发布版本安装运行即可。
+
+CLI 版本以适配特定的开发流程和硬件环境：
 
 ### 1. 交互式启动器 (`launcher.py`)
 
@@ -78,30 +79,6 @@
 - 敏感信息（API Key）从 `.env` 文件读取，避免硬编码
 - 默认不在配置文件中持久化 API Key（可通过环境变量开启）
 - 控制台显示 API Key 时自动遮蔽
-
-#### GUI 单文件分发与诊断
-
-适用于 [`OpenAutoGLM-GUI.exe`](dist/OpenAutoGLM-GUI.exe) 的推荐逻辑：
-
-- 推荐使用 [`scripts/build_gui_onefile_venv.bat`](scripts/build_gui_onefile_venv.bat:15) 在项目 [`venv`](scripts/build_gui_onefile_venv.bat:15) 中打包
-- **面向最终用户的分发包，默认应自带 PC 侧运行时依赖**，至少包括 `adb`；建议同时带上 `scrcpy` 和 [`ADBKeyboard.apk`](ADBKeyboard.apk)
-- 单文件模式下，GUI 会优先使用打包内置资源，其次才会回退到外部环境
-- 首次运行若未检测到 [`.env`](.env.example)，GUI 会自动生成初始文件；敏感字段默认留空，需要在“设置”页填写后保存
-- 若 exe 位于只读目录，首次自动创建 [`.env`](.env.example) 可能失败；此时“设置”页和“诊断”页会提示将 exe 移到可写目录，或通过环境变量 `OPEN_AUTOGLM_ENV_PATH` 指定新的 [`.env`](.env.example) 路径
-- “诊断”页会检查：`.env` 状态、内置 `adb` 是否可用、设备连接、ADB Keyboard、`scrcpy`、API Base URL、API Key 与 API 连通性
-
-对最终用户，推荐的体验目标是：
-
-```text
-用户拿到 OpenAutoGLM-GUI.exe
--> 双击运行
--> GUI 自动创建 .env
--> 连接手机
--> 在设备页一键安装 ADB Keyboard（手机端）
--> 开始使用
-```
-
-只有开发环境/自定义裁剪分发包时，才需要额外关心手动准备 `adb` / `scrcpy`。
 
 ### 2. 环境变量配置 (`.env.example`)
 
