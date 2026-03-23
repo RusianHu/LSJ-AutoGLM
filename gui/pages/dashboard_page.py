@@ -248,32 +248,29 @@ class DashboardPage(QWidget):
 
         # 开始按钮
         self._btn_start = QPushButton(self._t("page.dashboard.toolbar.btn.start"))
-        self._btn_start.setFixedWidth(72)
         self._btn_start.setProperty("variant", "primary")
         self._btn_start.clicked.connect(self._on_start)
         layout.addWidget(self._btn_start)
 
         # 停止按钮
         self._btn_stop = QPushButton(self._t("page.dashboard.toolbar.btn.stop"))
-        self._btn_stop.setFixedWidth(72)
         self._btn_stop.setProperty("variant", "danger")
         self._btn_stop.clicked.connect(self._on_stop)
         layout.addWidget(self._btn_stop)
 
         # 暂停/恢复按钮
         self._btn_pause = QPushButton(self._t("page.dashboard.toolbar.btn.pause"))
-        self._btn_pause.setFixedWidth(72)
         self._btn_pause.setProperty("variant", "warning")
         self._btn_pause.clicked.connect(self._on_pause_resume)
         layout.addWidget(self._btn_pause)
 
         # 接管按钮
         self._btn_takeover = QPushButton(self._t("page.dashboard.toolbar.btn.takeover"))
-        self._btn_takeover.setFixedWidth(72)
         self._btn_takeover.setProperty("variant", "warning")
         self._btn_takeover.clicked.connect(self._on_takeover)
         layout.addWidget(self._btn_takeover)
 
+        self._sync_toolbar_action_button_widths()
         return bar
 
     # ----------------------------------------------------------------
@@ -1008,6 +1005,7 @@ class DashboardPage(QWidget):
         else:
             self._btn_pause.setText(self._t("page.dashboard.toolbar.btn.pause"))
             self._btn_pause.setProperty("variant", "warning")
+        self._sync_toolbar_action_button_widths()
         self._apply_action_button_styles(task_state=state)
 
     def _on_log_line(self, line: str):
@@ -1372,11 +1370,37 @@ class DashboardPage(QWidget):
     # 按钮样式
     # ================================================================
 
+    def _toolbar_action_buttons(self) -> tuple[QPushButton, ...]:
+        return tuple(
+            btn for btn in (
+                getattr(self, "_btn_start", None),
+                getattr(self, "_btn_stop", None),
+                getattr(self, "_btn_pause", None),
+                getattr(self, "_btn_takeover", None),
+            ) if btn is not None
+        )
+
+    def _sync_toolbar_action_button_widths(self) -> None:
+        buttons = self._toolbar_action_buttons()
+        if not buttons:
+            return
+
+        padding = 36
+        min_width = 84
+        max_width = max(
+            min_width,
+            max(btn.fontMetrics().horizontalAdvance(btn.text()) + padding for btn in buttons),
+        )
+        for btn in buttons:
+            btn.setFixedWidth(max_width)
+
     def _apply_action_button_styles(self, task_state=None, mirror_running=None):
         if task_state is None:
             task_state = self._task.state if self._task else TaskState.IDLE
         if mirror_running is None:
             mirror_running = bool(self._mirror and self._mirror.is_running)
+
+        self._sync_toolbar_action_button_widths()
 
         btn_specs = (
             (getattr(self, "_btn_start", None), btn_primary(self._theme_tokens)),
@@ -1436,6 +1460,7 @@ class DashboardPage(QWidget):
                 self._btn_pause.setText(_t("page.dashboard.toolbar.btn.resume"))
             else:
                 self._btn_pause.setText(_t("page.dashboard.toolbar.btn.pause"))
+        self._sync_toolbar_action_button_widths()
 
         # 状态条与镜像区
         if self._task:

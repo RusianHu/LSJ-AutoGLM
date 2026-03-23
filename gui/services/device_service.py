@@ -69,6 +69,21 @@ def _terminate_process(proc: subprocess.Popen) -> None:
 
 
 
+def _infer_connection_type(device_id: str) -> str:
+    """根据 adb 设备 ID 推断连接方式。"""
+    normalized = (device_id or "").strip().lower()
+    if not normalized:
+        return "unknown"
+    if ":" in normalized:
+        return "wifi"
+    if (
+        "._adb-tls-connect._tcp" in normalized
+        or "._adb-tls-pairing._tcp" in normalized
+    ):
+        return "wifi"
+    return "usb"
+
+
 def _run_adb_shell(
     device_id: str,
     args: List[str],
@@ -238,7 +253,7 @@ class _RefreshWorker(QThread):
                 "offline":      DeviceStatus.OFFLINE,
             }
             status = status_map.get(status_str, DeviceStatus.UNKNOWN)
-            conn_type = "wifi" if ":" in device_id else "usb"
+            conn_type = _infer_connection_type(device_id)
 
             model = ""
             for part in parts[2:]:

@@ -16,6 +16,13 @@ CN: dict[str, str] = {
     "shell.nav.settings": "设置",
     "shell.nav.diagnostics": "诊断",
     "shell.footer.version": "v{version}",
+    "shell.theme_switcher.label": "主题",
+    "shell.theme_switcher.system": "跟随系统",
+    "shell.theme_switcher.dark": "深色",
+    "shell.theme_switcher.light": "浅色",
+    "shell.theme_switcher.button.system": "系统",
+    "shell.theme_switcher.button.dark": "深色",
+    "shell.theme_switcher.button.light": "浅色",
 
     # ============================================================
     # 接管/卡住 弹窗

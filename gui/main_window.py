@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QPushButton,
     QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
@@ -160,12 +161,155 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
+        # 底部主题切换器
+        self._theme_switcher_widget = self._build_theme_switcher()
+        layout.addWidget(self._theme_switcher_widget)
+
         # 底部版本号
         self._ver_lbl = QLabel(_t("shell.footer.version", version=self._app_version))
         self._ver_lbl.setStyleSheet("color:#3a4560; font-size:10px; padding:4px 8px;")
         layout.addWidget(self._ver_lbl)
 
         return nav
+
+    def _build_theme_switcher(self) -> QWidget:
+        """构建底部主题切换器（三段 pill 按钮组），放置于版本号上方。"""
+        _t = self._i18n_manager.t
+
+        container = QWidget()
+        container.setObjectName("ThemeSwitcherBar")
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 8, 0, 2)
+        outer.setSpacing(6)
+
+        # 小说明标签
+        self._theme_hint_lbl = QLabel(_t("shell.theme_switcher.label"))
+        self._theme_hint_lbl.setObjectName("ThemeSwitcherHint")
+        self._theme_hint_lbl.setStyleSheet(
+            "color:#3a4560; font-size:10px; font-weight:600; background: transparent; border: none;"
+        )
+        outer.addWidget(self._theme_hint_lbl)
+
+        # Pill 容器（三个按钮的外壳）
+        pill = QFrame()
+        pill.setObjectName("ThemeSwitcherPill")
+        pill.setFixedHeight(40)
+        pill.setStyleSheet("background:#1a2035; border:1px solid #283247; border-radius:12px;")
+        h = QHBoxLayout(pill)
+        h.setContentsMargins(4, 4, 4, 4)
+        h.setSpacing(4)
+
+        self._theme_btns: dict[str, QPushButton] = {}
+        self._theme_btn_meta = [
+            ("system", "shell.theme_switcher.button.system", "shell.theme_switcher.system"),
+            ("dark", "shell.theme_switcher.button.dark", "shell.theme_switcher.dark"),
+            ("light", "shell.theme_switcher.button.light", "shell.theme_switcher.light"),
+        ]
+        _default_btn_style = """
+            QPushButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 9px;
+                color: #66778d;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0 8px;
+                min-height: 30px;
+            }
+            QPushButton:hover {
+                background: #243050;
+                border-color: #31405c;
+                color: #dbe7f5;
+            }
+            QPushButton:checked {
+                background: #529bf5;
+                border-color: #529bf5;
+                color: #ffffff;
+            }
+        """
+        for mode, text_key, tooltip_key in self._theme_btn_meta:
+            btn = QPushButton(_t(text_key))
+            btn.setFixedHeight(30)
+            btn.setMinimumWidth(0)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            btn.setToolTip(_t(tooltip_key))
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setProperty("themeSwitcherMode", mode)
+            btn.setStyleSheet(_default_btn_style)
+            btn.clicked.connect(lambda checked, m=mode: self._on_theme_btn_clicked(m))
+            h.addWidget(btn)
+            self._theme_btns[mode] = btn
+
+        outer.addWidget(pill)
+        self._theme_pill = pill
+        return container
+
+    def _on_theme_btn_clicked(self, mode: str):
+        """主题切换按钮点击 -> 写入配置 -> ThemeManager 广播"""
+        cfg = self._services.get("config")
+        if cfg:
+            cfg.set("OPEN_AUTOGLM_THEME", mode)
+        else:
+            self.apply_theme(mode)
+
+    def _sync_theme_switcher(self):
+        """将切换按钮选中状态同步到当前主题设置"""
+        current = self._get_current_theme()
+        for mode, btn in getattr(self, "_theme_btns", {}).items():
+            # 用 blockSignals 避免触发 clicked 信号
+            btn.blockSignals(True)
+            btn.setChecked(mode == current)
+            btn.blockSignals(False)
+
+    def _apply_theme_switcher_tokens(self, tokens: ThemeTokens):
+        """根据当前 tokens 更新主题切换器壳层颜色"""
+        if not hasattr(self, "_theme_btns"):
+            return
+        if hasattr(self, "_theme_pill"):
+            self._theme_pill.setStyleSheet(
+                f"background:{tokens.bg_elevated}; border:1px solid {tokens.border}; border-radius:12px;"
+            )
+        if hasattr(self, "_theme_hint_lbl"):
+            self._theme_hint_lbl.setStyleSheet(
+                f"color:{tokens.text_secondary}; font-size:10px; font-weight:600;"
+                " background: transparent; border: none;"
+            )
+        _btn_style = f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 9px;
+                color: {tokens.text_secondary};
+                font-size: 12px;
+                font-weight: 600;
+                padding: 0 8px;
+                min-height: 30px;
+            }}
+            QPushButton:hover {{
+                background: {tokens.bg_secondary};
+                border-color: {tokens.border};
+                color: {tokens.text_primary};
+            }}
+            QPushButton:pressed {{
+                background: {tokens.accent_soft};
+                border-color: {tokens.accent};
+                color: {tokens.accent};
+            }}
+            QPushButton:checked {{
+                background: {tokens.accent};
+                border: 1px solid {tokens.accent};
+                color: #ffffff;
+            }}
+            QPushButton:checked:hover {{
+                background: {tokens.accent_hover};
+                border-color: {tokens.accent_hover};
+                color: #ffffff;
+            }}
+        """
+        for btn in self._theme_btns.values():
+            btn.setStyleSheet(_btn_style)
 
     def _init_pages(self):
         """初始化所有页面并加入 StackedWidget"""
@@ -314,6 +458,16 @@ class MainWindow(QMainWindow):
             self._ver_lbl.setText(
                 self._i18n_manager.t("shell.footer.version", version=self._app_version)
             )
+        # 更新主题切换器提示标签、按钮文字与 tooltip
+        _t = self._i18n_manager.t
+        if hasattr(self, "_theme_hint_lbl"):
+            self._theme_hint_lbl.setText(_t("shell.theme_switcher.label"))
+        if hasattr(self, "_theme_btns"):
+            for mode, text_key, tooltip_key in getattr(self, "_theme_btn_meta", []):
+                btn = self._theme_btns.get(mode)
+                if btn:
+                    btn.setText(_t(text_key))
+                    btn.setToolTip(_t(tooltip_key))
 
     def _on_tokens_changed(self, tokens: ThemeTokens):
         """
@@ -341,6 +495,10 @@ class MainWindow(QMainWindow):
             self._ver_lbl.setStyleSheet(
                 f"color:{tokens.text_muted}; font-size:10px; padding:4px 8px;"
             )
+
+        # 更新底部主题切换器样式并同步选中态
+        self._apply_theme_switcher_tokens(tokens)
+        self._sync_theme_switcher()
 
         # 更新导航按钮主题
         for btn in getattr(self, "_nav_buttons", {}).values():

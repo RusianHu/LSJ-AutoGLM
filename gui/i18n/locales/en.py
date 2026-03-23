@@ -16,6 +16,13 @@ EN: dict[str, str] = {
     "shell.nav.settings": "Settings",
     "shell.nav.diagnostics": "Diagnostics",
     "shell.footer.version": "v{version}",
+    "shell.theme_switcher.label": "Theme",
+    "shell.theme_switcher.system": "Follow System",
+    "shell.theme_switcher.dark": "Dark",
+    "shell.theme_switcher.light": "Light",
+    "shell.theme_switcher.button.system": "Auto",
+    "shell.theme_switcher.button.dark": "Dark",
+    "shell.theme_switcher.button.light": "Light",
 
     # ============================================================
     # Takeover / stuck dialogs
