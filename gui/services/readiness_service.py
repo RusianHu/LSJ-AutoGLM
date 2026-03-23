@@ -12,7 +12,9 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence
 from urllib.parse import urlparse
@@ -21,6 +23,8 @@ from gui.services.device_service import probe_adb_keyboard_status
 from gui.utils.runtime import app_root, is_frozen
 
 Translator = Callable[..., str]
+StopChecker = Callable[[], bool]
+ProgressReporter = Callable[[str, str, int, int], None]
 
 
 @dataclass(frozen=True)
@@ -245,17 +249,60 @@ def _error(
     )
 
 
-def _run_subprocess(args: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
-    return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
+def _terminate_process(proc: subprocess.Popen) -> None:
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.communicate(timeout=0.2)
+    except Exception:
+        pass
 
 
-def _list_adb_devices() -> list[tuple[str, str]]:
-    result = _run_subprocess(["adb", "devices"], timeout=10)
+
+def _run_subprocess(
+    args: List[str],
+    timeout: int = 5,
+    *,
+    should_stop: StopChecker | None = None,
+) -> subprocess.CompletedProcess:
+    proc = subprocess.Popen(
+        list(args),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + max(timeout, 0)
+    while True:
+        if callable(should_stop) and should_stop():
+            _terminate_process(proc)
+            raise InterruptedError("检查已取消")
+
+        ret = proc.poll()
+        if ret is not None:
+            stdout, stderr = proc.communicate()
+            return subprocess.CompletedProcess(list(args), ret, stdout, stderr)
+
+        if time.monotonic() >= deadline:
+            _terminate_process(proc)
+            raise subprocess.TimeoutExpired(list(args), timeout)
+
+        time.sleep(0.05)
+
+
+def _list_adb_devices(
+    *,
+    should_stop: StopChecker | None = None,
+) -> list[tuple[str, str]]:
+    result = _run_subprocess(["adb", "devices"], timeout=10, should_stop=should_stop)
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip() or "adb devices 执行失败")
 
     devices: list[tuple[str, str]] = []
     for raw_line in result.stdout.splitlines()[1:]:
+        if callable(should_stop) and should_stop():
+            raise InterruptedError("检查已取消")
         line = raw_line.strip()
         if not line:
             continue
@@ -333,28 +380,55 @@ def check_pyside6() -> ReadinessCheckResult:
 
 
 def check_openai_package() -> ReadinessCheckResult:
-    try:
-        import openai
-
-        version = getattr(openai, "__version__", "unknown")
+    if is_frozen():
         return _success(
             "openai",
             "openai 包",
-            f"openai {version}",
+            "分发版已内置 openai 运行时，跳过源码环境依赖诊断",
             label_key="readiness.openai.label",
-            detail_key="readiness.openai.detail.ok",
-            detail_params={"version": version},
         )
+
+    try:
+        import openai
     except ImportError:
         return _error(
             "openai",
             "openai 包",
             "openai 包未安装",
-            "请先安装 openai 依赖。",
+            "可在开发环境执行 `pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/` 后重新打包；若是源码运行，也可直接安装 openai。",
             label_key="readiness.openai.label",
             detail_key="readiness.openai.detail.missing",
             hint_key="readiness.openai.hint.install",
         )
+
+    version = ""
+    try:
+        version = str(getattr(openai, "__version__", "") or "").strip()
+    except Exception:
+        version = ""
+
+    if not version:
+        try:
+            version = importlib_metadata.version("openai")
+        except Exception:
+            version = "unknown"
+
+    if version == "unknown":
+        return _success(
+            "openai",
+            "openai 包",
+            "openai 已可导入",
+            label_key="readiness.openai.label",
+        )
+
+    return _success(
+        "openai",
+        "openai 包",
+        f"openai {version}",
+        label_key="readiness.openai.label",
+        detail_key="readiness.openai.detail.ok",
+        detail_params={"version": version},
+    )
 
 
 def check_main_py() -> ReadinessCheckResult:
@@ -391,21 +465,90 @@ def check_main_py() -> ReadinessCheckResult:
     )
 
 
-def check_adb() -> ReadinessCheckResult:
+def check_env_file(config_service=None) -> ReadinessCheckResult:
+    env_path = app_root() / ".env"
+    status = None
+    if config_service:
+        getter = getattr(config_service, "get_env_file_status", None)
+        if callable(getter):
+            try:
+                status = getter()
+            except Exception:
+                status = None
+
+    path = str((status or {}).get("path") or env_path.resolve())
+    exists = bool((status or {}).get("exists"))
+    writable = bool((status or {}).get("writable"))
+    bootstrapped = bool((status or {}).get("bootstrapped"))
+    bootstrap_error = str((status or {}).get("bootstrap_error") or "").strip()
+
+    if exists and writable:
+        detail = f".env 已就绪: {path}"
+        if bootstrapped:
+            detail += "（首次启动已自动创建）"
+        return _success(
+            "env_file",
+            ".env 配置文件",
+            detail,
+            label_key="readiness.env_file.label",
+            detail_key="readiness.env_file.detail.ok",
+            detail_params={"path": path},
+        )
+
+    if exists and not writable:
+        return _warning(
+            "env_file",
+            ".env 配置文件",
+            f".env 已存在但当前不可写: {path}",
+            "首次运行通常可继续；如需保存设置，请将 exe 放到可写目录，或通过 OPEN_AUTOGLM_ENV_PATH 指定可写的 .env 路径。",
+            blocking=False,
+            label_key="readiness.env_file.label",
+            detail_key="readiness.env_file.detail.readonly",
+            detail_params={"path": path},
+            hint_key="readiness.env_file.hint.move_or_override",
+        )
+
+    if bootstrap_error:
+        return _warning(
+            "env_file",
+            ".env 配置文件",
+            f"首次启动未能自动创建 .env: {bootstrap_error}",
+            "请把 exe 放到可写目录后重试，或手动复制 .env.example 为 .env；也可通过 OPEN_AUTOGLM_ENV_PATH 指向其他可写位置。",
+            blocking=False,
+            label_key="readiness.env_file.label",
+            detail_key="readiness.env_file.detail.bootstrap_failed",
+            detail_params={"error": bootstrap_error},
+            hint_key="readiness.env_file.hint.bootstrap_failed",
+        )
+
+    return _warning(
+        "env_file",
+        ".env 配置文件",
+        f"当前未检测到 .env: {path}",
+        "首次运行通常会自动创建；若未生成，可手动复制 .env.example 为 .env，然后在设置页填写 API Key。",
+        blocking=False,
+        label_key="readiness.env_file.label",
+        detail_key="readiness.env_file.detail.missing",
+        detail_params={"path": path},
+        hint_key="readiness.env_file.hint.create",
+    )
+
+
+def check_adb(should_stop: StopChecker | None = None) -> ReadinessCheckResult:
     path = shutil.which("adb")
     if not path:
         return _error(
             "adb",
             "ADB 可用性",
             "ADB 未找到",
-            "请安装 Android Platform Tools 并加入 PATH。",
+            "请安装 Android Platform Tools，并将 adb.exe 所在目录加入 PATH；也可以把 `platform-tools` 放到 exe 同级目录。下载地址：https://developer.android.com/tools/releases/platform-tools",
             label_key="readiness.adb.label",
             detail_key="readiness.adb.detail.not_found",
             hint_key="readiness.adb.hint.install",
         )
 
     try:
-        result = _run_subprocess(["adb", "version"], timeout=5)
+        result = _run_subprocess(["adb", "version"], timeout=5, should_stop=should_stop)
         if result.returncode == 0:
             version = result.stdout.splitlines()[0] if result.stdout else f"ADB ({path})"
             return _success(
@@ -427,6 +570,8 @@ def check_adb() -> ReadinessCheckResult:
             detail_params={"error": err},
             hint_key="readiness.adb.hint.exec",
         )
+    except InterruptedError:
+        raise
     except Exception as exc:
         return _error(
             "adb",
@@ -440,9 +585,15 @@ def check_adb() -> ReadinessCheckResult:
         )
 
 
-def check_devices(config_service=None, device_id: str = "") -> ReadinessCheckResult:
+def check_devices(
+    config_service=None,
+    device_id: str = "",
+    should_stop: StopChecker | None = None,
+) -> ReadinessCheckResult:
     try:
-        devices = _list_adb_devices()
+        devices = _list_adb_devices(should_stop=should_stop)
+    except InterruptedError:
+        raise
     except FileNotFoundError:
         return _error(
             "devices",
@@ -516,31 +667,39 @@ def check_devices(config_service=None, device_id: str = "") -> ReadinessCheckRes
         )
 
     if pending:
-        return _error(
+        return _warning(
             "devices",
             "设备连接",
             f"检测到设备但未就绪: {', '.join(pending)}",
             "请在手机上确认调试授权，或在设备页重新连接。",
+            blocking=False,
             label_key="readiness.devices.label",
             detail_key="readiness.devices.detail.pending_only",
             detail_params={"devices": ", ".join(pending)},
             hint_key="readiness.devices.hint.authorize",
         )
 
-    return _error(
+    return _warning(
         "devices",
         "设备连接",
-        "未找到已连接设备",
-        "请连接 USB 设备或在设备页完成无线调试连接。",
+        "当前尚未连接设备",
+        "可先完成 API 与环境检查；待设备在设备页连接成功后再回到这里复查。",
+        blocking=False,
         label_key="readiness.devices.label",
         detail_key="readiness.devices.detail.none",
         hint_key="readiness.devices.hint.reconnect",
     )
 
 
-def check_adb_keyboard(config_service=None, device_id: str = "") -> ReadinessCheckResult:
+def check_adb_keyboard(
+    config_service=None,
+    device_id: str = "",
+    should_stop: StopChecker | None = None,
+) -> ReadinessCheckResult:
     try:
-        devices = _list_adb_devices()
+        devices = _list_adb_devices(should_stop=should_stop)
+    except InterruptedError:
+        raise
     except Exception as exc:
         return _warning(
             "adb_keyboard",
@@ -596,7 +755,11 @@ def check_adb_keyboard(config_service=None, device_id: str = "") -> ReadinessChe
         )
 
     try:
-        installed, enabled, status = probe_adb_keyboard_status(target_device, timeout=10)
+        installed, enabled, status = probe_adb_keyboard_status(
+            target_device,
+            timeout=10,
+            should_stop=should_stop,
+        )
         detail = f"{status} ({target_device})"
         if enabled:
             return _success(
@@ -622,12 +785,14 @@ def check_adb_keyboard(config_service=None, device_id: str = "") -> ReadinessChe
             "adb_keyboard",
             "ADB Keyboard",
             detail,
-            "建议安装并启用，便于稳定输入文本。",
+            "建议安装并启用，便于稳定输入文本。可优先使用项目根目录自带的 ADBKeyboard.apk，或从 https://github.com/senzhk/ADBKeyBoard/raw/master/ADBKeyboard.apk 下载。",
             label_key="readiness.adb_keyboard.label",
             detail_key="readiness.adb_keyboard.detail.status",
             detail_params={"status": status, "device_id": target_device},
             hint_key="readiness.adb_keyboard.hint.install",
         )
+    except InterruptedError:
+        raise
     except Exception as exc:
         return _warning(
             "adb_keyboard",
@@ -641,7 +806,7 @@ def check_adb_keyboard(config_service=None, device_id: str = "") -> ReadinessChe
         )
 
 
-def check_scrcpy() -> ReadinessCheckResult:
+def check_scrcpy(should_stop: StopChecker | None = None) -> ReadinessCheckResult:
     from gui.services.mirror_service import MirrorService
 
     path = MirrorService.find_scrcpy()
@@ -650,14 +815,14 @@ def check_scrcpy() -> ReadinessCheckResult:
             "scrcpy",
             "scrcpy 可用性",
             "scrcpy 未找到（将降级为 ADB 截图模式）",
-            "如需更流畅镜像体验，可选装 scrcpy。",
+            "如需更流畅镜像体验，可选装 scrcpy；可将 scrcpy 解压到 exe 同级目录的 `scrcpy` 文件夹，或加入 PATH。项目主页：https://github.com/Genymobile/scrcpy",
             label_key="readiness.scrcpy.label",
             detail_key="readiness.scrcpy.detail.missing",
             hint_key="readiness.scrcpy.hint.optional_install",
         )
 
     try:
-        result = _run_subprocess([path, "--version"], timeout=5)
+        result = _run_subprocess([path, "--version"], timeout=5, should_stop=should_stop)
         version = result.stdout.strip().splitlines()[0] if result.stdout else "scrcpy"
         return _success(
             "scrcpy",
@@ -667,6 +832,8 @@ def check_scrcpy() -> ReadinessCheckResult:
             detail_key="readiness.scrcpy.detail.ok",
             detail_params={"version": version, "path": path},
         )
+    except InterruptedError:
+        raise
     except Exception:
         return _success(
             "scrcpy",
@@ -789,7 +956,10 @@ def check_api_key(config_service) -> ReadinessCheckResult:
     )
 
 
-def check_api_reachability(config_service) -> ReadinessCheckResult:
+def check_api_reachability(
+    config_service,
+    should_stop: StopChecker | None = None,
+) -> ReadinessCheckResult:
     if not config_service:
         return _warning(
             "api_reachability",
@@ -800,6 +970,9 @@ def check_api_reachability(config_service) -> ReadinessCheckResult:
             detail_key="readiness.api_reachability.detail.service_unavailable",
             hint_key="readiness.api_reachability.hint.retry",
         )
+
+    if callable(should_stop) and should_stop():
+        raise InterruptedError("检查已取消")
 
     base_url = (config_service.get("OPEN_AUTOGLM_BASE_URL") or "").strip()
     if not base_url:
@@ -826,6 +999,9 @@ def check_api_reachability(config_service) -> ReadinessCheckResult:
             detail_params={"url": base_url},
             hint_key="readiness.api_reachability.hint.fix_url",
         )
+
+    if callable(should_stop) and should_stop():
+        raise InterruptedError("检查已取消")
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
@@ -856,21 +1032,52 @@ def run_readiness_checks(
     config_service=None,
     *,
     device_id: str = "",
+    on_result: Callable[[ReadinessCheckResult], None] | None = None,
+    on_progress: ProgressReporter | None = None,
+    should_stop: StopChecker | None = None,
 ) -> list[ReadinessCheckResult]:
-    """运行完整环境检查。"""
-    return [
-        check_python_version(),
-        check_pyside6(),
-        check_openai_package(),
-        check_main_py(),
-        check_adb(),
-        check_devices(config_service, device_id=device_id),
-        check_adb_keyboard(config_service, device_id=device_id),
-        check_scrcpy(),
-        check_api_base_url(config_service),
-        check_api_key(config_service),
-        check_api_reachability(config_service),
+    """运行完整环境检查。
+
+    - `on_result`：每完成一项检查立即回调，供诊断页渐进刷新。
+    - `on_progress`：每开始一项检查前回调，便于 UI 展示当前进度。
+    - `should_stop`：供关闭页面/退出应用时提前中断剩余检查。
+    """
+    checks: list[tuple[str, Callable[[], ReadinessCheckResult]]] = [
+        ("python", check_python_version),
+        ("pyside6", check_pyside6),
+        ("openai", check_openai_package),
+        ("main_py", check_main_py),
+        ("env_file", lambda: check_env_file(config_service)),
+        ("adb", lambda: check_adb(should_stop=should_stop)),
+        ("devices", lambda: check_devices(config_service, device_id=device_id, should_stop=should_stop)),
+        ("adb_keyboard", lambda: check_adb_keyboard(config_service, device_id=device_id, should_stop=should_stop)),
+        ("scrcpy", lambda: check_scrcpy(should_stop=should_stop)),
+        ("api_base_url", lambda: check_api_base_url(config_service)),
+        ("api_key", lambda: check_api_key(config_service)),
+        ("api_reachability", lambda: check_api_reachability(config_service, should_stop=should_stop)),
     ]
+
+    results: list[ReadinessCheckResult] = []
+    total = len(checks)
+    for index, (key, check) in enumerate(checks, start=1):
+        if callable(should_stop) and should_stop():
+            break
+        if callable(on_progress):
+            try:
+                on_progress(key, f"readiness.{key}.label", index, total)
+            except Exception:
+                pass
+        try:
+            result = check()
+        except InterruptedError:
+            break
+        results.append(result)
+        if callable(on_result):
+            try:
+                on_result(result)
+            except Exception:
+                pass
+    return results
 
 
 def summarize_readiness(

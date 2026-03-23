@@ -17,6 +17,7 @@ from unittest.mock import MagicMock
 from gui.services.readiness_service import (
     ReadinessCheckResult,
     ReadinessSummary,
+    check_env_file,
     collect_blocking_labels,
     render_check_result,
     render_summary,
@@ -277,6 +278,52 @@ class TestTaskServiceInferEvents:
 
         svc.request_takeover.assert_called_once_with("Takeover requested")
         svc._add_event.assert_not_called()
+
+
+class TestReadinessEnvFile:
+    """验证 .env 首次引导与诊断结果。"""
+
+    @staticmethod
+    def _make_config(status: dict):
+        return SimpleNamespace(get_env_file_status=lambda: status)
+
+    def test_check_env_file_passes_when_env_exists_and_writable(self):
+        result = check_env_file(
+            self._make_config(
+                {
+                    "path": "C:/demo/.env",
+                    "exists": True,
+                    "writable": True,
+                    "bootstrapped": True,
+                    "bootstrap_error": "",
+                }
+            )
+        )
+
+        assert result.passed is True
+        assert result.key == "env_file"
+        assert result.detail_key == "readiness.env_file.detail.ok"
+        assert result.detail_params == {"path": "C:/demo/.env"}
+
+    def test_check_env_file_warns_when_bootstrap_failed(self):
+        result = check_env_file(
+            self._make_config(
+                {
+                    "path": "C:/readonly/.env",
+                    "exists": False,
+                    "writable": False,
+                    "bootstrapped": False,
+                    "bootstrap_error": "PermissionError: denied",
+                }
+            )
+        )
+
+        assert result.passed is False
+        assert result.blocking is False
+        assert result.semantic == "warning"
+        assert result.detail_key == "readiness.env_file.detail.bootstrap_failed"
+        assert result.hint_key == "readiness.env_file.hint.bootstrap_failed"
+        assert result.detail_params == {"error": "PermissionError: denied"}
 
 
 class TestConfigServiceBuildCommandArgs:

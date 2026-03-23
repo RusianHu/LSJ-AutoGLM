@@ -59,20 +59,46 @@ class _ScreenshotPoller(QThread):
         self._device_id = device_id
         self._interval = interval_ms / 1000.0
         self._running = False
+        self._proc: Optional[subprocess.Popen] = None
+
+    def _terminate_current_proc(self):
+        proc = self._proc
+        if proc is None:
+            return
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            proc.communicate(timeout=0.2)
+        except Exception:
+            pass
+        self._proc = None
 
     def run(self):
         self._running = True
         while self._running:
             try:
-                result = subprocess.run(
+                self._proc = subprocess.Popen(
                     ["adb", "-s", self._device_id, "exec-out", "screencap", "-p"],
-                    capture_output=True,
-                    timeout=10,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                 )
-                if result.returncode == 0 and result.stdout:
-                    self.frame_bytes_ready.emit(result.stdout)
+                deadline = time.time() + 10
+                while self._running:
+                    ret = self._proc.poll()
+                    if ret is not None:
+                        stdout, _stderr = self._proc.communicate()
+                        self._proc = None
+                        if ret == 0 and stdout:
+                            self.frame_bytes_ready.emit(stdout)
+                        break
+                    if time.time() >= deadline:
+                        self._terminate_current_proc()
+                        break
+                    time.sleep(0.05)
             except Exception:
-                pass
+                self._proc = None
             # 分段 sleep，便于快速响应 stop()
             deadline = time.time() + self._interval
             while self._running and time.time() < deadline:
@@ -80,6 +106,7 @@ class _ScreenshotPoller(QThread):
 
     def stop(self):
         self._running = False
+        self._terminate_current_proc()
 
 
 class _EmbedWindowThread(QThread):
@@ -96,6 +123,10 @@ class _EmbedWindowThread(QThread):
         super().__init__()
         self._parent_wid = parent_wid
         self._device_id = device_id
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
 
     def run(self):
         if sys.platform != "win32":
@@ -125,10 +156,13 @@ class _EmbedWindowThread(QThread):
 
             cb = WNDENUMPROC(enum_callback)
 
-            while hwnd is None and time.time() < deadline:
+            while not self._stop_requested and hwnd is None and time.time() < deadline:
                 user32.EnumWindows(cb, 0)
                 if hwnd is None:
                     time.sleep(0.5)
+
+            if self._stop_requested:
+                return
 
             if not hwnd:
                 self.embed_failed.emit("未找到 scrcpy 窗口，将以独立窗口显示")
@@ -495,6 +529,7 @@ class MirrorService(QObject):
         # 停止嵌入等待线程
         if self._embed_thread:
             if self._embed_thread.isRunning():
+                self._embed_thread.request_stop()
                 self._embed_thread.wait(2000)
             self._embed_thread.deleteLater()
             self._embed_thread = None

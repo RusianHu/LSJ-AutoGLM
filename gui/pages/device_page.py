@@ -770,6 +770,10 @@ class DevicePage(QWidget):
         self._btn_check_kbd.setProperty("variant", "subtle")
         self._btn_check_kbd.clicked.connect(self._on_check_kbd)
         kbd_layout.addWidget(self._btn_check_kbd)
+        self._btn_install_kbd = QPushButton(self._t("page.device.adbkb.btn.install"))
+        self._btn_install_kbd.setProperty("variant", "primary")
+        self._btn_install_kbd.clicked.connect(self._on_install_kbd)
+        kbd_layout.addWidget(self._btn_install_kbd)
         kbd_layout.addStretch()
         root.addWidget(kbd_group)
 
@@ -807,6 +811,7 @@ class DevicePage(QWidget):
             (getattr(self, "_btn_qr_scan", None), btn_success(self._theme_tokens)),
             (getattr(self, "_btn_qr_pair", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_check_kbd", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_install_kbd", None), btn_primary(self._theme_tokens)),
             (getattr(self, "_btn_check_scrcpy", None), btn_subtle(self._theme_tokens)),
         )
         for btn, style in btn_styles:
@@ -829,6 +834,8 @@ class DevicePage(QWidget):
             self._btn_wifi_connect.setEnabled(bool(self._wifi_input.text().strip()))
         if hasattr(self, "_btn_check_kbd"):
             self._btn_check_kbd.setEnabled(bool(active_device_id))
+        if hasattr(self, "_btn_install_kbd"):
+            self._btn_install_kbd.setEnabled(bool(active_device_id))
 
     def apply_theme_tokens(self, tokens: ThemeTokens) -> None:
         """
@@ -1052,6 +1059,19 @@ class DevicePage(QWidget):
             )
             self._log(self._t("page.device.log.kbd_check", msg=msg))
 
+    def _on_install_kbd(self):
+        device_id = ""
+        if self._device and self._device.selected_device:
+            device_id = self._device.selected_device.device_id
+        if not device_id:
+            self._kbd_status_lbl.setText(self._t("page.device.kbd.no_device"))
+            return
+        if self._device:
+            ok, msg = self._device.install_adb_keyboard(device_id)
+            color = "#3fb950" if ok else "#f85149"
+            self._kbd_status_lbl.setText(f"<span style='color:{color}'>{msg}</span>")
+            self._log(self._t("page.device.log.kbd_install", msg=msg))
+
     def _on_check_scrcpy(self):
         mirror = self._services.get("mirror")
         if mirror:
@@ -1097,6 +1117,7 @@ class DevicePage(QWidget):
         self._btn_qr_pair.setText(i18n_manager.t("page.device.btn.qr_pair"))
         self._btn_qr_pair.setToolTip(i18n_manager.t("page.device.qr_pair.tooltip"))
         self._btn_check_kbd.setText(i18n_manager.t("page.device.btn.check_kbd"))
+        self._btn_install_kbd.setText(i18n_manager.t("page.device.adbkb.btn.install"))
         self._btn_check_scrcpy.setText(i18n_manager.t("page.device.btn.check_scrcpy"))
         # 输入框 placeholder
         self._wifi_addr_lbl.setText(i18n_manager.t("page.device.wifi.addr_label"))

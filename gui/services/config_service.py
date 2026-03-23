@@ -55,6 +55,8 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
         "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
         "OPEN_AUTOGLM_ZHIPU_API_KEY": "",
+        "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": "http://127.0.0.1:1234",
+        "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": "autoglm-phone-9b",
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": "",
         "OPEN_AUTOGLM_THEME": "system",
     }
@@ -167,12 +169,38 @@ class ConfigService(QObject):
         super().__init__(parent)
         self._env_file = env_file or _ENV_FILE
         self._cache: Dict[str, str] = {}
+        self._env_bootstrap_created = False
+        self._env_bootstrap_error = ""
         self.load()
 
     @property
     def env_path(self) -> str:
         """返回 .env 文件路径字符串（供 SettingsPage 显示）"""
         return str(self._env_file.resolve())
+
+    def get_env_file_status(self) -> Dict[str, Any]:
+        """返回当前 .env 文件状态，供诊断页与设置页使用。"""
+        try:
+            resolved_path = self._env_file.resolve()
+        except Exception:
+            resolved_path = self._env_file
+
+        parent = self._env_file.parent
+        exists = self._env_file.exists()
+        parent_exists = parent.exists()
+        if exists:
+            writable = os.access(self._env_file, os.W_OK)
+        else:
+            writable = parent_exists and os.access(parent, os.W_OK)
+
+        return {
+            "path": str(resolved_path),
+            "exists": exists,
+            "parent_exists": parent_exists,
+            "writable": writable,
+            "bootstrapped": self._env_bootstrap_created,
+            "bootstrap_error": self._env_bootstrap_error,
+        }
 
     # ---------- 读取 ----------
 
@@ -192,6 +220,8 @@ class ConfigService(QObject):
         """从 .env 文件读取配置到内存缓存"""
         # 先用环境变量初始化（低优先级）
         self._cache = {k: os.environ.get(k, v) for k, v in self.DEFAULTS.items()}
+        self._env_bootstrap_created = False
+        self._env_bootstrap_error = ""
 
         if not self._env_file.exists():
             self._normalize_aliases()
@@ -328,7 +358,11 @@ class ConfigService(QObject):
                     lines.append(f"{key}={self._quote_value(cached_val)}\n")
             with open(self._env_file, "w", encoding="utf-8") as f:
                 f.writelines(lines)
-        except Exception:
+            self._env_bootstrap_created = True
+            self._env_bootstrap_error = ""
+        except Exception as exc:
+            self._env_bootstrap_created = False
+            self._env_bootstrap_error = f"{type(exc).__name__}: {exc}"
             # 生成失败不阻塞启动（如分发包在只读目录等情况）
             pass
 

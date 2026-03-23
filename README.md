@@ -79,6 +79,30 @@
 - 默认不在配置文件中持久化 API Key（可通过环境变量开启）
 - 控制台显示 API Key 时自动遮蔽
 
+#### GUI 单文件分发与诊断
+
+适用于 [`OpenAutoGLM-GUI.exe`](dist/OpenAutoGLM-GUI.exe) 的推荐逻辑：
+
+- 推荐使用 [`scripts/build_gui_onefile_venv.bat`](scripts/build_gui_onefile_venv.bat:15) 在项目 [`venv`](scripts/build_gui_onefile_venv.bat:15) 中打包
+- **面向最终用户的分发包，默认应自带 PC 侧运行时依赖**，至少包括 `adb`；建议同时带上 `scrcpy` 和 [`ADBKeyboard.apk`](ADBKeyboard.apk)
+- 单文件模式下，GUI 会优先使用打包内置资源，其次才会回退到外部环境
+- 首次运行若未检测到 [`.env`](.env.example)，GUI 会自动生成初始文件；敏感字段默认留空，需要在“设置”页填写后保存
+- 若 exe 位于只读目录，首次自动创建 [`.env`](.env.example) 可能失败；此时“设置”页和“诊断”页会提示将 exe 移到可写目录，或通过环境变量 `OPEN_AUTOGLM_ENV_PATH` 指定新的 [`.env`](.env.example) 路径
+- “诊断”页会检查：`.env` 状态、内置 `adb` 是否可用、设备连接、ADB Keyboard、`scrcpy`、API Base URL、API Key 与 API 连通性
+
+对最终用户，推荐的体验目标是：
+
+```text
+用户拿到 OpenAutoGLM-GUI.exe
+-> 双击运行
+-> GUI 自动创建 .env
+-> 连接手机
+-> 在设备页一键安装 ADB Keyboard（手机端）
+-> 开始使用
+```
+
+只有开发环境/自定义裁剪分发包时，才需要额外关心手动准备 `adb` / `scrcpy`。
+
 ### 2. 环境变量配置 (`.env.example`)
 
 完整的环境变量配置模板，支持：
@@ -153,7 +177,27 @@ python launcher.py
 
 启动器将自动识别预设，显示系统状态并进入主菜单。
 
-### 方式二：直接运行 main.py
+### 方式二：运行 GUI
+
+源码运行：
+
+```powershell
+python gui_app.py
+```
+
+单文件分发运行：
+
+```powershell
+.\dist\OpenAutoGLM-GUI.exe
+```
+
+首次运行说明：
+
+1. 若 exe 同目录没有 [`.env`](.env.example)，GUI 会尝试自动创建
+2. 若目录不可写，设置页与诊断页会给出提示，不会静默失败
+3. 诊断页中如果发现 ADB、ADB Keyboard、scrcpy 或 API 配置缺失，会显示对应的修复指引与下载地址
+
+### 方式三：直接运行 `main.py`
 
 ```powershell
 # 使用 ModelScope

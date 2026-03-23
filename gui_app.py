@@ -20,7 +20,9 @@ import sys
 from gui.utils.runtime import (
     GUI_TASK_RUNNER_FLAG,
     app_root,
+    ensure_runtime_path,
     ensure_standard_streams,
+    patch_subprocess_for_gui,
 )
 
 # 确保 UTF-8 编码（仅通过环境变量，不调用 os.system/chcp，
@@ -38,6 +40,8 @@ if str(ROOT) not in sys.path:
 
 # 统一工作目录，保证 .env / 历史日志 / 打包脚本等路径稳定
 os.chdir(ROOT)
+ensure_runtime_path()
+patch_subprocess_for_gui()
 
 
 def _run_task_runner():

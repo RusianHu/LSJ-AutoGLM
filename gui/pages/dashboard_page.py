@@ -96,7 +96,14 @@ class _ReadinessWorker(QThread):
         self._stop_requested = True
 
     def run(self):
-        results = run_readiness_checks(self._config, device_id=self._device_id)
+        try:
+            results = run_readiness_checks(
+                self._config,
+                device_id=self._device_id,
+                should_stop=lambda: self._stop_requested,
+            )
+        except InterruptedError:
+            return
         if self._stop_requested:
             return
         self.results_ready.emit(results)
@@ -127,6 +134,7 @@ class DashboardPage(QWidget):
         self._readiness_worker = None
         self._pending_readiness_refresh = False
         self._last_readiness_check_at = 0.0
+        self._last_device_readiness_snapshot = None
 
         self._mirror_label: MirrorLabel = None   # ADB 截图降级时的图片显示
         self._mirror_container: QWidget = None
@@ -168,6 +176,18 @@ class DashboardPage(QWidget):
                     return (info.device_id or "").strip()
 
         return ""
+
+    def _make_device_readiness_snapshot(self, device_info) -> tuple | None:
+        if device_info is None:
+            return None
+        status = getattr(getattr(device_info, "status", None), "value", "")
+        return (
+            getattr(device_info, "device_id", "") or "",
+            status,
+            bool(getattr(device_info, "adb_keyboard_installed", False)),
+            bool(getattr(device_info, "adb_keyboard_enabled", False)),
+            str(getattr(device_info, "adb_keyboard_status", "") or ""),
+        )
 
     # ================================================================
     # UI 构建
@@ -1078,12 +1098,19 @@ class DashboardPage(QWidget):
 
     def _on_device_selected(self, device_info):
         from gui.services.device_service import DeviceStatus
+
+        snapshot = self._make_device_readiness_snapshot(device_info)
+        readiness_changed = snapshot != self._last_device_readiness_snapshot
+        self._last_device_readiness_snapshot = snapshot
+
         if device_info is None:
             self._device_info_lbl.setText(self._t("page.dashboard.device_info.no_device"))
             self._update_device_status(self._t("page.dashboard.device_info.no_selected"), "#8b949e")
             # 清除镜像控件的设备绑定
             if self._mirror_label:
                 self._mirror_label.set_device_id("")
+            if readiness_changed:
+                self._schedule_readiness_check(300)
             return
         # 更新镜像控件绑定的 ADB 设备 ID（用于鼠标 tap 转发）
         if self._mirror_label:
@@ -1110,7 +1137,8 @@ class DashboardPage(QWidget):
         else:
             self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
 
-        self._schedule_readiness_check(300)
+        if readiness_changed:
+            self._schedule_readiness_check(300)
 
     def _update_device_status(self, text: str, color: str):
         self._set_device_status(text, color)

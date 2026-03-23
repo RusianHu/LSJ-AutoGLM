@@ -804,6 +804,7 @@ class SettingsPage(QWidget):
             subprocess.Popen(
                 ["cmd", "/c", "start", "", str(script_path)],
                 cwd=str(app_root()),
+                autoglm_allow_console=True,
             )
             self._show_banner(
                 "",
@@ -972,8 +973,37 @@ class SettingsPage(QWidget):
         for key, edit in self._field_widgets.items():
             value = self._config.get(key)
             edit.setText(value)
+        self._show_env_status_banner_if_needed()
         self._update_theme_hint()
         self._refresh_build_paths()
+
+    def _show_env_status_banner_if_needed(self):
+        """根据 .env 当前状态显示首次运行提示。"""
+        if not self._config:
+            return
+
+        getter = getattr(self._config, "get_env_file_status", None)
+        if not callable(getter):
+            return
+
+        try:
+            status = getter()
+        except Exception:
+            return
+
+        if status.get("bootstrap_error"):
+            self._show_banner(
+                self._t("page.settings.env_status.bootstrap_failed", path=status.get("path", ""), error=status.get("bootstrap_error", "")),
+                ok=False,
+            )
+            return
+
+        if status.get("exists") and not status.get("writable"):
+            self._show_banner(
+                self._t("page.settings.env_status.readonly", path=status.get("path", "")),
+                ok=False,
+            )
+            return
 
     def _on_save(self):
         """收集界面值，批量写入（只写一次文件），失败时全量回滚"""
@@ -1043,6 +1073,26 @@ class SettingsPage(QWidget):
         self._config.load()
         self._load_values()
         self._refresh_preset_active()
+
+        getter = getattr(self._config, "get_env_file_status", None)
+        status = getter() if callable(getter) else {}
+        if status.get("bootstrap_error"):
+            self._show_banner(
+                self._t(
+                    "page.settings.env_status.bootstrap_failed",
+                    path=status.get("path", ""),
+                    error=status.get("bootstrap_error", ""),
+                ),
+                ok=False,
+            )
+            return
+        if status.get("exists") and not status.get("writable"):
+            self._show_banner(
+                self._t("page.settings.env_status.readonly", path=status.get("path", "")),
+                ok=False,
+            )
+            return
+
         self._show_banner(
             "",
             ok=True,

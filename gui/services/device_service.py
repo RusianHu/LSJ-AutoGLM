@@ -10,11 +10,14 @@
 
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
+
+from gui.utils.runtime import find_adb_keyboard_apk
 
 
 class DeviceStatus(Enum):
@@ -51,18 +54,56 @@ class DeviceInfo:
 
 ADB_KEYBOARD_PACKAGE = "com.android.adbkeyboard"
 ADB_KEYBOARD_IME = "com.android.adbkeyboard/.AdbIME"
+StopChecker = Callable[[], bool]
 
 
-def _run_adb_shell(device_id: str, args: List[str], timeout: int = 5) -> subprocess.CompletedProcess:
-    return subprocess.run(
+def _terminate_process(proc: subprocess.Popen) -> None:
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    try:
+        proc.communicate(timeout=0.2)
+    except Exception:
+        pass
+
+
+
+def _run_adb_shell(
+    device_id: str,
+    args: List[str],
+    timeout: int = 5,
+    *,
+    should_stop: StopChecker | None = None,
+) -> subprocess.CompletedProcess:
+    proc = subprocess.Popen(
         ["adb", "-s", device_id, "shell", *args],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=timeout,
     )
+    deadline = time.monotonic() + max(timeout, 0)
+    while True:
+        if callable(should_stop) and should_stop():
+            _terminate_process(proc)
+            raise InterruptedError("ADB 检查已取消")
+        ret = proc.poll()
+        if ret is not None:
+            stdout, stderr = proc.communicate()
+            return subprocess.CompletedProcess(["adb", "-s", device_id, "shell", *args], ret, stdout, stderr)
+        if time.monotonic() >= deadline:
+            _terminate_process(proc)
+            raise subprocess.TimeoutExpired(["adb", "-s", device_id, "shell", *args], timeout)
+        time.sleep(0.05)
 
 
-def probe_adb_keyboard_status(device_id: str, timeout: int = 5) -> Tuple[bool, bool, str]:
+
+def probe_adb_keyboard_status(
+    device_id: str,
+    timeout: int = 5,
+    *,
+    should_stop: StopChecker | None = None,
+) -> Tuple[bool, bool, str]:
     """返回 (是否安装, 是否已启用/可直接切换, 状态文本)。"""
     installed = False
     enabled = False
@@ -73,15 +114,25 @@ def probe_adb_keyboard_status(device_id: str, timeout: int = 5) -> Tuple[bool, b
             device_id,
             ["pm", "list", "packages", ADB_KEYBOARD_PACKAGE],
             timeout=timeout,
+            should_stop=should_stop,
         )
         installed = ADB_KEYBOARD_PACKAGE in ((result.stdout or "") + (result.stderr or ""))
+    except InterruptedError:
+        raise
     except Exception:
         installed = False
 
     try:
-        result = _run_adb_shell(device_id, ["ime", "list", "-s"], timeout=timeout)
+        result = _run_adb_shell(
+            device_id,
+            ["ime", "list", "-s"],
+            timeout=timeout,
+            should_stop=should_stop,
+        )
         ime_list = ((result.stdout or "") + (result.stderr or "")).strip()
         enabled = ADB_KEYBOARD_IME in ime_list
+    except InterruptedError:
+        raise
     except Exception:
         enabled = False
 
@@ -90,8 +141,11 @@ def probe_adb_keyboard_status(device_id: str, timeout: int = 5) -> Tuple[bool, b
             device_id,
             ["settings", "get", "secure", "default_input_method"],
             timeout=timeout,
+            should_stop=should_stop,
         )
         current_ime = ((result.stdout or "") + (result.stderr or "")).strip()
+    except InterruptedError:
+        raise
     except Exception:
         current_ime = ""
 
@@ -109,21 +163,62 @@ class _RefreshWorker(QThread):
     result_ready = Signal(list)   # List[DeviceInfo]
     adb_error = Signal(str)
 
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._stop_requested = False
+        self._proc: Optional[subprocess.Popen] = None
+
+    def request_stop(self):
+        self._stop_requested = True
+        proc = self._proc
+        if proc is not None:
+            _terminate_process(proc)
+
+    def _should_stop(self) -> bool:
+        return self._stop_requested
+
     def run(self):
         try:
-            result = subprocess.run(
-                ["adb", "devices", "-l"],
-                capture_output=True, text=True, timeout=10
-            )
+            result = self._run_adb_devices(timeout=10)
+            if self._should_stop():
+                return
             if result.returncode != 0:
                 self.adb_error.emit(f"adb devices 失败: {result.stderr}")
                 return
             devices = self._parse(result.stdout)
+            if self._should_stop():
+                return
             self.result_ready.emit(devices)
+        except InterruptedError:
+            return
         except FileNotFoundError:
             self.adb_error.emit("ADB 未找到，请确认已安装并加入 PATH")
         except Exception as e:
-            self.adb_error.emit(f"设备刷新异常: {e}")
+            if not self._should_stop():
+                self.adb_error.emit(f"设备刷新异常: {e}")
+        finally:
+            self._proc = None
+
+    def _run_adb_devices(self, timeout: int = 10) -> subprocess.CompletedProcess:
+        self._proc = subprocess.Popen(
+            ["adb", "devices", "-l"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        deadline = time.monotonic() + max(timeout, 0)
+        while True:
+            if self._should_stop():
+                _terminate_process(self._proc)
+                raise InterruptedError("设备刷新已取消")
+            ret = self._proc.poll()
+            if ret is not None:
+                stdout, stderr = self._proc.communicate()
+                return subprocess.CompletedProcess(["adb", "devices", "-l"], ret, stdout, stderr)
+            if time.monotonic() >= deadline:
+                _terminate_process(self._proc)
+                raise subprocess.TimeoutExpired(["adb", "devices", "-l"], timeout)
+            time.sleep(0.05)
 
     def _parse(self, output: str) -> List[DeviceInfo]:
         devices = []
@@ -164,6 +259,9 @@ class _RefreshWorker(QThread):
 
     def _enrich(self, info: DeviceInfo):
         """补充 Android 版本、型号、ADB Keyboard 状态"""
+        if self._should_stop():
+            return
+
         try:
             r = subprocess.run(
                 ["adb", "-s", info.device_id, "shell",
@@ -174,6 +272,9 @@ class _RefreshWorker(QThread):
                 info.android_version = r.stdout.strip()
         except Exception:
             pass
+
+        if self._should_stop():
+            return
 
         if not info.model:
             try:
@@ -187,11 +288,20 @@ class _RefreshWorker(QThread):
             except Exception:
                 pass
 
+        if self._should_stop():
+            return
+
         try:
-            installed, enabled, status = probe_adb_keyboard_status(info.device_id, timeout=5)
+            installed, enabled, status = probe_adb_keyboard_status(
+                info.device_id,
+                timeout=5,
+                should_stop=self._should_stop,
+            )
             info.adb_keyboard_installed = installed
             info.adb_keyboard_enabled = enabled
             info.adb_keyboard_status = status
+        except InterruptedError:
+            return
         except Exception:
             pass
 
@@ -428,6 +538,34 @@ class DeviceService(QObject):
         except Exception as e:
             return False, str(e)
 
+    def install_adb_keyboard(self, device_id: str) -> Tuple[bool, str]:
+        apk_path = find_adb_keyboard_apk()
+        if apk_path is None:
+            return False, "未找到 ADBKeyboard.apk，请检查分发包是否完整"
+
+        try:
+            result = subprocess.run(
+                ["adb", "-s", device_id, "install", "-r", str(apk_path)],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            stdout = (result.stdout or "").strip()
+            stderr = (result.stderr or "").strip()
+            merged = stdout or stderr or "ADB Keyboard 安装完成"
+            if result.returncode != 0:
+                return False, merged
+
+            subprocess.run(
+                ["adb", "-s", device_id, "shell", "ime", "enable", ADB_KEYBOARD_IME],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            return True, f"{merged}（已尝试启用 ADB Keyboard）"
+        except Exception as e:
+            return False, str(e)
+
     # ---------- 生命周期 ----------
 
     def stop(self):
@@ -438,7 +576,8 @@ class DeviceService(QObject):
             self._initial_timer.stop()
         if self._worker:
             if self._worker.isRunning():
+                self._worker.request_stop()
                 self._worker.wait(3000)
-            if not self._worker.isRunning():
+            if self._worker and not self._worker.isRunning():
                 self._worker.deleteLater()
             self._worker = None

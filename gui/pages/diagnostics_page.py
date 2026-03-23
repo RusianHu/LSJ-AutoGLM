@@ -29,6 +29,7 @@ from gui.theme.styles.lists import list_default
 class _DiagWorker(QThread):
     """在后台线程中运行所有诊断检查"""
 
+    progress_changed = Signal(str, str, int, int)  # key, label_key, index, total
     result_ready = Signal(object)   # ReadinessCheckResult
     all_done = Signal(object)       # list[ReadinessCheckResult]
 
@@ -42,13 +43,29 @@ class _DiagWorker(QThread):
         self._stop_requested = True
 
     def run(self):
-        results = run_readiness_checks(self._config, device_id=self._device_id)
         emitted_results = []
-        for result in results:
+
+        def _emit_progress(key: str, label_key: str, index: int, total: int):
             if self._stop_requested:
-                break
+                raise InterruptedError("diagnostics worker stopped")
+            self.progress_changed.emit(key, label_key, index, total)
+
+        def _emit_result(result: ReadinessCheckResult):
+            if self._stop_requested:
+                raise InterruptedError("diagnostics worker stopped")
             emitted_results.append(result)
             self.result_ready.emit(result)
+
+        try:
+            run_readiness_checks(
+                self._config,
+                device_id=self._device_id,
+                on_progress=_emit_progress,
+                on_result=_emit_result,
+                should_stop=lambda: self._stop_requested,
+            )
+        except InterruptedError:
+            pass
         self.all_done.emit(emitted_results)
 
 
@@ -66,6 +83,7 @@ class DiagnosticsPage(QWidget):
         self._theme_vars = self._theme_tokens.to_legacy_dict()
         self._summary_kind = "idle"
         self._last_summary_state = (self._t("page.diagnostics.status.idle"), "idle")
+        self._running_progress = ("", "", 0, 0)
         self._build_ui()
         self._apply_action_button_styles()
 
@@ -127,6 +145,12 @@ class DiagnosticsPage(QWidget):
         self._result_list = QListWidget()
         self._result_list.setProperty("surface", "console")
         root.addWidget(self._result_list, 1)
+
+        # 当前步骤
+        self._progress_lbl = QLabel("")
+        self._progress_lbl.setWordWrap(True)
+        self._progress_lbl.setProperty("role", "subtle")
+        root.addWidget(self._progress_lbl)
 
         # 摘要
         self._summary_lbl = QLabel(self._t("page.diagnostics.status.idle"))
@@ -201,19 +225,24 @@ class DiagnosticsPage(QWidget):
 
     def _on_run(self):
         if self._worker and self._worker.isRunning():
+            self._worker.request_stop()
+            self._btn_run.setEnabled(False)
             return
         if self._worker:
             self._worker.deleteLater()
             self._worker = None
         self._last_results = []
         self._result_list.clear()
+        self._running_progress = ("", "", 0, 0)
+        self._progress_lbl.setText("")
         self._summary_kind = "running"
         self._last_summary_state = (self._t("page.diagnostics.status.running"), "warning")
         self._summary_lbl.setText(self._last_summary_state[0])
         self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
-        self._btn_run.setEnabled(False)
+        self._btn_run.setText(self._t("page.diagnostics.btn.stop"))
 
         self._worker = _DiagWorker(self._config, device_id=self._current_device_id())
+        self._worker.progress_changed.connect(self._on_progress)
         self._worker.result_ready.connect(self._on_result)
         self._worker.all_done.connect(self._on_all_done)
         self._worker.finished.connect(self._on_worker_finished)
@@ -241,6 +270,13 @@ class DiagnosticsPage(QWidget):
             return self._theme_vars.get("danger", "#f85149")
         return self._theme_vars.get("warning", "#e3b341")
 
+    def _on_progress(self, key: str, label_key: str, index: int, total: int):
+        self._running_progress = (key, label_key, index, total)
+        label = self._t(label_key) if label_key else key
+        self._progress_lbl.setText(
+            self._t("page.diagnostics.status.running_step", index=index, total=total, label=label)
+        )
+
     def _on_result(self, result: ReadinessCheckResult):
         self._last_results.append(result)
         item = QListWidgetItem(self._format_result_text(result))
@@ -250,11 +286,13 @@ class DiagnosticsPage(QWidget):
 
     def _on_all_done(self, results):
         self._btn_run.setEnabled(True)
+        self._btn_run.setText(self._t("page.diagnostics.btn.run"))
         if not results:
             self._summary_kind = "stopped"
             self._last_summary_state = (self._t("page.diagnostics.status.stopped"), "warning")
             self._summary_lbl.setText(self._last_summary_state[0])
             self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
+            self._progress_lbl.setText("")
             return
 
         summary = summarize_readiness(results)
@@ -267,8 +305,12 @@ class DiagnosticsPage(QWidget):
         self._last_summary_state = (message, state)
         self._summary_lbl.setText(message)
         self._summary_lbl.setStyleSheet(self._summary_style(self._last_summary_state[1]))
+        self._progress_lbl.setText(self._t("page.diagnostics.status.done"))
 
     def _on_worker_finished(self):
+        self._btn_run.setEnabled(True)
+        if self._summary_kind != "running":
+            self._btn_run.setText(self._t("page.diagnostics.btn.run"))
         if self._worker:
             self._worker.deleteLater()
             self._worker = None
@@ -290,7 +332,10 @@ class DiagnosticsPage(QWidget):
         """语言切换后重绘所有静态文案。"""
         self._title_lbl.setText(i18n_manager.t("page.diagnostics.title"))
         self._hint_lbl.setText(i18n_manager.t("page.diagnostics.description"))
-        self._btn_run.setText(i18n_manager.t("page.diagnostics.btn.run"))
+        if self._worker and self._worker.isRunning():
+            self._btn_run.setText(i18n_manager.t("page.diagnostics.btn.stop"))
+        else:
+            self._btn_run.setText(i18n_manager.t("page.diagnostics.btn.run"))
 
         if self._last_results:
             self._result_list.clear()
@@ -307,16 +352,28 @@ class DiagnosticsPage(QWidget):
             self._last_summary_state = (message, state)
             self._summary_lbl.setText(message)
             self._summary_lbl.setStyleSheet(self._summary_style(state))
+            self._progress_lbl.setText(i18n_manager.t("page.diagnostics.status.done"))
             return
 
         _kind = getattr(self, "_summary_kind", "idle")
+        _key, label_key, index, total = self._running_progress
         state_text, state_sem = self._last_summary_state
         if _kind == "running":
             new_text = i18n_manager.t("page.diagnostics.status.running")
+            if label_key:
+                new_text = i18n_manager.t(
+                    "page.diagnostics.status.running_step",
+                    index=index,
+                    total=total,
+                    label=i18n_manager.t(label_key),
+                )
+            self._progress_lbl.setText(new_text)
         elif _kind == "stopped":
             new_text = i18n_manager.t("page.diagnostics.status.stopped")
+            self._progress_lbl.setText("")
         else:
             new_text = i18n_manager.t("page.diagnostics.status.idle")
+            self._progress_lbl.setText("")
         self._last_summary_state = (new_text, state_sem)
         self._summary_lbl.setText(new_text)
         self._summary_lbl.setStyleSheet(self._summary_style(state_sem))

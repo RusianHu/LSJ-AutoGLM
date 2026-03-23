@@ -100,8 +100,11 @@ if defined EXCLUDE_ARGS echo [INFO] Excluding heavy modules:%EXCLUDE_ARGS%
   --hidden-import gui.i18n.locales.en ^
   --hidden-import qrcode ^
   --hidden-import qrcode.image.pil ^
+  --hidden-import openai ^
   --collect-submodules gui.i18n.locales ^
   --collect-submodules phone_agent.config ^
+  --collect-submodules openai ^
+  --copy-metadata openai ^
   %EXCLUDE_ARGS% ^
   "%ENTRY%"
 
