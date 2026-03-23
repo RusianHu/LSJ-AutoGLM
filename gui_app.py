@@ -23,10 +23,13 @@ from gui.utils.runtime import (
     ensure_standard_streams,
 )
 
-# 确保 UTF-8 编码
+# 确保 UTF-8 编码（仅通过环境变量，不调用 os.system/chcp，
+# 避免 PyInstaller --windowed 模式下弹出黑色 cmd 控制台窗口）
 os.environ["PYTHONIOENCODING"] = "utf-8"
 if sys.platform == "win32":
-    os.system("chcp 65001 >nul 2>&1")
+    # chcp 65001 对无控制台的 GUI 进程没有实际作用，
+    # 且 os.system() 会创建 cmd.exe 子进程导致黑框闪现，故移除。
+    os.environ.setdefault("PYTHONUTF8", "1")
 
 # 源码运行时为仓库根目录；单文件运行时为 exe 所在目录
 ROOT = app_root().resolve()

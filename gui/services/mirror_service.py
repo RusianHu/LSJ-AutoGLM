@@ -232,16 +232,44 @@ class MirrorService(QObject):
 
     @staticmethod
     def find_scrcpy() -> Optional[str]:
-        """查找 scrcpy 可执行文件路径"""
+        """查找 scrcpy 可执行文件路径。
+
+        搜索顺序：
+        1. PATH 中的 scrcpy
+        2. app_root() 相对路径（源码运行 = 项目根；打包运行 = exe 所在目录 dist/）
+        3. 打包运行时额外搜索 app_root().parent（即 exe 上一级，通常是项目根目录），
+           支持 dist/OpenAutoGLM-GUI.exe 旁边放 scrcpy 的目录结构:
+               项目根/
+               ├── dist/OpenAutoGLM-GUI.exe
+               └── scrcpy/scrcpy.exe   ← 可被自动识别
+        4. 常见绝对路径
+        """
         p = shutil.which("scrcpy")
         if p:
             return p
-        candidates = [
-            Path("scrcpy") / "scrcpy.exe",
-            Path("tools") / "scrcpy" / "scrcpy.exe",
+
+        from gui.utils.runtime import app_root, is_frozen
+        root = app_root()
+
+        # 构建要搜索的基目录列表
+        search_roots = [root]
+        if is_frozen():
+            # 打包后 exe 位于 dist/ 子目录，额外搜索上一级（项目根目录）
+            search_roots.append(root.parent)
+
+        candidates = []
+        for base in search_roots:
+            candidates.extend([
+                base / "scrcpy" / "scrcpy.exe",
+                base / "tools" / "scrcpy" / "scrcpy.exe",
+            ])
+
+        # 常见绝对安装路径（兜底）
+        candidates.extend([
             Path("C:/scrcpy/scrcpy.exe"),
             Path("C:/Program Files/scrcpy/scrcpy.exe"),
-        ]
+        ])
+
         for c in candidates:
             if c.exists():
                 return str(c)

@@ -195,6 +195,8 @@ class ConfigService(QObject):
 
         if not self._env_file.exists():
             self._normalize_aliases()
+            # 首次启动时自动生成初始 .env，保证配置可持久化
+            self._bootstrap_env()
             return
 
         try:
@@ -212,7 +214,13 @@ class ConfigService(QObject):
                     if (val.startswith('"') and val.endswith('"')) or \
                        (val.startswith("'") and val.endswith("'")):
                         val = val[1:-1]
-                    self._cache[key] = val
+                    # 若文件中该键为空占位（KEY=），但环境变量中有非空注入值，
+                    # 则保留环境变量值，避免首次引导生成的空敏感占位行覆盖注入配置。
+                    env_val = os.environ.get(key)
+                    if val == "" and env_val:
+                        self._cache[key] = env_val
+                    else:
+                        self._cache[key] = val
         except Exception as e:
             self.config_error.emit(f".env 读取失败 (行 {lineno if 'lineno' in dir() else '?'}): {e}")
 
@@ -293,6 +301,36 @@ class ConfigService(QObject):
                     self._cache[k] = ov
             self.config_error.emit(f"配置保存失败: {e}")
             raise e
+
+    def _bootstrap_env(self):
+        """首次启动时自动生成初始 .env 文件。
+
+        仅在 .env 不存在时调用。将当前 DEFAULTS 中所有 key 写入新文件，
+        以注释标注来源，并标记敏感字段为空值（不写入默认密钥）。
+        写入失败时静默忽略，不影响 GUI 正常启动。
+        """
+        try:
+            self._env_file.parent.mkdir(parents=True, exist_ok=True)
+            lines: List[str] = [
+                "# Open-AutoGLM 配置文件\n",
+                "# 首次启动时由 GUI 自动生成，可直接编辑此文件。\n",
+                "# 敏感字段（API Key）请在 GUI 设置页填写后保存。\n",
+                "\n",
+            ]
+            for key, default_val in self.DEFAULTS.items():
+                # 敏感字段用空值占位，避免示例密钥误入磁盘
+                if key in self.SENSITIVE_KEYS:
+                    lines.append(f"{key}=\n")
+                else:
+                    # 非敏感字段：取已含环境变量覆盖的缓存值，而非硬编码默认值，
+                    # 避免首次引导文件写入后环境变量注入的配置被默认值覆盖。
+                    cached_val = self._cache.get(key, default_val)
+                    lines.append(f"{key}={self._quote_value(cached_val)}\n")
+            with open(self._env_file, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+        except Exception:
+            # 生成失败不阻塞启动（如分发包在只读目录等情况）
+            pass
 
     def _write_env(self):
         """
