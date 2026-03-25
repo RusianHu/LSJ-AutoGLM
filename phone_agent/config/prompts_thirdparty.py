@@ -13,6 +13,7 @@ ACTION_FORMAT_GUIDE = """
 
 ### 1. 启动应用
 do(action="Launch", app="应用名")
+系统会先用内置映射；若未命中，会尝试通过 adb 在设备上查找已安装应用。
 
 ### 2. 点击坐标 (坐标范围 0-999)
 do(action="Tap", element=[x, y])

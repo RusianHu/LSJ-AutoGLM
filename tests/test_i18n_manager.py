@@ -10,6 +10,7 @@ import sys
 import os
 
 import pytest
+from unittest.mock import patch
 
 # 确保在仓库根目录下运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))

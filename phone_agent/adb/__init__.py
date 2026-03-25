@@ -8,12 +8,16 @@ from phone_agent.adb.connection import (
     quick_connect,
 )
 from phone_agent.adb.device import (
+    InstalledApp,
     back,
     double_tap,
+    find_installed_app,
     get_current_app,
     home,
     launch_app,
+    list_installed_apps,
     long_press,
+    search_installed_apps,
     swipe,
     tap,
 )
@@ -35,6 +39,10 @@ __all__ = [
     "restore_keyboard",
     # Device control
     "get_current_app",
+    "list_installed_apps",
+    "find_installed_app",
+    "search_installed_apps",
+    "InstalledApp",
     "tap",
     "swipe",
     "back",

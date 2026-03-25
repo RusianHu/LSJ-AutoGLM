@@ -52,7 +52,7 @@ Your output should STRICTLY follow the format:
   do(action="Long Press", element=[x,y])
   </answer>
 - **Launch**
-  Launch an app. Try to use launch action when you need to launch an app. Check the instruction to choose the right app before you use this action.
+  Launch an app. Try to use launch action when you need to launch an app. The system first checks built-in package mappings, then falls back to adb-based lookup on the connected device when needed. Check the instruction to choose the right app before you use this action.
   **Example**:
   <answer>
   do(action="Launch", app="Settings")

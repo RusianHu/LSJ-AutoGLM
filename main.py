@@ -499,6 +499,19 @@ Examples:
     )
 
     parser.add_argument(
+        "--list-device-apps",
+        action="store_true",
+        help="List launchable apps discovered on the connected Android device and exit",
+    )
+
+    parser.add_argument(
+        "--find-app",
+        type=str,
+        metavar="QUERY",
+        help="Search installed Android apps on the connected device and exit",
+    )
+
+    parser.add_argument(
         "--lang",
         type=str,
         choices=["cn", "en"],
@@ -672,6 +685,43 @@ def handle_device_commands(args) -> bool:
                 print(
                     f"  {status_icon} {device.device_id:<30} [{conn_type}]{model_info}"
                 )
+        return True
+
+    if args.list_device_apps:
+        if device_type != DeviceType.ADB:
+            print("--list-device-apps is currently only supported for Android ADB devices.")
+            return True
+
+        apps = device_factory.list_installed_apps(args.device_id)
+        if not apps:
+            print("No launchable apps found on the connected device.")
+            return True
+
+        print("Launchable apps discovered on device:")
+        print("-" * 80)
+        for app in sorted(apps, key=lambda item: ((item.display_name or "").lower(), item.package_name)):
+            label = app.display_name or "(unknown label)"
+            activity = app.activity_name or "(unknown activity)"
+            print(f"  - {label:<24} {app.package_name} [{activity}]")
+        return True
+
+    if args.find_app:
+        if device_type != DeviceType.ADB:
+            print("--find-app is currently only supported for Android ADB devices.")
+            return True
+
+        matches = device_factory.search_installed_apps(args.find_app, args.device_id)
+        if not matches:
+            print(f"No installed app matched: {args.find_app}")
+            return True
+
+        print(f"Matched installed apps ({len(matches)}):")
+        print("-" * 80)
+        for app in matches[:10]:
+            print(f"  Label:   {app.display_name or '(unknown label)'}")
+            print(f"  Package: {app.package_name}")
+            print(f"  Activity:{' ' if app.activity_name else ''}{app.activity_name or '(unknown activity)'}")
+            print("-" * 80)
         return True
 
     # Handle --connect

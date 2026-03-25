@@ -123,10 +123,14 @@ class ActionHandler:
             return ActionResult(False, False, "No app name specified")
 
         device_factory = get_device_factory()
-        success = device_factory.launch_app(app_name, self.device_id)
-        if success:
-            return ActionResult(True, False)
-        return ActionResult(False, False, f"App not found: {app_name}")
+        launch_result = device_factory.launch_app_detailed(app_name, self.device_id)
+        if launch_result.success:
+            return ActionResult(True, False, launch_result.message)
+        return ActionResult(
+            False,
+            False,
+            launch_result.message or f"App not found: {app_name}",
+        )
 
     def _handle_tap(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle tap action."""

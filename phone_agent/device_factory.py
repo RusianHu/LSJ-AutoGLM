@@ -1,7 +1,17 @@
 """Device factory for selecting ADB or HDC based on device type."""
 
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+
+
+@dataclass
+class AppLaunchResult:
+    """Detailed result for app launch attempts."""
+
+    success: bool
+    message: str | None = None
+    package_name: str | None = None
 
 
 class DeviceType(Enum):
@@ -103,7 +113,25 @@ class DeviceFactory:
         self, app_name: str, device_id: str | None = None, delay: float | None = None
     ) -> bool:
         """Launch an app."""
-        return self.module.launch_app(app_name, device_id, delay)
+        return self.launch_app_detailed(app_name, device_id, delay).success
+
+    def launch_app_detailed(
+        self, app_name: str, device_id: str | None = None, delay: float | None = None
+    ) -> AppLaunchResult:
+        """Launch an app and return detailed result."""
+        launch_callable = getattr(self.module, "launch_app_detailed", self.module.launch_app)
+        result = launch_callable(app_name, device_id, delay)
+        if isinstance(result, AppLaunchResult):
+            return result
+        if isinstance(result, tuple) and len(result) == 3:
+            success, message, package_name = result
+            return AppLaunchResult(success, message, package_name)
+        if isinstance(result, tuple) and len(result) == 2:
+            success, message = result
+            return AppLaunchResult(success, message)
+        if isinstance(result, bool):
+            return AppLaunchResult(result)
+        raise TypeError(f"Unsupported launch_app result type: {type(result)!r}")
 
     def type_text(self, text: str, device_id: str | None = None):
         """Type text."""
@@ -124,6 +152,30 @@ class DeviceFactory:
     def list_devices(self):
         """List connected devices."""
         return self.module.list_devices()
+
+    def list_installed_apps(self, device_id: str | None = None):
+        """List installed apps when supported by the current device backend."""
+        if not hasattr(self.module, "list_installed_apps"):
+            raise NotImplementedError(
+                f"Device type '{self.device_type.value}' does not support installed app lookup"
+            )
+        return self.module.list_installed_apps(device_id)
+
+    def find_installed_app(self, query: str, device_id: str | None = None):
+        """Find an installed app when supported by the current device backend."""
+        if not hasattr(self.module, "find_installed_app"):
+            raise NotImplementedError(
+                f"Device type '{self.device_type.value}' does not support installed app lookup"
+            )
+        return self.module.find_installed_app(query, device_id)
+
+    def search_installed_apps(self, query: str, device_id: str | None = None):
+        """Search installed apps when supported by the current device backend."""
+        if not hasattr(self.module, "search_installed_apps"):
+            raise NotImplementedError(
+                f"Device type '{self.device_type.value}' does not support installed app lookup"
+            )
+        return self.module.search_installed_apps(query, device_id)
 
     def get_connection_class(self):
         """Get the connection class (ADBConnection or HDCConnection)."""
