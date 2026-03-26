@@ -26,6 +26,8 @@ class InstalledApp:
     def search_blob(self) -> str:
         """Return lowercase text used for fuzzy matching."""
         parts = [self.package_name]
+        if self.activity_name:
+            parts.append(self.activity_name)
         if self.display_name:
             parts.append(self.display_name)
         return "\n".join(parts).lower()
@@ -229,14 +231,25 @@ def home(device_id: str | None = None, delay: float | None = None) -> None:
     time.sleep(delay)
 
 
+def _looks_like_package_name(value: str) -> bool:
+    """Return True when the provided value looks like an Android package name."""
+    candidate = (value or "").strip()
+    if "/" in candidate:
+        candidate = candidate.split("/", 1)[0]
+    if "." not in candidate or " " in candidate:
+        return False
+    return re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+", candidate) is not None
+
+
+
 def launch_app(
     app_name: str, device_id: str | None = None, delay: float | None = None
 ) -> AppLaunchResult:
     """
-    Launch an app by name.
+    Launch an app by package name.
 
     Args:
-        app_name: The app name or package identifier.
+        app_name: The Android package identifier, or a built-in alias from APP_PACKAGES.
         device_id: Optional ADB device ID.
         delay: Delay in seconds after launching. If None, uses configured default.
 
@@ -246,36 +259,32 @@ def launch_app(
     if delay is None:
         delay = TIMING_CONFIG.device.default_launch_delay
 
-    package = APP_PACKAGES.get(app_name)
+    normalized_app = (app_name or "").strip()
+    if not normalized_app:
+        return AppLaunchResult(False, "未指定应用包名")
+
+    if _looks_like_package_name(normalized_app):
+        package_name = normalized_app.split("/", 1)[0]
+        launch_result = _launch_package(package_name, device_id, delay)
+        if launch_result.success:
+            launch_result.message = f"已通过包名启动 {package_name}"
+        return launch_result
+
+    package = APP_PACKAGES.get(normalized_app)
     if package:
         launch_result = _launch_package(package, device_id, delay)
         if launch_result.success:
-            launch_result.message = f"已启动 {app_name} ({package})"
+            launch_result.message = f"已启动 {normalized_app} ({package})"
         return launch_result
 
-    matches = search_installed_apps(app_name, device_id)
-    if not matches:
-        return AppLaunchResult(False, f"未找到应用：{app_name}")
-    if len(matches) > 1:
-        candidates = ", ".join(
-            f"{app.display_name or app.package_name} ({app.package_name})"
-            for app in matches[:5]
-        )
-        return AppLaunchResult(
-            False,
-            f"找到多个候选应用，请改用更精确的名称：{candidates}",
-        )
-
-    matched_app = matches[0]
-    launch_result = _launch_package(matched_app.package_name, device_id, delay)
-    if launch_result.success:
-        display_name = matched_app.display_name or app_name
-        launch_result.message = f"已通过设备查找启动 {display_name} ({matched_app.package_name})"
-    return launch_result
+    return AppLaunchResult(
+        False,
+        f"未找到应用：{normalized_app}。ADB 模式请直接提供应用包名，例如 com.android.settings",
+    )
 
 
 def list_installed_apps(device_id: str | None = None) -> list[InstalledApp]:
-    """List launchable apps installed on the connected device."""
+    """List launchable Android packages installed on the connected device."""
     output = _run_adb_shell(
         [
             "cmd",
@@ -307,7 +316,6 @@ def list_installed_apps(device_id: str | None = None) -> list[InstalledApp]:
         apps.append(
             InstalledApp(
                 package_name=package_name,
-                display_name=_get_application_label(package_name, device_id),
                 activity_name=activity_name,
             )
         )

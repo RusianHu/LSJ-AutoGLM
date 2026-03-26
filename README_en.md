@@ -10,6 +10,7 @@ The original project's detailed documentation has been renamed. Please refer to 
 
 - **[Official Documentation (Original README)](README_official.md)**
 - [Chinese README](README.md)
+- [AI Tools & Action Reference](docs/ai_tools_reference.md)
 
 ---
 

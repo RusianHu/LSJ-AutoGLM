@@ -501,14 +501,14 @@ Examples:
     parser.add_argument(
         "--list-device-apps",
         action="store_true",
-        help="List launchable apps discovered on the connected Android device and exit",
+        help="List launchable Android package/activity entries discovered on the connected device and exit",
     )
 
     parser.add_argument(
         "--find-app",
         type=str,
         metavar="QUERY",
-        help="Search installed Android apps on the connected device and exit",
+        help="Search installed Android package/activity entries on the connected device and exit",
     )
 
     parser.add_argument(
@@ -694,15 +694,14 @@ def handle_device_commands(args) -> bool:
 
         apps = device_factory.list_installed_apps(args.device_id)
         if not apps:
-            print("No launchable apps found on the connected device.")
+            print("No launchable app packages found on the connected device.")
             return True
 
-        print("Launchable apps discovered on device:")
+        print("Launchable package/activity entries discovered on device:")
         print("-" * 80)
-        for app in sorted(apps, key=lambda item: ((item.display_name or "").lower(), item.package_name)):
-            label = app.display_name or "(unknown label)"
+        for app in sorted(apps, key=lambda item: item.package_name):
             activity = app.activity_name or "(unknown activity)"
-            print(f"  - {label:<24} {app.package_name} [{activity}]")
+            print(f"  - {app.package_name} [{activity}]")
         return True
 
     if args.find_app:
@@ -712,15 +711,14 @@ def handle_device_commands(args) -> bool:
 
         matches = device_factory.search_installed_apps(args.find_app, args.device_id)
         if not matches:
-            print(f"No installed app matched: {args.find_app}")
+            print(f"No installed package matched: {args.find_app}")
             return True
 
-        print(f"Matched installed apps ({len(matches)}):")
+        print(f"Matched package/activity entries ({len(matches)}):")
         print("-" * 80)
         for app in matches[:10]:
-            print(f"  Label:   {app.display_name or '(unknown label)'}")
-            print(f"  Package: {app.package_name}")
-            print(f"  Activity:{' ' if app.activity_name else ''}{app.activity_name or '(unknown activity)'}")
+            print(f"  Package:  {app.package_name}")
+            print(f"  Activity: {app.activity_name or '(unknown activity)'}")
             print("-" * 80)
         return True
 

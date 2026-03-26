@@ -299,6 +299,14 @@ class PhoneAgent:
                 finish(message=str(e)), screenshot.width, screenshot.height
             )
 
+        if result.message:
+            result_prefix = "Action succeeded" if result.success else "Action failed"
+            self._context.append(
+                MessageBuilder.create_user_message(
+                    text=f"** Action Result **\n\n{result_prefix}: {result.message}"
+                )
+            )
+
         if self.agent_config.verbose and (not result.success) and result.message:
             print(f"⚠️ Action failed: {result.message}")
 

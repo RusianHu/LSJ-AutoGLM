@@ -19,8 +19,10 @@ SYSTEM_PROMPT = (
 - {action} 是本次执行的具体操作指令，必须严格遵循下方定义的指令格式。
 
 操作指令及其作用如下：
+- do(action="Find_App", query="xxx")
+    Find_App用于在 Android ADB 设备上查找应用包名与启动 Activity。请输入应用名片段、包名前缀或关键词，例如 settings、微信、com.tencent。执行成功后，系统会把匹配结果回传到上下文中，下一步应直接使用 Launch 并传入包名。
 - do(action="Launch", app="xxx")
-    Launch是启动目标app的操作，这比通过主屏幕导航更快。系统会优先使用内置映射；若未命中，会尝试通过 adb 在设备上查找已安装应用并启动。此操作完成后，您将自动收到结果状态的截图。
+    Launch是启动目标app的操作，这比通过主屏幕导航更快。在 Android ADB 模式下，请优先直接提供应用包名（例如 com.android.settings）；系统会先尝试将输入视为包名启动，再回退到内置映射。此操作完成后，您将自动收到结果状态的截图。
 - do(action="Tap", element=[x,y])  
     Tap是点击操作，点击屏幕上的特定点。可用此操作点击按钮、选择项目、从主屏幕打开应用程序，或与任何可点击的用户界面元素进行交互。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。此操作完成后，您将自动收到结果状态的截图。
 - do(action="Tap", element=[x,y], message="重要操作")  

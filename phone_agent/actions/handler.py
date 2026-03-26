@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from phone_agent.config.timing import TIMING_CONFIG
-from phone_agent.device_factory import get_device_factory
+from phone_agent.device_factory import DeviceType, get_device_factory
 
 
 @dataclass
@@ -92,6 +92,7 @@ class ActionHandler:
         """Get the handler method for an action."""
         handlers = {
             "Launch": self._handle_launch,
+            "Find_App": self._handle_find_app,
             "Tap": self._handle_tap,
             "Type": self._handle_type,
             "Type_Name": self._handle_type,
@@ -131,6 +132,35 @@ class ActionHandler:
             False,
             launch_result.message or f"App not found: {app_name}",
         )
+
+    def _handle_find_app(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle package lookup action for Android ADB devices."""
+        query = (action.get("query") or action.get("app") or action.get("text") or "").strip()
+        if not query:
+            return ActionResult(False, False, "No app query specified")
+
+        device_factory = get_device_factory()
+        if device_factory.device_type != DeviceType.ADB:
+            return ActionResult(False, False, "Find_App is only supported for Android ADB devices")
+
+        try:
+            matches = device_factory.search_installed_apps(query, self.device_id)
+        except NotImplementedError as exc:
+            return ActionResult(False, False, str(exc))
+        except Exception as exc:
+            return ActionResult(False, False, f"Find_App failed: {exc}")
+
+        if not matches:
+            return ActionResult(False, False, f"未找到匹配包名：{query}")
+
+        lines = [f"已找到 {len(matches)} 个匹配包名："]
+        for index, app in enumerate(matches[:10], start=1):
+            activity = app.activity_name or "(unknown activity)"
+            lines.append(f"{index}. {app.package_name} [{activity}]")
+
+        best_package = matches[0].package_name
+        lines.append(f"下一步请直接使用 do(action=\"Launch\", app=\"{best_package}\")")
+        return ActionResult(True, False, "\n".join(lines))
 
     def _handle_tap(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle tap action."""
@@ -462,7 +492,7 @@ def parse_action(response: str) -> dict[str, Any]:
                 key = key.strip().strip('"').strip("'")
                 raw_val = raw_val.strip()
 
-                if key in ("message", "text", "app", "action", "duration"):
+                if key in ("message", "text", "app", "action", "duration", "query", "instruction"):
                     # Be tolerant of unescaped quotes inside the string (common model error),
                     # by extracting using the last matching quote.
                     payload[key] = _parse_loose_string(raw_val)

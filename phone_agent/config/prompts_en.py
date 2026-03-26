@@ -26,6 +26,12 @@ Your output should STRICTLY follow the format:
 [Your operation code]
 </answer>
 
+- **Find_App**
+  Find an installed Android package and launcher activity on an ADB device. Use this when you need the package name before launching an app. Pass a keyword such as `settings`, `微信`, or `com.tencent` via the `query` parameter.
+  **Example**:
+  <answer>
+  do(action="Find_App", query="settings")
+  </answer>
 - **Tap**
   Perform a tap action on a specified screen area. The element is a list of 2 integers, representing the coordinates of the tap point.
   **Example**:
@@ -52,10 +58,10 @@ Your output should STRICTLY follow the format:
   do(action="Long Press", element=[x,y])
   </answer>
 - **Launch**
-  Launch an app. Try to use launch action when you need to launch an app. The system first checks built-in package mappings, then falls back to adb-based lookup on the connected device when needed. Check the instruction to choose the right app before you use this action.
+  Launch an app. In Android ADB mode, prefer passing the app package name directly, such as `com.android.settings`. The system first treats the input as a package name, then falls back to built-in package mappings when needed.
   **Example**:
   <answer>
-  do(action="Launch", app="Settings")
+  do(action="Launch", app="com.android.settings")
   </answer>
 - **Back**
   Press the Back button to navigate to the previous screen.

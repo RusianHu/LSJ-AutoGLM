@@ -9,8 +9,9 @@ from unittest.mock import patch
 # 确保在仓库根目录下运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from phone_agent.actions.handler import ActionHandler
-from phone_agent.device_factory import AppLaunchResult, DeviceFactory, DeviceType
+from phone_agent.actions.handler import ActionHandler, ActionResult, parse_action
+from phone_agent.agent import AgentConfig, PhoneAgent
+from phone_agent.device_factory import AppLaunchResult, DeviceFactory, DeviceType, set_device_type
 from phone_agent.adb.device import (
     InstalledApp,
     _extract_label_with_aapt,
@@ -48,25 +49,22 @@ class TestAdbDeviceLookup:
             assert get_current_app() == "System Home"
 
     def test_list_installed_apps_parses_launcher_components(self):
-        outputs = [
-            _CompletedProcess(
+        with patch(
+            "phone_agent.adb.device.subprocess.run",
+            return_value=_CompletedProcess(
                 stdout=(
                     "com.example.reader/.MainActivity\n"
                     "com.example.chat/.LauncherActivity\n"
                 )
             ),
-            _CompletedProcess(stdout="nonLocalizedLabel=Reader\n"),
-            _CompletedProcess(stdout="nonLocalizedLabel=Chat\n"),
-        ]
-
-        with patch("phone_agent.adb.device.subprocess.run", side_effect=outputs):
+        ):
             apps = list_installed_apps()
 
         assert [app.package_name for app in apps] == [
             "com.example.reader",
             "com.example.chat",
         ]
-        assert apps[0].display_name == "Reader"
+        assert apps[0].display_name is None
         assert apps[1].activity_name == ".LauncherActivity"
 
     def test_find_installed_app_prefers_exact_display_name(self):
@@ -93,10 +91,8 @@ class TestAdbDeviceLookup:
             "com.example.reader.pro",
         ]
 
-    def test_launch_app_falls_back_to_dynamic_lookup(self):
+    def test_launch_app_accepts_package_name_directly(self):
         outputs = [
-            _CompletedProcess(stdout="com.example.reader/.MainActivity\n"),
-            _CompletedProcess(stdout="nonLocalizedLabel=Reader\n"),
             _CompletedProcess(stdout="com.example.reader/.MainActivity\n"),
             _CompletedProcess(stdout="Starting: Intent { cmp=com.example.reader/.MainActivity }\n"),
         ]
@@ -104,78 +100,17 @@ class TestAdbDeviceLookup:
         with patch("phone_agent.adb.device.subprocess.run", side_effect=outputs), patch(
             "phone_agent.adb.device.time.sleep", return_value=None
         ):
-            result = launch_app("Reader", delay=0)
+            result = launch_app("com.example.reader", delay=0)
 
         assert result.success is True
         assert result.package_name == "com.example.reader"
-        assert "通过设备查找启动" in (result.message or "")
-
-    def test_launch_app_reports_ambiguous_candidates(self):
-        apps = [
-            InstalledApp("com.example.reader", "Reader"),
-            InstalledApp("com.example.reader.pro", "Reader Pro"),
-        ]
-        with patch("phone_agent.adb.device.search_installed_apps", return_value=apps):
-            result = launch_app("reader", delay=0)
-
-        assert result.success is False
-        assert "多个候选应用" in (result.message or "")
+        assert "通过包名启动" in (result.message or "")
 
     def test_launch_app_returns_not_found_message(self):
-        with patch(
-            "phone_agent.adb.device.subprocess.run",
-            return_value=_CompletedProcess(stdout=""),
-        ):
-            result = launch_app("不存在的应用", delay=0)
+        result = launch_app("不存在的应用", delay=0)
 
         assert result.success is False
-        assert result.message == "未找到应用：不存在的应用"
-
-    def test_list_installed_apps_falls_back_to_package_suffix_when_tools_missing(self):
-        with patch(
-            "phone_agent.adb.device._run_adb_shell",
-            side_effect=[
-                "com.example.reader/.MainActivity\n",
-                "",
-                "package:/data/app/com.example.reader/base.apk",
-            ],
-        ), patch("phone_agent.adb.device._find_apk_label_tool", return_value=None):
-            apps = list_installed_apps()
-
-        assert len(apps) == 1
-        assert apps[0].display_name == "reader"
-
-    def test_list_installed_apps_falls_back_to_package_suffix_when_pull_fails(self):
-        with patch(
-            "phone_agent.adb.device._run_adb_shell",
-            side_effect=[
-                "com.example.reader/.MainActivity\n",
-                "",
-                "package:/data/app/com.example.reader/base.apk",
-            ],
-        ), patch("phone_agent.adb.device._find_apk_label_tool", return_value="aapt"), patch(
-            "phone_agent.adb.device._adb_pull_file", return_value=False
-        ):
-            apps = list_installed_apps()
-
-        assert len(apps) == 1
-        assert apps[0].display_name == "reader"
-
-    def test_list_installed_apps_falls_back_to_package_suffix_on_unexpected_label_error(self):
-        with patch(
-            "phone_agent.adb.device._run_adb_shell",
-            return_value="com.example.reader/.MainActivity\n",
-        ), patch(
-            "phone_agent.adb.device._get_application_label_from_dumpsys",
-            side_effect=RuntimeError("boom"),
-        ), patch(
-            "phone_agent.adb.device._get_application_label_from_apk",
-            side_effect=RuntimeError("boom"),
-        ):
-            apps = list_installed_apps()
-
-        assert len(apps) == 1
-        assert apps[0].display_name == "reader"
+        assert "ADB 模式请直接提供应用包名" in (result.message or "")
 
 
 class TestApkLabelResolution:
@@ -235,9 +170,110 @@ class TestLaunchActionHandler:
         ), patch.object(
             fake_factory,
             "launch_app_detailed",
-            return_value=AppLaunchResult(True, "已通过设备查找启动 Reader (com.example.reader)"),
+            return_value=AppLaunchResult(True, "已通过包名启动 com.example.reader"),
         ):
-            result = handler._handle_launch({"app": "Reader"}, 1080, 2400)
+            result = handler._handle_launch({"app": "com.example.reader"}, 1080, 2400)
 
         assert result.success is True
-        assert "Reader" in (result.message or "")
+        assert "com.example.reader" in (result.message or "")
+
+    def test_handle_find_app_returns_candidates(self):
+        handler = ActionHandler()
+        fake_factory = DeviceFactory(DeviceType.ADB)
+        matches = [
+            InstalledApp("com.example.reader", None, ".MainActivity"),
+            InstalledApp("com.example.reader.pro", None, ".ProActivity"),
+        ]
+
+        with patch(
+            "phone_agent.actions.handler.get_device_factory", return_value=fake_factory
+        ), patch.object(fake_factory, "search_installed_apps", return_value=matches):
+            result = handler._handle_find_app({"query": "reader"}, 1080, 2400)
+
+        assert result.success is True
+        assert "已找到 2 个匹配包名" in (result.message or "")
+        assert "com.example.reader" in (result.message or "")
+        assert 'do(action="Launch", app="com.example.reader")' in (result.message or "")
+
+    def test_handle_find_app_rejects_empty_query(self):
+        handler = ActionHandler()
+        result = handler._handle_find_app({}, 1080, 2400)
+
+        assert result.success is False
+        assert result.message == "No app query specified"
+
+    def test_handle_find_app_rejects_non_adb(self):
+        handler = ActionHandler()
+        fake_factory = DeviceFactory(DeviceType.HDC)
+
+        with patch(
+            "phone_agent.actions.handler.get_device_factory", return_value=fake_factory
+        ):
+            result = handler._handle_find_app({"query": "settings"}, 1080, 2400)
+
+        assert result.success is False
+        assert "only supported for Android ADB devices" in (result.message or "")
+
+    def test_handle_find_app_reports_not_found(self):
+        handler = ActionHandler()
+        fake_factory = DeviceFactory(DeviceType.ADB)
+
+        with patch(
+            "phone_agent.actions.handler.get_device_factory", return_value=fake_factory
+        ), patch.object(fake_factory, "search_installed_apps", return_value=[]):
+            result = handler._handle_find_app({"query": "missing"}, 1080, 2400)
+
+        assert result.success is False
+        assert "未找到匹配包名：missing" == result.message
+
+
+class TestActionParsing:
+    def test_parse_action_accepts_find_app_query(self):
+        action = parse_action('do(action="Find_App", query="settings")')
+
+        assert action["_metadata"] == "do"
+        assert action["action"] == "Find_App"
+        assert action["query"] == "settings"
+
+
+class TestPhoneAgentActionResultContext:
+    def test_step_appends_action_result_message_to_context(self):
+        class _FakeScreenshot:
+            width = 1080
+            height = 2400
+            base64_data = "ZmFrZQ=="
+
+        class _FakeModelResponse:
+            thinking = ""
+            action = 'do(action="Find_App", query="settings")'
+
+        fake_factory = DeviceFactory(DeviceType.ADB)
+        agent = PhoneAgent(
+            agent_config=AgentConfig(verbose=False, system_prompt="test system prompt")
+        )
+        action_message = (
+            "已找到 1 个匹配包名：\n"
+            "1. com.android.settings [.Settings]\n"
+            '下一步请直接使用 do(action="Launch", app="com.android.settings")'
+        )
+
+        with patch("phone_agent.agent.get_device_factory", return_value=fake_factory), patch.object(
+            fake_factory, "get_screenshot", return_value=_FakeScreenshot()
+        ), patch.object(
+            fake_factory, "get_current_app", return_value="com.android.launcher"
+        ), patch.object(
+            agent.model_client, "request", return_value=_FakeModelResponse()
+        ), patch.object(
+            agent.action_handler,
+            "execute",
+            return_value=ActionResult(True, False, action_message),
+        ):
+            result = agent.step("找到设置包名")
+
+        assert result.success is True
+        last_message = agent.context[-1]
+        assert last_message["role"] == "user"
+        assert last_message["content"][-1]["type"] == "text"
+        assert last_message["content"][-1]["text"].startswith("** Action Result **")
+        assert "Action succeeded" in last_message["content"][-1]["text"]
+        assert "com.android.settings" in last_message["content"][-1]["text"]

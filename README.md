@@ -10,6 +10,7 @@
 
 - **[官方说明文档 (Original README)](README_official.md)**
 - [English README](README_en.md)
+- [AI 工具与动作参考](docs/ai_tools_reference.md)
 
 ---
 

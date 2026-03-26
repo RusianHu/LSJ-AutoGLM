@@ -26,12 +26,12 @@ class _FakeFactory:
         return []
 
     def list_installed_apps(self, device_id=None):
-        return [InstalledApp("com.example.reader", "Reader", ".MainActivity")]
+        return [InstalledApp("com.example.reader", None, ".MainActivity")]
 
     def search_installed_apps(self, query, device_id=None):
         return [
-            InstalledApp("com.example.reader", "Reader", ".MainActivity"),
-            InstalledApp("com.example.reader.pro", "Reader Pro", ".MainActivity"),
+            InstalledApp("com.example.reader", None, ".MainActivity"),
+            InstalledApp("com.example.reader.pro", None, ".MainActivity"),
         ]
 
 
@@ -57,8 +57,9 @@ class TestMainDeviceAppCli:
 
         assert handled is True
         output = capsys.readouterr().out
-        assert "Reader" in output
+        assert "Launchable package/activity entries discovered on device" in output
         assert "com.example.reader" in output
+        assert ".MainActivity" in output
 
     def test_handle_find_app_lists_matches(self, capsys):
         args = self._make_args(find_app="reader")
@@ -67,8 +68,8 @@ class TestMainDeviceAppCli:
 
         assert handled is True
         output = capsys.readouterr().out
-        assert "Matched installed apps (2)" in output
-        assert "Reader Pro" in output
+        assert "Matched package/activity entries (2)" in output
+        assert "com.example.reader.pro" in output
 
     def test_handle_find_app_rejects_non_adb(self, capsys):
         args = self._make_args(device_type=DeviceType.HDC.value, find_app="reader")
