@@ -119,7 +119,7 @@ class ActionHandler:
 
     def _handle_launch(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle app launch action."""
-        app_name = action.get("app")
+        app_name = (action.get("app") or "").strip()
         if not app_name:
             return ActionResult(False, False, "No app name specified")
 
@@ -127,11 +127,40 @@ class ActionHandler:
         launch_result = device_factory.launch_app_detailed(app_name, self.device_id)
         if launch_result.success:
             return ActionResult(True, False, launch_result.message)
+
+        if device_factory.device_type == DeviceType.ADB and not self._looks_like_package_name(app_name):
+            try:
+                matches = device_factory.search_installed_apps(app_name, self.device_id)
+            except NotImplementedError:
+                matches = []
+            except Exception:
+                matches = []
+
+            if matches:
+                lines = [
+                    f"Launch 未能直接启动 {app_name}，已自动转为查找包名并找到 {len(matches)} 个候选："
+                ]
+                for index, app in enumerate(matches[:10], start=1):
+                    activity = app.activity_name or "(unknown activity)"
+                    lines.append(f"{index}. {app.package_name} [{activity}]")
+                best_package = matches[0].package_name
+                lines.append(
+                    f"下一步请直接使用 do(action=\"Launch\", app=\"{best_package}\")"
+                )
+                return ActionResult(True, False, "\n".join(lines))
+
         return ActionResult(
             False,
             False,
             launch_result.message or f"App not found: {app_name}",
         )
+
+    @staticmethod
+    def _looks_like_package_name(value: str) -> bool:
+        candidate = (value or "").strip()
+        if "/" in candidate:
+            candidate = candidate.split("/", 1)[0]
+        return "." in candidate and " " not in candidate
 
     def _handle_find_app(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle package lookup action for Android ADB devices."""

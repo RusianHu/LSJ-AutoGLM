@@ -1,6 +1,7 @@
 """Main PhoneAgent class for orchestrating phone automation."""
 
 import json
+import re
 import traceback
 from collections import deque
 from dataclasses import dataclass
@@ -131,6 +132,60 @@ class PhoneAgent:
         if a == b:
             return all(x == a for x in last6)
         return last6 == [a, b, a, b, a, b]
+
+    @staticmethod
+    def _message_text(message: dict[str, Any]) -> str:
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n".join(
+                item.get("text", "") for item in content if item.get("type") == "text"
+            )
+        return ""
+
+    def _find_recommended_followup_action(self) -> dict[str, Any] | None:
+        for message in reversed(self._context):
+            if message.get("role") != "user":
+                continue
+            text = self._message_text(message)
+            if "** Action Result **" not in text:
+                continue
+
+            match = re.search(r'do\(action="(?:Find_App|Launch)".*?\)', text)
+            if not match:
+                return None
+
+            try:
+                return parse_action(match.group(0))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _should_follow_recommended_action(
+        action: dict[str, Any], recommended_action: dict[str, Any] | None
+    ) -> bool:
+        if not recommended_action:
+            return False
+        if recommended_action.get("_metadata") != "do":
+            return False
+        if recommended_action.get("action") not in ("Find_App", "Launch"):
+            return False
+
+        if action.get("_metadata") != "do":
+            return True
+
+        if action.get("action") != recommended_action.get("action"):
+            return True
+
+        if action.get("action") == "Find_App":
+            return (action.get("query") or "") != (recommended_action.get("query") or "")
+
+        if action.get("action") == "Launch":
+            return (action.get("app") or "") != (recommended_action.get("app") or "")
+
+        return False
 
     def run(self, task: str) -> str:
         """
@@ -276,6 +331,15 @@ class PhoneAgent:
                 thinking=response.thinking,
                 message=f"动作解析失败，无法继续执行：{parse_error}",
             )
+
+        recommended_action = self._find_recommended_followup_action()
+        if self._should_follow_recommended_action(action, recommended_action):
+            if self.agent_config.verbose and recommended_action is not None:
+                print(
+                    "🔒 Overriding model action with recommended follow-up:",
+                    json.dumps(recommended_action, ensure_ascii=False),
+                )
+            action = recommended_action or action
 
         # Track recent actions for loop detection & better thirdparty guidance.
         self._recent_action_signatures.append(self._action_signature(action))

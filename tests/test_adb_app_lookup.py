@@ -110,7 +110,7 @@ class TestAdbDeviceLookup:
         result = launch_app("不存在的应用", delay=0)
 
         assert result.success is False
-        assert "ADB 模式请直接提供应用包名" in (result.message or "")
+        assert 'do(action="Find_App", query="不存在的应用")' in (result.message or "")
 
 
 class TestApkLabelResolution:
@@ -195,6 +195,24 @@ class TestLaunchActionHandler:
         assert "com.example.reader" in (result.message or "")
         assert 'do(action="Launch", app="com.example.reader")' in (result.message or "")
 
+    def test_handle_launch_auto_falls_back_to_find_app_candidates(self):
+        handler = ActionHandler()
+        fake_factory = DeviceFactory(DeviceType.ADB)
+        matches = [InstalledApp("com.nethack.main", None, ".MainActivity")]
+
+        with patch(
+            "phone_agent.actions.handler.get_device_factory", return_value=fake_factory
+        ), patch.object(
+            fake_factory,
+            "launch_app_detailed",
+            return_value=AppLaunchResult(False, "未找到应用：nethack"),
+        ), patch.object(fake_factory, "search_installed_apps", return_value=matches):
+            result = handler._handle_launch({"app": "nethack"}, 1080, 2400)
+
+        assert result.success is True
+        assert "已自动转为查找包名" in (result.message or "")
+        assert "com.nethack.main" in (result.message or "")
+
     def test_handle_find_app_rejects_empty_query(self):
         handler = ActionHandler()
         result = handler._handle_find_app({}, 1080, 2400)
@@ -277,3 +295,47 @@ class TestPhoneAgentActionResultContext:
         assert last_message["content"][-1]["text"].startswith("** Action Result **")
         assert "Action succeeded" in last_message["content"][-1]["text"]
         assert "com.android.settings" in last_message["content"][-1]["text"]
+
+    def test_step_overrides_wrong_tap_with_recommended_find_app(self):
+        class _FakeScreenshot:
+            width = 1080
+            height = 2400
+            base64_data = "ZmFrZQ=="
+
+        class _FakeModelResponse:
+            thinking = "先查包名"
+            action = 'do(action="Tap", element=[930,72])'
+
+        fake_factory = DeviceFactory(DeviceType.ADB)
+        agent = PhoneAgent(
+            agent_config=AgentConfig(verbose=False, system_prompt="test system prompt")
+        )
+        agent._context.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": '** Action Result **\n\nAction failed: 未找到应用：nethack。下一步请先执行 do(action="Find_App", query="nethack")'
+                    }
+                ],
+            }
+        )
+
+        with patch("phone_agent.agent.get_device_factory", return_value=fake_factory), patch.object(
+            fake_factory, "get_screenshot", return_value=_FakeScreenshot()
+        ), patch.object(
+            fake_factory, "get_current_app", return_value="com.android.launcher"
+        ), patch.object(
+            agent.model_client, "request", return_value=_FakeModelResponse()
+        ), patch.object(
+            agent.action_handler,
+            "execute",
+            return_value=ActionResult(True, False, "已找到 1 个匹配包名：\n1. com.nethack.main [.MainActivity]"),
+        ) as execute_mock:
+            result = agent.step("打开 nethack")
+
+        assert result.success is True
+        executed_action = execute_mock.call_args.args[0]
+        assert executed_action["action"] == "Find_App"
+        assert executed_action["query"] == "nethack"

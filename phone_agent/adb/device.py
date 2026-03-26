@@ -279,7 +279,12 @@ def launch_app(
 
     return AppLaunchResult(
         False,
-        f"未找到应用：{normalized_app}。ADB 模式请直接提供应用包名，例如 com.android.settings",
+        (
+            f"未找到应用：{normalized_app}。当前为 ADB package-only 模式，"
+            f"不要继续在桌面或应用商店里盲找；下一步请先执行 "
+            f"do(action=\"Find_App\", query=\"{normalized_app}\")，"
+            f"拿到包名后再执行 Launch，例如 com.android.settings"
+        ),
     )
 
 

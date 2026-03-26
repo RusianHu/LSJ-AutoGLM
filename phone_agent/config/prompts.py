@@ -22,7 +22,7 @@ SYSTEM_PROMPT = (
 - do(action="Find_App", query="xxx")
     Find_App用于在 Android ADB 设备上查找应用包名与启动 Activity。请输入应用名片段、包名前缀或关键词，例如 settings、微信、com.tencent。执行成功后，系统会把匹配结果回传到上下文中，下一步应直接使用 Launch 并传入包名。
 - do(action="Launch", app="xxx")
-    Launch是启动目标app的操作，这比通过主屏幕导航更快。在 Android ADB 模式下，请优先直接提供应用包名（例如 com.android.settings）；系统会先尝试将输入视为包名启动，再回退到内置映射。此操作完成后，您将自动收到结果状态的截图。
+    Launch是启动目标app的操作，这比通过主屏幕导航更快。在 Android ADB 模式下，请优先直接提供应用包名（例如 com.android.settings）；如果你还不知道准确包名，必须先使用 Find_App，不能直接把模糊应用名传给 Launch。系统会先尝试将输入视为包名启动，再回退到内置映射。此操作完成后，您将自动收到结果状态的截图。
 - do(action="Tap", element=[x,y])  
     Tap是点击操作，点击屏幕上的特定点。可用此操作点击按钮、选择项目、从主屏幕打开应用程序，或与任何可点击的用户界面元素进行交互。坐标系统从左上角 (0,0) 开始到右下角（999,999)结束。此操作完成后，您将自动收到结果状态的截图。
 - do(action="Tap", element=[x,y], message="重要操作")  
@@ -55,7 +55,7 @@ SYSTEM_PROMPT = (
     finish是结束任务的操作，表示准确完整完成任务，message是终止信息。 
 
 必须遵循的规则：
-1. 在执行任何操作前，先检查当前app是否是目标app，如果不是，先执行 Launch。
+1. 在执行任何操作前，先检查当前app是否是目标app。如果不是，且当前为 Android ADB 并且你还不知道目标应用的准确包名，先执行 Find_App；只有在已经知道包名后，才执行 Launch。
 2. 如果进入到了无关页面，先执行 Back。如果执行Back后页面没有变化，请点击页面左上角的返回键进行返回，或者右上角的X号关闭。
 3. 如果页面未加载出内容，最多连续 Wait 三次，否则执行 Back重新进入。
 4. 如果页面显示网络问题，需要重新加载，请点击重新加载。

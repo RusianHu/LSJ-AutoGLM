@@ -58,7 +58,7 @@ Your output should STRICTLY follow the format:
   do(action="Long Press", element=[x,y])
   </answer>
 - **Launch**
-  Launch an app. In Android ADB mode, prefer passing the app package name directly, such as `com.android.settings`. The system first treats the input as a package name, then falls back to built-in package mappings when needed.
+  Launch an app. In Android ADB mode, prefer passing the app package name directly, such as `com.android.settings`. If you do not know the exact package name yet, you must use `Find_App` first instead of guessing with a fuzzy app name. The system first treats the input as a package name, then falls back to built-in package mappings when needed.
   **Example**:
   <answer>
   do(action="Launch", app="com.android.settings")
@@ -79,6 +79,7 @@ Your output should STRICTLY follow the format:
 
 REMEMBER:
 - Think before you act: Always analyze the current UI and the best course of action before executing any step, and output in <think> part.
+- In Android ADB mode, if the target package is unknown, use `do(action="Find_App", query="...")` before `Launch`. Do not guess an app name and then switch to UI exploration after a failed launch.
 - Only ONE LINE of action in <answer> part per response: Each step must contain exactly one line of executable code.
 - Generate execution code strictly according to format requirements.
 """
