@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.styles.buttons import btn_primary, btn_subtle
+from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
 from gui.utils.runtime import (
     app_root,
     gui_build_script_path,
@@ -414,6 +415,7 @@ class SettingsPage(QWidget):
         self._device_type_combo.currentIndexChanged.connect(self._on_device_type_changed)
         self._apply_action_button_styles()
         self._load_values()
+        self._refresh_action_policy_summary()
         self._load_theme_combo()
         self._load_lang_combo()
         self._connect_config_signals()
@@ -454,6 +456,7 @@ class SettingsPage(QWidget):
             active_id = active.get("id", "") if active else ""
             self._rebuild_channel_detail(active_id)
         self._load_values()  # 同步表单字段值
+        self._refresh_action_policy_summary()
 
     # ================================================================
     # UI 构建
@@ -565,23 +568,51 @@ class SettingsPage(QWidget):
         # ---- 动作策略 ----
         self._action_policy_group = QGroupBox(self._t("page.settings.section.action_policy"))
         action_vbox = QVBoxLayout(self._action_policy_group)
-        action_vbox.setContentsMargins(12, 16, 12, 12)
-        action_vbox.setSpacing(10)
+        action_vbox.setContentsMargins(14, 18, 14, 14)
+        action_vbox.setSpacing(12)
 
-        self._action_policy_hint_lbl = QLabel(self._t("page.settings.actions.hint"))
+        self._action_policy_hint_lbl = QLabel(self._t("page.settings.action_policy.relocated_hint"))
         self._action_policy_hint_lbl.setProperty("role", "subtle")
         self._action_policy_hint_lbl.setWordWrap(True)
         action_vbox.addWidget(self._action_policy_hint_lbl)
+
+        self._action_policy_summary_card = QFrame()
+        self._action_policy_summary_card.setObjectName("SettingsActionPolicySummaryCard")
+        summary_vbox = QVBoxLayout(self._action_policy_summary_card)
+        summary_vbox.setContentsMargins(14, 12, 14, 12)
+        summary_vbox.setSpacing(6)
+
+        self._action_policy_summary_title = QLabel(self._t("page.settings.action_policy.summary_title"))
+        self._action_policy_summary_title.setObjectName("SettingsActionPolicySummaryTitle")
+        summary_vbox.addWidget(self._action_policy_summary_title)
+
+        self._action_policy_summary_lbl = QLabel(self._t("page.settings.action_policy.summary_empty"))
+        self._action_policy_summary_lbl.setObjectName("SettingsActionPolicySummaryText")
+        self._action_policy_summary_lbl.setWordWrap(True)
+        summary_vbox.addWidget(self._action_policy_summary_lbl)
 
         self._action_policy_status_lbl = QLabel("")
         self._action_policy_status_lbl.setProperty("role", "subtle")
         self._action_policy_status_lbl.setWordWrap(True)
         self._action_policy_status_lbl.hide()
-        action_vbox.addWidget(self._action_policy_status_lbl)
+        summary_vbox.addWidget(self._action_policy_status_lbl)
+        action_vbox.addWidget(self._action_policy_summary_card)
 
-        action_btn_row = QHBoxLayout()
-        action_btn_row.setContentsMargins(0, 0, 0, 0)
+        self._action_button_strip = QFrame()
+        self._action_button_strip.setObjectName("SettingsActionPolicyButtonStrip")
+        action_btn_row = QHBoxLayout(self._action_button_strip)
+        action_btn_row.setContentsMargins(12, 12, 12, 12)
         action_btn_row.setSpacing(8)
+
+        self._btn_action_open_dialog = QPushButton(self._t("page.settings.action_policy.btn.open_dialog"))
+        self._btn_action_open_dialog.setProperty("variant", "primary")
+        self._btn_action_open_dialog.clicked.connect(self._open_action_policy_dialog)
+        action_btn_row.addWidget(self._btn_action_open_dialog)
+
+        self._btn_action_open_workspace = QPushButton(self._t("page.settings.action_policy.btn.open_workspace"))
+        self._btn_action_open_workspace.setProperty("variant", "subtle")
+        self._btn_action_open_workspace.clicked.connect(self._open_dashboard_page)
+        action_btn_row.addWidget(self._btn_action_open_workspace)
 
         self._btn_action_reset_defaults = QPushButton(self._t("page.settings.actions.btn.reset_defaults"))
         self._btn_action_reset_defaults.setProperty("variant", "subtle")
@@ -598,7 +629,7 @@ class SettingsPage(QWidget):
         self._btn_action_clear_all.clicked.connect(self._on_action_policy_clear_all)
         action_btn_row.addWidget(self._btn_action_clear_all)
         action_btn_row.addStretch(1)
-        action_vbox.addLayout(action_btn_row)
+        action_vbox.addWidget(self._action_button_strip)
 
         action_form = QFormLayout()
         action_form.setLabelAlignment(Qt.AlignRight)
@@ -611,6 +642,7 @@ class SettingsPage(QWidget):
         action_vbox.addLayout(action_form)
 
         self._action_matrix_container = QWidget()
+        self._action_matrix_container.hide()
         self._action_matrix_vbox = QVBoxLayout(self._action_matrix_container)
         self._action_matrix_vbox.setContentsMargins(0, 4, 0, 0)
         self._action_matrix_vbox.setSpacing(10)
@@ -1235,6 +1267,7 @@ class SettingsPage(QWidget):
 
         try:
             self._config.set_many(updates)
+            self._refresh_action_policy_summary()
         except Exception as e:
             QMessageBox.warning(self, self._t("page.settings.dialog.save_fail"), str(e))
             self._load_values()
@@ -1256,6 +1289,37 @@ class SettingsPage(QWidget):
     def _on_action_policy_clear_all(self):
         self._set_action_policy_check_states((), ())
         self._persist_action_policy_updates(use_platform_defaults=False)
+
+    def _refresh_action_policy_summary(self) -> None:
+        if not hasattr(self, "_action_policy_summary_lbl"):
+            return
+        if not self._config:
+            self._action_policy_summary_lbl.setText(self._t("page.settings.action_policy.summary_empty"))
+            return
+        summary = summarize_action_policy(self._config, self._t, platform=self._current_device_type())
+        self._action_policy_summary_lbl.setText(
+            self._t(
+                "page.settings.action_policy.summary_text",
+                platform=summary.get("platform", "adb").upper(),
+                mode=summary.get("mode_text", ""),
+                runtime=summary.get("runtime_count", 0),
+                ai_visible=summary.get("ai_count", 0),
+                supported=summary.get("supported_count", 0),
+            )
+        )
+
+    def _open_dashboard_page(self):
+        navigator = self._services.get("navigate_to_page")
+        if callable(navigator):
+            navigator("dashboard")
+
+    def _open_action_policy_dialog(self):
+        dialog = ActionPolicyDialog(self._services, parent=self)
+        theme_manager = self._services.get("theme_manager")
+        if theme_manager is not None and hasattr(dialog, "bind_theme_manager"):
+            dialog.bind_theme_manager(theme_manager)
+        dialog.exec()
+        self._refresh_action_policy_summary()
 
     def _on_device_type_changed(self, index: int):
         if not hasattr(self, "_device_type_combo"):
@@ -1697,6 +1761,7 @@ class SettingsPage(QWidget):
         """刷新静态外观：横幅、主题提示、预设卡片、Toggle 开关。"""
         if self._theme_tokens is None:
             return
+        t = self._theme_tokens
         if self._last_banner_state and self._validate_banner.isVisible():
             msg, ok = self._last_banner_state
             if self._last_banner_i18n:
@@ -1713,10 +1778,31 @@ class SettingsPage(QWidget):
         for w in self._field_widgets.values():
             if isinstance(w, _ToggleSwitch):
                 w.apply_tokens(self._theme_tokens)
+        if hasattr(self, "_action_button_strip"):
+            self._action_button_strip.setStyleSheet(
+                f"background:{t.bg_elevated}; border:1px solid {t.border}; border-radius:16px;"
+            )
 
     def refresh_theme_states(self) -> None:
         """刷新动态状态：按钮样式。"""
         self._apply_action_button_styles()
+        if hasattr(self, "_action_policy_summary_card"):
+            t = self._theme_tokens
+            self._action_policy_summary_card.setStyleSheet(
+                f"background:{t.bg_elevated}; border:1px solid {t.border}; border-radius:18px;"
+            )
+        if hasattr(self, "_action_policy_summary_title"):
+            self._action_policy_summary_title.setStyleSheet(
+                f"color:{self._theme_tokens.text_primary}; font-size:15px; font-weight:700;"
+            )
+        if hasattr(self, "_action_policy_summary_lbl"):
+            self._action_policy_summary_lbl.setStyleSheet(
+                f"color:{self._theme_tokens.text_secondary}; font-size:12px; line-height:1.7;"
+            )
+        if hasattr(self, "_action_policy_status_lbl"):
+            self._action_policy_status_lbl.setStyleSheet(
+                f"color:{self._theme_tokens.text_muted}; font-size:12px; line-height:1.6;"
+            )
 
     def on_theme_changed(self, theme: str, theme_vars: dict):
         """[兼容] 旧版接口，由 PageThemeAdapter 在未实现新接口时调用。"""
@@ -1787,7 +1873,13 @@ class SettingsPage(QWidget):
         if hasattr(self, "_channel_hint_lbl"):
             self._channel_hint_lbl.setText(_t("page.settings.channel.hint"))
         if hasattr(self, "_action_policy_hint_lbl"):
-            self._action_policy_hint_lbl.setText(_t("page.settings.actions.hint"))
+            self._action_policy_hint_lbl.setText(_t("page.settings.action_policy.relocated_hint"))
+        if hasattr(self, "_action_policy_summary_title"):
+            self._action_policy_summary_title.setText(_t("page.settings.action_policy.summary_title"))
+        if hasattr(self, "_btn_action_open_dialog"):
+            self._btn_action_open_dialog.setText(_t("page.settings.action_policy.btn.open_dialog"))
+        if hasattr(self, "_btn_action_open_workspace"):
+            self._btn_action_open_workspace.setText(_t("page.settings.action_policy.btn.open_workspace"))
         if hasattr(self, "_btn_action_reset_defaults"):
             self._btn_action_reset_defaults.setText(_t("page.settings.actions.btn.reset_defaults"))
         if hasattr(self, "_btn_action_select_all"):
@@ -1845,6 +1937,7 @@ class SettingsPage(QWidget):
         self._refresh_build_paths()
         self._refresh_preset_active()
         self._rebuild_action_policy_matrix(self._current_device_type())
+        self._refresh_action_policy_summary()
         if self._config:
             active = self._config.get_active_channel()
             active_id = active.get("id", "") if active else ""
@@ -1875,6 +1968,7 @@ class SettingsPage(QWidget):
         self._load_values()
         self._load_theme_combo()
         self._refresh_preset_active()
+        self._refresh_action_policy_summary()
         # 同步渠道详情面板（页面切换回来时刷新）
         if self._config:
             active = self._config.get_active_channel()

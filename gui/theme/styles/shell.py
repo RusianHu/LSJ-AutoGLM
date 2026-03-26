@@ -109,10 +109,10 @@ def shell_global_qss(t: ThemeTokens) -> str:
             font-size: 12px;
         }}
         QLabel[role="summaryCard"] {{
-            background: {t.bg_secondary};
+            background: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 8px;
-            padding: 8px;
+            border-radius: 12px;
+            padding: 10px 12px;
         }}
         QLabel[role="warningBanner"] {{
             background: {t.warning_bg};
@@ -131,15 +131,16 @@ def shell_global_qss(t: ThemeTokens) -> str:
         QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 16px;
             color: {t.text_primary};
             font-weight: 600;
-            margin-top: 10px;
-            padding-top: 10px;
+            margin-top: 14px;
+            padding-top: 14px;
         }}
         QGroupBox::title {{
             subcontrol-origin: margin;
-            left: 12px;
+            left: 16px;
+            padding: 0 4px;
             color: {t.text_secondary};
             font-size: 12px;
         }}
@@ -169,53 +170,62 @@ def shell_global_qss(t: ThemeTokens) -> str:
         /* ====== Splitter ====== */
         QSplitter::handle {{
             background: {t.border};
+            border-radius: 999px;
         }}
         QSplitter::handle:horizontal {{
-            width: 1px;
+            width: 3px;
+            margin: 14px 0;
         }}
         QSplitter::handle:vertical {{
-            height: 1px;
+            height: 3px;
+            margin: 0 14px;
         }}
 
         /* ====== ComboBox ====== */
         QComboBox {{
-            background: {t.bg_btn};
+            background: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 6px;
+            border-radius: 12px;
             color: {t.text_primary};
-            padding: 4px 8px;
+            padding: 6px 10px;
         }}
         QComboBox:hover {{
             border-color: {t.border_hover};
         }}
+        QComboBox:focus {{
+            border-color: {t.accent};
+        }}
         QComboBox::drop-down {{
             border: none;
-            width: 20px;
+            width: 22px;
         }}
         QComboBox QAbstractItemView {{
             background: {t.bg_elevated};
             border: 1px solid {t.border};
+            border-radius: 12px;
             color: {t.text_primary};
             selection-background-color: {t.accent_soft};
             selection-color: {t.accent};
+            padding: 4px;
+            outline: none;
         }}
 
         /* ====== 按钮基础 fallback（仅保留无任何 setStyleSheet 覆盖时的默认外观）====== */
         /* variant 语义按钮应使用 ComponentStyleRegistry 或直接调用 styles/buttons.py 函数 */
         QPushButton {{
-            background-color: {t.bg_btn};
+            background-color: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 12px;
             color: {t.text_primary};
-            padding: 6px 14px;
+            padding: 7px 14px;
             font-size: 13px;
         }}
         QPushButton:hover {{
-            background-color: {t.bg_elevated};
+            background-color: {t.bg_secondary};
             border-color: {t.border_hover};
         }}
         QPushButton:pressed {{
-            background-color: {t.bg_secondary};
+            background-color: {t.bg_btn};
         }}
         QPushButton:disabled {{
             background-color: {t.bg_elevated};

@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-工作台页面 - 首版核心页面。
+工作台页面。
 
 布局：
   顶部工具区（任务输入 + 控制按钮 + 状态条）
-  ├── 主区A：设备与镜像（左侧）
-  └── 主区B：日志与事件（右侧）
+  └── 主工作区三列：
+      - 左列：控制摘要 / 动作策略 / 渠道 / 就绪状态
+      - 中列：日志与事件
+      - 右列：大尺寸设备镜像
 """
 
 import os
@@ -13,6 +15,7 @@ import time
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QPixmap, QTextCursor
+from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
 from gui.widgets.mirror_label import MirrorLabel
 from PySide6.QtWidgets import (
     QComboBox,
@@ -195,27 +198,224 @@ class DashboardPage(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(18, 18, 18, 18)
+        root.setSpacing(16)
 
-        # 顶部工具区
-        root.addWidget(self._build_toolbar())
+        root.addWidget(self._build_hero_panel())
 
-        # 状态条
-        root.addWidget(self._build_status_bar())
+        left_panel = self._build_workspace_overview()
+        left_panel.setMinimumWidth(320)
+        left_panel.setMaximumWidth(420)
+        left_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
-        # 低侵入环境摘要条
-        root.addWidget(self._build_readiness_bar())
+        center_panel = self._build_log_panel()
+        center_panel.setMinimumWidth(420)
+        center_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        # 主内容区（双主区 Splitter）
+        right_panel = self._build_mirror_panel()
+        right_panel.setMinimumWidth(520)
+        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(4)
-        splitter.addWidget(self._build_mirror_panel())
-        splitter.addWidget(self._build_log_panel())
-        splitter.setSizes([480, 760])
+        self._main_splitter = splitter
+        splitter.setObjectName("DashboardMainSplitter")
+        splitter.setHandleWidth(8)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(center_panel)
+        splitter.addWidget(right_panel)
+        splitter.setSizes([360, 620, 860])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 2)
         root.addWidget(splitter, 1)
+
+        self._refresh_workspace_overview()
+
+    def _build_hero_panel(self) -> QWidget:
+        panel = QFrame()
+        self._hero_panel = panel
+        panel.setObjectName("DashboardHeroPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(22, 14, 22, 16)
+        layout.setSpacing(8)
+
+        layout.addWidget(self._build_toolbar())
+        layout.addWidget(self._build_status_bar())
+        layout.addWidget(self._build_readiness_bar())
+        return panel
+
+    def _build_workspace_overview(self) -> QWidget:
+        panel = QFrame()
+        self._workspace_overview_panel = panel
+        panel.setObjectName("DashboardWorkspacePanel")
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+
+        self._workspace_section_lbl = QLabel(self._t("page.dashboard.workspace.section"))
+        self._workspace_section_lbl.setObjectName("DashboardWorkspaceSection")
+        outer.addWidget(self._workspace_section_lbl)
+
+        cards_column = QVBoxLayout()
+        cards_column.setContentsMargins(0, 0, 0, 0)
+        cards_column.setSpacing(12)
+
+        self._policy_card = self._create_workspace_card("DashboardPolicyCard")
+        self._policy_title_lbl = QLabel(self._t("page.dashboard.workspace.card.action_policy.title"))
+        self._policy_title_lbl.setObjectName("DashboardWorkspaceCardTitle")
+        self._policy_summary_lbl = QLabel(self._t("page.dashboard.workspace.card.action_policy.desc"))
+        self._policy_summary_lbl.setObjectName("DashboardWorkspaceCardSummary")
+        self._policy_summary_lbl.setWordWrap(True)
+        self._policy_meta_lbl = QLabel("--")
+        self._policy_meta_lbl.setObjectName("DashboardWorkspaceCardMeta")
+        self._policy_meta_lbl.setWordWrap(True)
+        self._btn_policy_manage = QPushButton(self._t("page.dashboard.workspace.card.action_policy.manage"))
+        self._btn_policy_manage.clicked.connect(self._open_action_policy_dialog)
+        self._policy_card._content_layout.addWidget(self._policy_title_lbl)
+        self._policy_card._content_layout.addWidget(self._policy_summary_lbl)
+        self._policy_card._content_layout.addWidget(self._policy_meta_lbl)
+        self._policy_card._content_layout.addStretch(1)
+        self._policy_card._content_layout.addWidget(self._btn_policy_manage, 0, Qt.AlignLeft)
+        cards_column.addWidget(self._policy_card)
+
+        self._channel_card = self._create_workspace_card("DashboardChannelCard")
+        self._channel_title_lbl = QLabel(self._t("page.dashboard.workspace.card.channel.title"))
+        self._channel_title_lbl.setObjectName("DashboardWorkspaceCardTitle")
+        self._channel_summary_lbl = QLabel(self._t("page.dashboard.workspace.card.channel.desc"))
+        self._channel_summary_lbl.setObjectName("DashboardWorkspaceCardSummary")
+        self._channel_summary_lbl.setWordWrap(True)
+        self._channel_meta_lbl = QLabel("--")
+        self._channel_meta_lbl.setObjectName("DashboardWorkspaceCardMeta")
+        self._channel_meta_lbl.setWordWrap(True)
+        self._btn_channel_settings = QPushButton(self._t("page.dashboard.workspace.card.channel.cta"))
+        self._btn_channel_settings.clicked.connect(self._open_settings_page)
+        self._channel_card._content_layout.addWidget(self._channel_title_lbl)
+        self._channel_card._content_layout.addWidget(self._channel_summary_lbl)
+        self._channel_card._content_layout.addWidget(self._channel_meta_lbl)
+        self._channel_card._content_layout.addStretch(1)
+        self._channel_card._content_layout.addWidget(self._btn_channel_settings, 0, Qt.AlignLeft)
+        cards_column.addWidget(self._channel_card)
+
+        self._readiness_card = self._create_workspace_card("DashboardReadinessCard")
+        self._readiness_title_lbl = QLabel(self._t("page.dashboard.workspace.card.readiness.title"))
+        self._readiness_title_lbl.setObjectName("DashboardWorkspaceCardTitle")
+        self._readiness_summary_lbl = QLabel(self._t("page.dashboard.workspace.card.readiness.desc"))
+        self._readiness_summary_lbl.setObjectName("DashboardWorkspaceCardSummary")
+        self._readiness_summary_lbl.setWordWrap(True)
+        self._readiness_meta_lbl = QLabel("--")
+        self._readiness_meta_lbl.setObjectName("DashboardWorkspaceCardMeta")
+        self._readiness_meta_lbl.setWordWrap(True)
+        self._btn_readiness_diagnostics = QPushButton(self._t("page.dashboard.workspace.card.readiness.cta"))
+        self._btn_readiness_diagnostics.clicked.connect(self._open_diagnostics_page)
+        self._readiness_card._content_layout.addWidget(self._readiness_title_lbl)
+        self._readiness_card._content_layout.addWidget(self._readiness_summary_lbl)
+        self._readiness_card._content_layout.addWidget(self._readiness_meta_lbl)
+        self._readiness_card._content_layout.addStretch(1)
+        self._readiness_card._content_layout.addWidget(self._btn_readiness_diagnostics, 0, Qt.AlignLeft)
+        cards_column.addWidget(self._readiness_card)
+
+        cards_column.addStretch(1)
+        outer.addLayout(cards_column)
+        return panel
+
+    def _create_workspace_card(self, object_name: str) -> QFrame:
+        card = QFrame()
+        card.setObjectName(object_name)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(8)
+        card._content_layout = layout
+        return card
+
+    def _refresh_workspace_overview(self) -> None:
+        self._refresh_action_policy_card()
+        self._refresh_channel_card()
+        self._refresh_readiness_card()
+
+    def _refresh_action_policy_card(self) -> None:
+        if not hasattr(self, "_policy_summary_lbl"):
+            return
+        if not self._config:
+            self._policy_summary_lbl.setText(self._t("page.dashboard.workspace.card.action_policy.desc"))
+            self._policy_meta_lbl.setText("--")
+            return
+        summary = summarize_action_policy(self._config, self._t)
+        self._policy_summary_lbl.setText(summary.get("headline", ""))
+        self._policy_meta_lbl.setText(
+            self._t(
+                "page.dashboard.workspace.card.action_policy.meta",
+                platform=summary.get("platform", "adb").upper(),
+                mode=summary.get("mode_text", ""),
+                runtime=summary.get("runtime_count", 0),
+                ai_visible=summary.get("ai_count", 0),
+            )
+        )
+
+    def _refresh_channel_card(self) -> None:
+        if not hasattr(self, "_channel_summary_lbl"):
+            return
+        if not self._config:
+            self._channel_summary_lbl.setText(self._t("page.dashboard.workspace.card.channel.desc"))
+            self._channel_meta_lbl.setText("--")
+            return
+        active = self._config.get_active_channel()
+        active_name = self._channel_name(active) if active else self._t("page.dashboard.channel.display.custom_plain")
+        base_url = self._config.get("OPEN_AUTOGLM_BASE_URL") or "—"
+        model = self._config.get("OPEN_AUTOGLM_MODEL") or "—"
+        is_thirdparty = self._config._is_truthy(
+            self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
+        )
+        mode_hint = self._t(
+            "page.dashboard.channel.hint.thirdparty_bracketed"
+            if is_thirdparty else
+            "page.dashboard.channel.hint.native_bracketed"
+        )
+        self._channel_summary_lbl.setText(
+            self._t(
+                "page.dashboard.workspace.card.channel.summary",
+                name=active_name,
+                model=model,
+            )
+        )
+        self._channel_meta_lbl.setText(
+            self._t(
+                "page.dashboard.workspace.card.channel.meta",
+                base_url=base_url,
+                mode_hint=mode_hint,
+            )
+        )
+
+    def _refresh_readiness_card(self) -> None:
+        if not hasattr(self, "_readiness_summary_lbl"):
+            return
+        readiness_text, semantic = self._last_readiness_state
+        self._readiness_summary_lbl.setText(readiness_text)
+        self._readiness_meta_lbl.setText(
+            self._t(
+                "page.dashboard.workspace.card.readiness.meta",
+                task=self._last_task_status[0],
+                mirror=self._last_mirror_status[0],
+            )
+        )
+        if hasattr(self, "_readiness_card"):
+            self._readiness_card.setProperty("semantic", semantic)
+            self._readiness_card.style().unpolish(self._readiness_card)
+            self._readiness_card.style().polish(self._readiness_card)
+            self._readiness_card.update()
+
+    def _open_action_policy_dialog(self) -> None:
+        dialog = ActionPolicyDialog(self._services, parent=self)
+        theme_manager = self._services.get("theme_manager")
+        if theme_manager is not None and hasattr(dialog, "bind_theme_manager"):
+            dialog.bind_theme_manager(theme_manager)
+        dialog.exec()
+        self._refresh_workspace_overview()
+
+    def _open_settings_page(self) -> None:
+        navigator = self._services.get("navigate_to_page")
+        if callable(navigator):
+            navigator("settings")
 
     # ----------------------------------------------------------------
     # 顶部工具区
@@ -388,6 +588,7 @@ class DashboardPage(QWidget):
         if hasattr(self, "_readiness_bar"):
             self._readiness_bar.setToolTip(self._last_readiness_tooltip)
             self._readiness_bar.setStyleSheet(self._readiness_bar_style(semantic))
+        self._refresh_readiness_card()
 
     def _schedule_readiness_check(self, delay_ms: int = 300):
         if self._readiness_worker and self._readiness_worker.isRunning():
@@ -458,10 +659,10 @@ class DashboardPage(QWidget):
     def _build_mirror_panel(self) -> QWidget:
         self._mirror_panel_group = QGroupBox(self._t("page.dashboard.mirror.title"))
         panel = self._mirror_panel_group
-        panel.setMinimumWidth(380)
+        panel.setMinimumWidth(520)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 16, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 18, 12, 12)
+        layout.setSpacing(10)
 
         # 设备信息区
         self._device_info_lbl = QLabel(self._t("page.dashboard.mirror.no_device"))
@@ -472,6 +673,7 @@ class DashboardPage(QWidget):
         # 镜像显示容器
         self._mirror_container = QWidget()
         self._mirror_container.setStyleSheet("background:#0a0e17; border-radius:6px;")
+        self._mirror_container.setMinimumWidth(360)
         self._mirror_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._mirror_container.installEventFilter(self)
         self._mirror_stack = QStackedLayout(self._mirror_container)
@@ -591,6 +793,7 @@ class DashboardPage(QWidget):
             self._lbl_task_state.setText(
                 self._format_status_chip(self._t("page.dashboard.status.label.state"), text, color)
             )
+        self._refresh_readiness_card()
 
     def _set_device_status(self, text: str, color: str):
         self._last_device_status = (text, color)
@@ -605,32 +808,70 @@ class DashboardPage(QWidget):
             self._lbl_mirror_status.setText(
                 self._format_status_chip(self._t("page.dashboard.status.label.mirror"), text, color)
             )
+        self._refresh_readiness_card()
 
     def _summary_style(self, color: str = "") -> str:
         v = self._theme_vars or {}
         summary_color = color or v.get("text_secondary", "#526273")
-        border_color = f"{summary_color}40" if summary_color.startswith("#") else v.get("border", "#d5deea")
+        border_color = f"{summary_color}33" if summary_color.startswith("#") else v.get("border", "#d5deea")
         return (
-            f"background:{v.get('bg_secondary', '#ffffff')}; "
-            f"border:1px solid {border_color}; border-radius:8px; padding:8px; "
-            f"font-size:12px; color:{summary_color}; margin-top:6px;"
+            f"background:{v.get('bg_elevated', '#f7f9fc')}; "
+            f"border:1px solid {border_color}; border-radius:12px; padding:10px 12px; "
+            f"font-size:12px; color:{summary_color}; margin-top:8px;"
+        )
+
+    def _panel_group_style(self) -> str:
+        v = self._theme_vars or {}
+        return f"""
+            QGroupBox {{
+                background:{v.get('bg_secondary', '#161b22')};
+                border:1px solid {v.get('border', '#30363d')};
+                border-radius:22px;
+                margin-top:18px;
+                padding-top:18px;
+                color:{v.get('text_primary', '#c9d1d9')};
+                font-size:13px;
+                font-weight:700;
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                left:18px;
+                padding:0 6px;
+                color:{v.get('text_primary', '#c9d1d9')};
+            }}
+        """
+
+    def _workspace_card_style(self, semantic: str = "default") -> str:
+        v = self._theme_vars or {}
+        semantic_map = {
+            "accent": (v.get("accent_soft", "#162033"), v.get("accent_soft", "#162033")),
+            "success": (v.get("success_bg", "#0f2d1a"), v.get("success_border", v.get("success", "#3fb950"))),
+            "warning": (v.get("warning_bg", "#3d2800"), v.get("warning_border", v.get("warning", "#e3b341"))),
+            "error": (v.get("danger_bg", "#3d1a1a"), v.get("danger_border", v.get("danger", "#f85149"))),
+            "info": (v.get("bg_elevated", "#121924"), v.get("border", "#30363d")),
+            "default": (v.get("bg_secondary", "#161b22"), v.get("border", "#30363d")),
+        }
+        bg, border = semantic_map.get(semantic, semantic_map["default"])
+        return (
+            f"background:{bg}; border:1px solid {border}; border-radius:22px;"
         )
 
     def _channel_combo_style(self, theme_vars: dict) -> str:
         v = theme_vars or {}
         return f"""
             QComboBox {{
-                background:{v.get('bg_secondary', '#161b22')};
+                background:{v.get('bg_elevated', '#121924')};
                 border:1px solid {v.get('border', '#30363d')};
-                border-radius:8px;
+                border-radius:12px;
                 color:{v.get('text_primary', '#c9d1d9')};
-                padding:0 10px;
+                padding:0 12px;
                 font-size:12px;
             }}
-            QComboBox:hover {{ border-color:{v.get('accent', '#4f8cff')}; }}
+            QComboBox:hover {{ border-color:{v.get('border_hover', v.get('accent', '#4f8cff'))}; }}
+            QComboBox:focus {{ border-color:{v.get('accent', '#4f8cff')}; }}
             QComboBox::drop-down {{
                 border:none;
-                width:24px;
+                width:26px;
             }}
             QComboBox::down-arrow {{
                 width:0;
@@ -638,19 +879,21 @@ class DashboardPage(QWidget):
                 border-left:5px solid transparent;
                 border-right:5px solid transparent;
                 border-top:6px solid {v.get('text_secondary', '#8b949e')};
-                margin-right:8px;
+                margin-right:10px;
             }}
             QComboBox QAbstractItemView {{
-                background:{v.get('bg_secondary', '#161b22')};
+                background:{v.get('bg_elevated', '#121924')};
                 border:1px solid {v.get('border', '#30363d')};
+                border-radius:12px;
                 selection-background-color:{v.get('selection_bg', '#264f78')};
                 color:{v.get('text_primary', '#c9d1d9')};
-                padding:2px;
+                padding:4px;
                 outline:none;
             }}
             QComboBox QAbstractItemView::item {{
-                padding:4px 8px;
-                min-height:24px;
+                padding:6px 10px;
+                min-height:26px;
+                border-radius:8px;
             }}
         """
 
@@ -666,13 +909,11 @@ class DashboardPage(QWidget):
         self.refresh_theme_states()
 
     def refresh_theme_surfaces(self) -> None:
-        """刷新静态外观：工具栏、状态栏、列表、日志区、镜像区背景。"""
+        """刷新静态外观：英雄区、概览卡片、日志区、镜像区背景。"""
         if self._theme_tokens is None:
             return
         v = self._theme_vars
 
-        # 工具栏与状态栏仍由全局 role 选择器控制容器外观；
-        # 顶部动作按钮改为页面内显式样式，绕过真实窗口里异常的全局 variant 链路。
         for widget, role in (
             (getattr(self, "_toolbar", None), "toolbar"),
             (getattr(self, "_status_bar", None), "statusBar"),
@@ -684,22 +925,81 @@ class DashboardPage(QWidget):
                 widget.style().polish(widget)
                 widget.update()
 
+        if hasattr(self, "_hero_panel"):
+            self._hero_panel.setStyleSheet(
+                f"background:{v.get('bg_elevated', '#121924')};"
+                f"border:1px solid {v.get('border', '#30363d')}; border-radius:22px;"
+            )
+        if hasattr(self, "_workspace_overview_panel"):
+            self._workspace_overview_panel.setStyleSheet(
+                f"background:{v.get('bg_elevated', '#121924')}; border:none; border-radius:26px;"
+            )
+        if hasattr(self, "_workspace_section_lbl"):
+            self._workspace_section_lbl.setStyleSheet(
+                f"color:{v.get('text_primary', '#c9d1d9')}; font-size:15px; font-weight:700;"
+            )
+        if hasattr(self, "_hero_title_lbl"):
+            self._hero_title_lbl.setStyleSheet(
+                f"color:{v.get('text_primary', '#c9d1d9')}; font-size:20px; font-weight:700;"
+            )
+        if hasattr(self, "_main_splitter"):
+            self._main_splitter.setStyleSheet(
+                f"QSplitter::handle {{ background:{v.get('border', '#30363d')}; border-radius:999px; margin:18px 8px; }}"
+            )
+        if hasattr(self, "_policy_card"):
+            self._policy_card.setStyleSheet(self._workspace_card_style("default"))
+        if hasattr(self, "_channel_card"):
+            self._channel_card.setStyleSheet(self._workspace_card_style("info"))
+        if hasattr(self, "_readiness_card"):
+            self._readiness_card.setStyleSheet(self._workspace_card_style(self._last_readiness_state[1]))
+        for label in (
+            getattr(self, "_policy_title_lbl", None),
+            getattr(self, "_channel_title_lbl", None),
+            getattr(self, "_readiness_title_lbl", None),
+        ):
+            if label is not None:
+                label.setStyleSheet(
+                    f"color:{v.get('text_primary', '#c9d1d9')}; font-size:15px; font-weight:700;"
+                )
+        for label in (
+            getattr(self, "_policy_summary_lbl", None),
+            getattr(self, "_channel_summary_lbl", None),
+            getattr(self, "_readiness_summary_lbl", None),
+        ):
+            if label is not None:
+                label.setStyleSheet(
+                    f"color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; line-height:1.5;"
+                )
+        for label in (
+            getattr(self, "_policy_meta_lbl", None),
+            getattr(self, "_channel_meta_lbl", None),
+            getattr(self, "_readiness_meta_lbl", None),
+        ):
+            if label is not None:
+                label.setStyleSheet(
+                    f"color:{v.get('text_secondary', '#8b949e')}; font-size:12px; line-height:1.5;"
+                )
+
+        if hasattr(self, "_mirror_panel_group"):
+            self._mirror_panel_group.setStyleSheet(self._panel_group_style())
+        if hasattr(self, "_log_panel_group"):
+            self._log_panel_group.setStyleSheet(self._panel_group_style())
         if hasattr(self, "_mirror_container"):
             self._mirror_container.setStyleSheet(
                 f"background:{v.get('bg_console', '#0a0f18')}; "
-                f"border:1px solid {v.get('border', '#30363d')}; border-radius:8px;"
+                f"border:none; border-radius:16px;"
             )
         if hasattr(self, "_mirror_host"):
             self._mirror_host.setStyleSheet(
-                f"background:{v.get('bg_console', '#0a0f18')}; border-radius:8px;"
+                f"background:{v.get('bg_console', '#0a0f18')}; border-radius:16px;"
             )
         if hasattr(self, "_mirror_placeholder"):
             self._mirror_placeholder.setStyleSheet(
-                f"color:{v.get('text_muted', '#66778d')}; font-size:13px; line-height:1.8;"
+                f"color:{v.get('text_muted', '#66778d')}; font-size:13px; line-height:1.8; padding:16px;"
             )
         if hasattr(self, "_device_info_lbl"):
             self._device_info_lbl.setStyleSheet(
-                f"color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:4px;"
+                f"color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:4px 6px 8px 6px;"
             )
         if hasattr(self, "_readiness_bar"):
             self._readiness_bar.setStyleSheet(self._readiness_bar_style(self._last_readiness_state[1]))
@@ -707,7 +1007,7 @@ class DashboardPage(QWidget):
             self._takeover_banner.setStyleSheet(
                 f"background:{v.get('warning_bg', '#3d2800')}; color:{v.get('warning', '#e3b341')}; "
                 f"font-size:12px; border:1px solid {v.get('warning_border', '#6e4800')}; "
-                f"border-radius:8px; padding:6px;"
+                f"border-radius:12px; padding:10px 12px;"
             )
         if hasattr(self, "_log_view"):
             self._log_view.setStyleSheet(log_console(self._theme_tokens))
@@ -721,9 +1021,10 @@ class DashboardPage(QWidget):
         self._set_task_status(*self._last_task_status)
         self._set_device_status(*self._last_device_status)
         self._set_mirror_status(*self._last_mirror_status)
+        self._refresh_workspace_overview()
 
     def refresh_theme_states(self) -> None:
-        """刷新动态状态：按钮样式、渠道下拉框。"""
+        """刷新动态状态：按钮样式、渠道下拉框与工作台入口按钮。"""
         if self._theme_tokens is None:
             return
         v = self._theme_vars
@@ -1347,11 +1648,13 @@ class DashboardPage(QWidget):
                 mode_hint=tp_hint,
             )
         )
+        self._refresh_channel_card()
 
     def on_page_activated(self):
         """页面激活时刷新状态"""
         self._sync_channel_combo()
         self._refresh_status_bar()
+        self._refresh_workspace_overview()
         if (not self._readiness_results) or (time.monotonic() - self._last_readiness_check_at > 45):
             self._schedule_readiness_check(0)
 
@@ -1417,6 +1720,9 @@ class DashboardPage(QWidget):
             ),
             (getattr(self, "_btn_open_diag", None), btn_subtle(self._theme_tokens, size="compact")),
             (getattr(self, "_btn_readiness_refresh", None), btn_subtle(self._theme_tokens, size="compact")),
+            (getattr(self, "_btn_policy_manage", None), btn_primary(self._theme_tokens, size="compact")),
+            (getattr(self, "_btn_channel_settings", None), btn_subtle(self._theme_tokens, size="compact")),
+            (getattr(self, "_btn_readiness_diagnostics", None), btn_subtle(self._theme_tokens, size="compact")),
         )
         for btn, style in btn_specs:
             if btn:
@@ -1444,7 +1750,24 @@ class DashboardPage(QWidget):
         """PageI18nAdapter 回调 - 语言切换后立即更新工作台静态文案。"""
         self._i18n = i18n_manager
         _t = i18n_manager.t
-        # 工具栏
+
+        if hasattr(self, "_hero_title_lbl"):
+            self._hero_title_lbl.setText(_t("page.dashboard.title"))
+        if hasattr(self, "_workspace_section_lbl"):
+            self._workspace_section_lbl.setText(_t("page.dashboard.workspace.section"))
+        if hasattr(self, "_policy_title_lbl"):
+            self._policy_title_lbl.setText(_t("page.dashboard.workspace.card.action_policy.title"))
+        if hasattr(self, "_channel_title_lbl"):
+            self._channel_title_lbl.setText(_t("page.dashboard.workspace.card.channel.title"))
+        if hasattr(self, "_readiness_title_lbl"):
+            self._readiness_title_lbl.setText(_t("page.dashboard.workspace.card.readiness.title"))
+        if hasattr(self, "_btn_policy_manage"):
+            self._btn_policy_manage.setText(_t("page.dashboard.workspace.card.action_policy.manage"))
+        if hasattr(self, "_btn_channel_settings"):
+            self._btn_channel_settings.setText(_t("page.dashboard.workspace.card.channel.cta"))
+        if hasattr(self, "_btn_readiness_diagnostics"):
+            self._btn_readiness_diagnostics.setText(_t("page.dashboard.workspace.card.readiness.cta"))
+
         if hasattr(self, "_task_input"):
             self._task_input.setPlaceholderText(_t("page.dashboard.toolbar.task_placeholder"))
         if hasattr(self, "_btn_start"):
@@ -1462,7 +1785,6 @@ class DashboardPage(QWidget):
                 self._btn_pause.setText(_t("page.dashboard.toolbar.btn.pause"))
         self._sync_toolbar_action_button_widths()
 
-        # 状态条与镜像区
         if self._task:
             self._on_task_state_changed(self._task.state)
         else:
@@ -1486,7 +1808,6 @@ class DashboardPage(QWidget):
             self._populate_channel_combo()
             self._refresh_status_bar()
 
-        # 环境摘要 / 诊断入口
         if hasattr(self, "_btn_readiness_refresh"):
             self._btn_readiness_refresh.setText(_t("page.dashboard.readiness.btn.refresh"))
         if hasattr(self, "_btn_open_diag"):
@@ -1499,7 +1820,6 @@ class DashboardPage(QWidget):
         elif not self._readiness_results:
             self._set_readiness_state(_t("page.dashboard.readiness.checking"), self._last_readiness_state[1])
 
-        # 日志 / 事件 / 结果面板
         if hasattr(self, "_log_panel_group"):
             self._log_panel_group.setTitle(_t("event.result_summary"))
         if hasattr(self, "_log_tabs"):
@@ -1513,3 +1833,5 @@ class DashboardPage(QWidget):
             self._on_task_finished(self._task.current_record)
         elif hasattr(self, "_result_lbl") and not self._last_result_color:
             self._result_lbl.setText(_t("page.dashboard.log.empty_result"))
+
+        self._refresh_workspace_overview()
