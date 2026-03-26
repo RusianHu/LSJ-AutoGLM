@@ -96,6 +96,17 @@ OPEN_AUTOGLM_MODELSCOPE_API_KEY=sk-xxx
 OPEN_AUTOGLM_ZHIPU_API_KEY=xxx.xxx
 OPEN_AUTOGLM_NEWAPI_API_KEY=sk-xxx
 
+# 设备平台 / 运行参数
+OPEN_AUTOGLM_DEVICE_TYPE=adb
+OPEN_AUTOGLM_LANG=cn
+OPEN_AUTOGLM_MAX_STEPS=100
+
+# 动作策略（JSON 数组；为空时回退到平台注册表默认值）
+OPEN_AUTOGLM_ACTION_POLICY_VERSION=1
+OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true
+OPEN_AUTOGLM_ENABLED_ACTIONS=["Launch", "Tap", "Type"]
+OPEN_AUTOGLM_AI_VISIBLE_ACTIONS=["Launch", "Tap"]
+
 # 第三方模型提示词工程
 OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT=true
 OPEN_AUTOGLM_THIRDPARTY_THINKING=true
@@ -104,6 +115,13 @@ OPEN_AUTOGLM_THIRDPARTY_THINKING=true
 OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:1234
 OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY=true
 ```
+
+动作策略字段说明：
+
+- `OPEN_AUTOGLM_DEVICE_TYPE`：选择 `adb` / `hdc` / `ios`
+- `OPEN_AUTOGLM_ENABLED_ACTIONS`：运行时执行白名单，最终决定执行器允许哪些动作
+- `OPEN_AUTOGLM_AI_VISIBLE_ACTIONS`：仅决定提示词向模型暴露哪些动作，必须是运行时白名单的子集
+- `OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true` 时，若动作集合留空，则自动回退到平台注册表默认动作集
 
 ### 3. 项目配置文档 (`AGENTS.md`)
 
@@ -176,6 +194,8 @@ python gui_app.py
 1. 若 exe 同目录没有 [`.env`](.env.example)，GUI 会尝试自动创建
 2. 若目录不可写，设置页与诊断页会给出提示，不会静默失败
 3. 诊断页中如果发现 ADB、ADB Keyboard、scrcpy 或 API 配置缺失，会显示对应的修复指引与下载地址
+4. 设置页新增“动作策略”分组，可按当前设备平台勾选“运行时启用 / AI 可见”动作集合；平台切换时会自动过滤不可用动作
+5. “AI 可见”只影响模型规划范围，不代表一定执行；真正执行仍受运行时白名单硬约束控制
 
 ### 方式三：直接运行 `main.py`
 
@@ -183,9 +203,20 @@ python gui_app.py
 # 使用 ModelScope
 python main.py --base-url "https://api-inference.modelscope.cn/v1" --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "你的Key" "打开微信"
 
+# 显式指定 iOS 平台，并限制动作白名单
+python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' --ai-visible-actions '["Launch", "Tap"]' --disable-platform-default-actions "打开设置"
+
 # 使用第三方模型（如 Qwen3-VL）
 python main.py --thirdparty --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "你的Key" "打开设置"
 ```
+
+动作策略相关 CLI 参数：
+
+- `--device-type adb|hdc|ios`
+- `--enabled-actions '["Launch", "Tap"]'`
+- `--ai-visible-actions '["Launch"]'`
+- `--action-policy-version 1`
+- `--use-platform-default-actions` / `--disable-platform-default-actions`
 
 ---
 

@@ -10,11 +10,12 @@ from typing import Any, Callable
 
 from phone_agent.actions import ActionHandler
 from phone_agent.actions.handler import do, finish, parse_action
-from phone_agent.config import get_messages, get_system_prompt
-from phone_agent.config.prompts_thirdparty import (
-    THIRDPARTY_SYSTEM_PROMPT,
-    THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING,
+from phone_agent.actions.registry import (
+    ActionPolicyInput,
+    ResolvedActionPolicy,
+    resolve_action_policy,
 )
+from phone_agent.config import get_messages, get_system_prompt
 from phone_agent.device_factory import get_device_factory
 from phone_agent.model import ModelClient, ModelConfig
 from phone_agent.model.client import MessageBuilder
@@ -31,16 +32,33 @@ class AgentConfig:
     verbose: bool = True
     use_thirdparty_prompt: bool = False
     thirdparty_thinking: bool = True
+    platform: str | None = None
+    action_policy: ActionPolicyInput | None = None
+    runtime_action_policy: ResolvedActionPolicy | None = None
 
     def __post_init__(self):
+        normalized_lang = (self.lang or "cn").strip().lower()
+        if normalized_lang == "zh":
+            normalized_lang = "cn"
+        self.lang = normalized_lang
+
+        if self.platform is None:
+            self.platform = get_device_factory().device_type.value
+
+        if self.runtime_action_policy is None:
+            self.runtime_action_policy = resolve_action_policy(
+                self.platform,
+                self.action_policy,
+            )
+
         if self.system_prompt is None:
-            if self.use_thirdparty_prompt:
-                if self.thirdparty_thinking:
-                    self.system_prompt = THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING
-                else:
-                    self.system_prompt = THIRDPARTY_SYSTEM_PROMPT
-            else:
-                self.system_prompt = get_system_prompt(self.lang)
+            self.system_prompt = get_system_prompt(
+                self.lang,
+                platform=self.platform,
+                thirdparty=self.use_thirdparty_prompt,
+                thirdparty_thinking=self.thirdparty_thinking,
+                action_policy=self.action_policy,
+            )
 
 
 @dataclass
@@ -91,6 +109,7 @@ class PhoneAgent:
             device_id=self.agent_config.device_id,
             confirmation_callback=confirmation_callback,
             takeover_callback=takeover_callback,
+            runtime_policy=self.agent_config.runtime_action_policy,
         )
 
         self._context: list[dict[str, Any]] = []
@@ -329,7 +348,7 @@ class PhoneAgent:
                 finished=True,
                 action=None,
                 thinking=response.thinking,
-                message=f"动作解析失败，无法继续执行：{parse_error}",
+                message="动作解析失败，无法继续执行",
             )
 
         recommended_action = self._find_recommended_followup_action()

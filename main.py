@@ -23,6 +23,14 @@ from urllib.parse import urlparse
 from openai import OpenAI
 
 from phone_agent import PhoneAgent
+from phone_agent.actions.registry import (
+    ACTION_POLICY_VERSION,
+    ActionPolicyInput,
+    canonicalize_action_name,
+    get_supported_action_names,
+    parse_action_name_collection,
+    resolve_action_policy,
+)
 from phone_agent.agent import AgentConfig
 from phone_agent.agent_ios import IOSAgentConfig, IOSPhoneAgent
 from phone_agent.config.apps import list_supported_apps
@@ -352,6 +360,91 @@ def check_model_api(base_url: str, model_name: str, api_key: str = "EMPTY") -> b
     return all_passed
 
 
+def _env_truthy(primary_key: str, fallback_key: str | None = None, default: str = "") -> bool:
+    raw = os.getenv(primary_key)
+    if raw is None and fallback_key:
+        raw = os.getenv(fallback_key)
+    if raw is None:
+        raw = default
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+
+def _env_value(primary_key: str, fallback_key: str | None = None, default: str = "") -> str:
+    value = os.getenv(primary_key)
+    if value in (None, "") and fallback_key:
+        value = os.getenv(fallback_key)
+    if value is None:
+        value = default
+    return value
+
+
+
+def _parse_cli_action_collection(raw_value: str | None, option_name: str) -> tuple[str, ...] | None:
+    if raw_value is None:
+        return None
+    try:
+        return parse_action_name_collection(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{option_name} 格式无效：{exc}") from exc
+
+
+
+def _build_action_policy_from_args(args: argparse.Namespace, platform: str):
+    runtime_actions = _parse_cli_action_collection(args.enabled_actions, "--enabled-actions")
+    ai_visible_actions = _parse_cli_action_collection(args.ai_visible_actions, "--ai-visible-actions")
+
+    policy = ActionPolicyInput(
+        ai_visible_actions=ai_visible_actions,
+        runtime_enabled_actions=runtime_actions,
+        policy_version=args.action_policy_version,
+        use_platform_defaults=args.use_platform_default_actions,
+    )
+
+    resolved = resolve_action_policy(platform, policy)
+    supported_actions = set(get_supported_action_names(platform))
+
+    if resolved.unknown_actions:
+        raise ValueError(f"未知动作名：{', '.join(resolved.unknown_actions)}")
+
+    if runtime_actions is None and not args.use_platform_default_actions:
+        raise ValueError(
+            "运行时启用动作集合未提供，且已禁用平台默认动作回退。请至少指定一个动作集合（允许显式传 []），或开启平台默认动作。"
+        )
+
+    if ai_visible_actions is None and not args.use_platform_default_actions:
+        raise ValueError(
+            "AI 可见动作集合未提供，且已禁用平台默认动作回退。请至少指定一个 AI 可见动作集合（允许显式传 []），或开启平台默认动作。"
+        )
+
+    if runtime_actions:
+        unsupported_runtime = [name for name in runtime_actions if canonicalize_action_name(name) not in supported_actions]
+        if unsupported_runtime:
+            raise ValueError(
+                f"平台 {platform} 不支持这些运行时动作：{', '.join(unsupported_runtime)}"
+            )
+
+    if ai_visible_actions:
+        unsupported_ai = [name for name in ai_visible_actions if canonicalize_action_name(name) not in supported_actions]
+        if unsupported_ai:
+            raise ValueError(
+                f"平台 {platform} 不支持这些 AI 可见动作：{', '.join(unsupported_ai)}"
+            )
+
+        runtime_enabled_set = set(resolved.runtime_enabled_actions)
+        not_enabled_for_runtime = [
+            name for name in ai_visible_actions if canonicalize_action_name(name) in supported_actions and canonicalize_action_name(name) not in runtime_enabled_set
+        ]
+        if not_enabled_for_runtime:
+            raise ValueError(
+                "以下 AI 可见动作未包含在运行时启用集合中："
+                + ", ".join(not_enabled_for_runtime)
+            )
+
+    return policy, resolved
+
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -382,6 +475,9 @@ Examples:
 
     # List supported apps
     python main.py --list-apps
+
+    # Restrict runtime actions explicitly
+    python main.py --enabled-actions '["Launch", "Tap", "Type", "Swipe", "Back", "Home", "Wait", "Note", "Take_over"]'
 
     # iOS specific examples
     # Run with iOS device
@@ -562,6 +658,46 @@ Examples:
         choices=["adb", "hdc", "ios"],
         default=os.getenv("PHONE_AGENT_DEVICE_TYPE", "adb"),
         help="Device type: adb for Android, hdc for HarmonyOS, ios for iPhone (default: adb)",
+    )
+
+    parser.add_argument(
+        "--enabled-actions",
+        type=str,
+        default=_env_value("PHONE_AGENT_ENABLED_ACTIONS", "OPEN_AUTOGLM_ENABLED_ACTIONS"),
+        help="Runtime enabled action whitelist. Supports JSON array or comma separated names.",
+    )
+
+    parser.add_argument(
+        "--ai-visible-actions",
+        type=str,
+        default=_env_value("PHONE_AGENT_AI_VISIBLE_ACTIONS", "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"),
+        help="AI-visible action whitelist. Supports JSON array or comma separated names.",
+    )
+
+    parser.add_argument(
+        "--action-policy-version",
+        type=int,
+        default=int(_env_value("PHONE_AGENT_ACTION_POLICY_VERSION", "OPEN_AUTOGLM_ACTION_POLICY_VERSION", str(ACTION_POLICY_VERSION))),
+        help="Action policy schema version.",
+    )
+
+    platform_default_group = parser.add_mutually_exclusive_group()
+    platform_default_group.add_argument(
+        "--use-platform-default-actions",
+        dest="use_platform_default_actions",
+        action="store_true",
+        default=_env_truthy(
+            "PHONE_AGENT_USE_PLATFORM_DEFAULT_ACTIONS",
+            "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS",
+            "true",
+        ),
+        help="Fallback to platform default action sets when explicit whitelists are empty.",
+    )
+    platform_default_group.add_argument(
+        "--disable-platform-default-actions",
+        dest="use_platform_default_actions",
+        action="store_false",
+        help="Disable platform default action fallback and require explicit action sets.",
     )
 
     parser.add_argument(
@@ -782,6 +918,15 @@ def main():
     if device_type != DeviceType.IOS:
         set_device_type(device_type)
 
+    try:
+        action_policy, resolved_action_policy = _build_action_policy_from_args(
+            args,
+            args.device_type,
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        sys.exit(2)
+
     # Enable HDC verbose mode if using HDC
     if device_type == DeviceType.HDC:
         from phone_agent.hdc import set_hdc_verbose
@@ -848,6 +993,8 @@ def main():
             device_id=args.device_id,
             verbose=not args.quiet,
             lang=args.lang,
+            action_policy=action_policy,
+            runtime_action_policy=resolved_action_policy,
         )
 
         agent = IOSPhoneAgent(
@@ -867,6 +1014,9 @@ def main():
                 if args.thirdparty and args.thirdparty_thinking is None
                 else bool(args.thirdparty_thinking)
             ),
+            platform=args.device_type,
+            action_policy=action_policy,
+            runtime_action_policy=resolved_action_policy,
         )
 
         # 第三方模式截图压缩开关：
@@ -925,6 +1075,15 @@ def main():
     print(f"Max Steps: {agent_config.max_steps}")
     print(f"Language: {agent_config.lang}")
     print(f"Device Type: {args.device_type.upper()}")
+    print(f"Action Policy Version: {resolved_action_policy.policy_version}")
+    print(
+        "Runtime Actions: "
+        + (", ".join(resolved_action_policy.runtime_enabled_actions) or "(none)")
+    )
+    print(
+        "AI Visible Actions: "
+        + (", ".join(resolved_action_policy.ai_visible_actions) or "(none)")
+    )
     if args.thirdparty:
         print("Prompt Mode: 第三方模型适配 (Thirdparty)")
 

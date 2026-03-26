@@ -96,6 +96,17 @@ OPEN_AUTOGLM_MODELSCOPE_API_KEY=sk-xxx
 OPEN_AUTOGLM_ZHIPU_API_KEY=xxx.xxx
 OPEN_AUTOGLM_NEWAPI_API_KEY=sk-xxx
 
+# Device platform / runtime parameters
+OPEN_AUTOGLM_DEVICE_TYPE=adb
+OPEN_AUTOGLM_LANG=cn
+OPEN_AUTOGLM_MAX_STEPS=100
+
+# Action policy (JSON arrays; fallback to platform defaults when left empty)
+OPEN_AUTOGLM_ACTION_POLICY_VERSION=1
+OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true
+OPEN_AUTOGLM_ENABLED_ACTIONS=["Launch", "Tap", "Type"]
+OPEN_AUTOGLM_AI_VISIBLE_ACTIONS=["Launch", "Tap"]
+
 # Third-party model prompt engineering
 OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT=true
 OPEN_AUTOGLM_THIRDPARTY_THINKING=true
@@ -104,6 +115,13 @@ OPEN_AUTOGLM_THIRDPARTY_THINKING=true
 OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:1234
 OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY=true
 ```
+
+Action policy fields:
+
+- `OPEN_AUTOGLM_DEVICE_TYPE`: choose `adb` / `hdc` / `ios`
+- `OPEN_AUTOGLM_ENABLED_ACTIONS`: runtime whitelist that ultimately controls what the executor may run
+- `OPEN_AUTOGLM_AI_VISIBLE_ACTIONS`: actions exposed to the model in prompts; must be a subset of the runtime whitelist
+- `OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true`: when action lists are empty, fall back to the platform defaults from the shared registry
 
 ### 3. Project Configuration (`AGENTS.md`)
 
@@ -178,6 +196,8 @@ First-run notes:
 1. If there is no [`.env`](.env.example) in the same directory as the exe, the GUI will attempt to create one automatically
 2. If the directory is not writable, the settings and diagnostics pages will display a prompt instead of failing silently
 3. If the diagnostics page detects missing ADB, ADB Keyboard, scrcpy, or API configuration, it will show the corresponding fix guides and download links
+4. The settings page now includes an "Action Policy" section where you can configure "Runtime Enabled / AI Visible" actions per device platform; unsupported actions are filtered automatically when the platform changes
+5. "AI Visible" only limits what the model may plan; actual execution is still enforced by the runtime whitelist hard constraints
 
 ### Method 3: Run `main.py` Directly
 
@@ -185,9 +205,20 @@ First-run notes:
 # Using ModelScope
 python main.py --base-url "https://api-inference.modelscope.cn/v1" --model "ZhipuAI/AutoGLM-Phone-9B" --apikey "your-key" "Open WeChat"
 
+# Explicitly target iOS and restrict the action whitelist
+python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' --ai-visible-actions '["Launch", "Tap"]' --disable-platform-default-actions "Open Settings"
+
 # Using a third-party model (e.g., Qwen3-VL)
 python main.py --thirdparty --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "your-key" "Open Settings"
 ```
+
+Action-policy-related CLI parameters:
+
+- `--device-type adb|hdc|ios`
+- `--enabled-actions '["Launch", "Tap"]'`
+- `--ai-visible-actions '["Launch"]'`
+- `--action-policy-version 1`
+- `--use-platform-default-actions` / `--disable-platform-default-actions`
 
 ---
 

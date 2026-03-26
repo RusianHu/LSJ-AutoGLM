@@ -7,6 +7,11 @@ from typing import Any, Callable
 
 from phone_agent.actions.handler import do, finish, parse_action
 from phone_agent.actions.handler_ios import IOSActionHandler
+from phone_agent.actions.registry import (
+    ActionPolicyInput,
+    ResolvedActionPolicy,
+    resolve_action_policy,
+)
 from phone_agent.config import get_messages, get_system_prompt
 from phone_agent.model import ModelClient, ModelConfig
 from phone_agent.model.client import MessageBuilder
@@ -24,10 +29,28 @@ class IOSAgentConfig:
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
+    platform: str = "ios"
+    action_policy: ActionPolicyInput | None = None
+    runtime_action_policy: ResolvedActionPolicy | None = None
 
     def __post_init__(self):
+        normalized_lang = (self.lang or "cn").strip().lower()
+        if normalized_lang == "zh":
+            normalized_lang = "cn"
+        self.lang = normalized_lang
+
+        if self.runtime_action_policy is None:
+            self.runtime_action_policy = resolve_action_policy(
+                self.platform,
+                self.action_policy,
+            )
+
         if self.system_prompt is None:
-            self.system_prompt = get_system_prompt(self.lang)
+            self.system_prompt = get_system_prompt(
+                self.lang,
+                platform=self.platform,
+                action_policy=self.action_policy,
+            )
 
 
 @dataclass
@@ -94,6 +117,7 @@ class IOSPhoneAgent:
             session_id=self.agent_config.session_id,
             confirmation_callback=confirmation_callback,
             takeover_callback=takeover_callback,
+            runtime_policy=self.agent_config.runtime_action_policy,
         )
 
         self._context: list[dict[str, Any]] = []
@@ -246,6 +270,17 @@ class IOSPhoneAgent:
                 f"<think>{response.thinking}</think><answer>{response.action}</answer>"
             )
         )
+
+        if result.message:
+            result_prefix = "Action succeeded" if result.success else "Action failed"
+            self._context.append(
+                MessageBuilder.create_user_message(
+                    text=f"** Action Result **\n\n{result_prefix}: {result.message}"
+                )
+            )
+
+        if self.agent_config.verbose and (not result.success) and result.message:
+            print(f"⚠️ Action failed: {result.message}")
 
         # Check if finished
         finished = action.get("_metadata") == "finish" or result.should_finish

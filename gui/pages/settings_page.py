@@ -8,14 +8,16 @@
 - 监听 config_changed 信号，自动同步活跃预设高亮状态
 """
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, QRect, Property
+from PySide6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve, QRect, Property, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QFrame,
@@ -40,12 +42,20 @@ from gui.utils.runtime import (
     gui_onefile_output_path,
     is_frozen,
 )
+from phone_agent.actions.registry import (
+    ActionPolicyInput,
+    export_gui_action_groups,
+    parse_action_name_collection,
+    resolve_action_policy,
+)
 
 class _ToggleSwitch(QWidget):
     """
     自绘布尔值拨动开关。
     接口与 QLineEdit 兼容：text() 返回 'true'/'false'，setText() 设置状态。
     """
+
+    toggled = Signal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -65,6 +75,7 @@ class _ToggleSwitch(QWidget):
             self._checked = on
             self._anim_offset = 1.0 if on else 0.0
             self.update()
+            self.toggled.emit(self._checked)
 
     def isChecked(self) -> bool:
         return self._checked
@@ -79,6 +90,7 @@ class _ToggleSwitch(QWidget):
             self._checked = not self._checked
             self._anim_offset = 1.0 if self._checked else 0.0
             self.update()
+            self.toggled.emit(self._checked)
         super().mousePressEvent(event)
 
     # ---- 绘制 ----
@@ -161,6 +173,7 @@ class _PresetCard(QFrame):
         self._active = False
         self._theme_tokens: ThemeTokens = None
         self._translator = translator
+        self._use_thirdparty = bool(self._preset.get("use_thirdparty", False))
         self._build_ui()
         self.setFixedHeight(72)
         self.setCursor(Qt.PointingHandCursor)
@@ -186,14 +199,22 @@ class _PresetCard(QFrame):
 
     def _refresh_texts(self) -> None:
         if hasattr(self, "_tag_lbl"):
-            use_thirdparty = self._preset.get("use_thirdparty", False)
             tag_key = (
                 "page.settings.preset.tag.thirdparty"
-                if use_thirdparty else "page.settings.preset.tag.native"
+                if self._use_thirdparty else "page.settings.preset.tag.native"
             )
             self._tag_lbl.setText(self._t(tag_key))
         if hasattr(self, "_model_lbl"):
             self.update_model_display(self._resolved_model)
+
+    def set_prompt_mode(self, use_thirdparty: bool | None) -> None:
+        self._use_thirdparty = (
+            bool(self._preset.get("use_thirdparty", False))
+            if use_thirdparty is None
+            else bool(use_thirdparty)
+        )
+        self._refresh_texts()
+        self._refresh_style()
 
     # ----------------------------------------------------------------
     # 构建
@@ -234,8 +255,7 @@ class _PresetCard(QFrame):
         right_col.setSpacing(4)
         right_col.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-        use_thirdparty = self._preset.get("use_thirdparty", False)
-        tag_key = "page.settings.preset.tag.thirdparty" if use_thirdparty else "page.settings.preset.tag.native"
+        tag_key = "page.settings.preset.tag.thirdparty" if self._use_thirdparty else "page.settings.preset.tag.native"
         self._tag_lbl = QLabel(self._t(tag_key))
         self._tag_lbl.setObjectName("presetCardTag")
         self._tag_lbl.setAlignment(Qt.AlignRight)
@@ -287,9 +307,8 @@ class _PresetCard(QFrame):
             name_color = t.text_primary
             dot_color = "transparent"
 
-        use_thirdparty = self._preset.get("use_thirdparty", False)
-        tag_color = t.warning if use_thirdparty else t.success
-        tag_bg = t.warning_bg if use_thirdparty else t.success_bg
+        tag_color = t.warning if self._use_thirdparty else t.success
+        tag_bg = t.warning_bg if self._use_thirdparty else t.success_bg
 
         self.setStyleSheet(f"""
             _PresetCard, QFrame#presetCard {{
@@ -386,9 +405,13 @@ class SettingsPage(QWidget):
         self._last_banner_i18n = None
         self._visibility_toggle_buttons: list[QPushButton] = []
         self._preset_cards: list[_PresetCard] = []  # 预设卡片列表
+        self._action_runtime_checks: dict[str, QCheckBox] = {}
+        self._action_ai_checks: dict[str, QCheckBox] = {}
+        self._action_matrix_syncing = False
         self._build_ui()
         self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self._lang_combo.currentIndexChanged.connect(self._on_lang_changed)
+        self._device_type_combo.currentIndexChanged.connect(self._on_device_type_changed)
         self._apply_action_button_styles()
         self._load_values()
         self._load_theme_combo()
@@ -521,6 +544,14 @@ class SettingsPage(QWidget):
         ]
         self._add_fields(run_form, run_fields)
 
+        self._device_type_combo = QComboBox()
+        self._device_type_combo.addItem(self._t("page.settings.device_type.adb"), "adb")
+        self._device_type_combo.addItem(self._t("page.settings.device_type.hdc"), "hdc")
+        self._device_type_combo.addItem(self._t("page.settings.device_type.ios"), "ios")
+        self._device_type_combo.setMinimumWidth(160)
+        self._device_type_label = QLabel(self._t("page.settings.device_type.label"))
+        run_form.addRow(self._device_type_label, self._device_type_combo)
+
         # 语言选择 - 专用 ComboBox（不再是自由文本）
         self._lang_combo = QComboBox()
         self._lang_combo.addItem(self._t("page.settings.lang.cn"), "cn")
@@ -530,6 +561,62 @@ class SettingsPage(QWidget):
         run_form.addRow(self._lang_label, self._lang_combo)
 
         scroll_layout.addWidget(self._run_group)
+
+        # ---- 动作策略 ----
+        self._action_policy_group = QGroupBox(self._t("page.settings.section.action_policy"))
+        action_vbox = QVBoxLayout(self._action_policy_group)
+        action_vbox.setContentsMargins(12, 16, 12, 12)
+        action_vbox.setSpacing(10)
+
+        self._action_policy_hint_lbl = QLabel(self._t("page.settings.actions.hint"))
+        self._action_policy_hint_lbl.setProperty("role", "subtle")
+        self._action_policy_hint_lbl.setWordWrap(True)
+        action_vbox.addWidget(self._action_policy_hint_lbl)
+
+        self._action_policy_status_lbl = QLabel("")
+        self._action_policy_status_lbl.setProperty("role", "subtle")
+        self._action_policy_status_lbl.setWordWrap(True)
+        self._action_policy_status_lbl.hide()
+        action_vbox.addWidget(self._action_policy_status_lbl)
+
+        action_btn_row = QHBoxLayout()
+        action_btn_row.setContentsMargins(0, 0, 0, 0)
+        action_btn_row.setSpacing(8)
+
+        self._btn_action_reset_defaults = QPushButton(self._t("page.settings.actions.btn.reset_defaults"))
+        self._btn_action_reset_defaults.setProperty("variant", "subtle")
+        self._btn_action_reset_defaults.clicked.connect(self._on_action_policy_reset_defaults)
+        action_btn_row.addWidget(self._btn_action_reset_defaults)
+
+        self._btn_action_select_all = QPushButton(self._t("page.settings.actions.btn.select_all"))
+        self._btn_action_select_all.setProperty("variant", "subtle")
+        self._btn_action_select_all.clicked.connect(self._on_action_policy_select_all)
+        action_btn_row.addWidget(self._btn_action_select_all)
+
+        self._btn_action_clear_all = QPushButton(self._t("page.settings.actions.btn.clear_all"))
+        self._btn_action_clear_all.setProperty("variant", "subtle")
+        self._btn_action_clear_all.clicked.connect(self._on_action_policy_clear_all)
+        action_btn_row.addWidget(self._btn_action_clear_all)
+        action_btn_row.addStretch(1)
+        action_vbox.addLayout(action_btn_row)
+
+        action_form = QFormLayout()
+        action_form.setLabelAlignment(Qt.AlignRight)
+        action_form.setSpacing(10)
+        action_fields = [
+            "OPEN_AUTOGLM_ACTION_POLICY_VERSION",
+            "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS",
+        ]
+        self._add_fields(action_form, action_fields)
+        action_vbox.addLayout(action_form)
+
+        self._action_matrix_container = QWidget()
+        self._action_matrix_vbox = QVBoxLayout(self._action_matrix_container)
+        self._action_matrix_vbox.setContentsMargins(0, 4, 0, 0)
+        self._action_matrix_vbox.setSpacing(10)
+        action_vbox.addWidget(self._action_matrix_container)
+
+        scroll_layout.addWidget(self._action_policy_group)
 
         # ---- 外观 ----
         self._appearance_group = QGroupBox(self._t("page.settings.section.appearance"))
@@ -664,11 +751,15 @@ class SettingsPage(QWidget):
             return
         active = self._config.get_active_channel()
         active_id = active.get("id", "") if active else ""
+        current_thirdparty = self._current_thirdparty_prompt_enabled()
         for card in self._preset_cards:
             # 每次都从 .env 读取该预设的实际模型名（用户可能已在设置页修改）
             resolved_model = self._config.get_preset_model(card._preset)
             card.update_model_display(resolved_model)
             is_active = card._preset.get("id") == active_id
+            card.set_prompt_mode(
+                current_thirdparty if is_active else card._preset.get("use_thirdparty", False)
+            )
             card.set_active(is_active, self._theme_tokens)
 
         # 更新提示文字
@@ -922,6 +1013,11 @@ class SettingsPage(QWidget):
                 row_layout.addStretch(1)
                 form.addRow(lbl, row_widget)
                 self._field_widgets[key] = edit
+                if key == "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT":
+                    try:
+                        edit.toggled.connect(lambda _checked: self._refresh_preset_active())
+                    except Exception:
+                        pass
             else:
                 edit = QLineEdit()
                 edit.setMinimumWidth(320)
@@ -961,6 +1057,358 @@ class SettingsPage(QWidget):
             btn.setProperty("sensitiveVisible", False)
             btn.setText(self._t("page.settings.btn.show"))
 
+    @staticmethod
+    def _resolve_i18n_fallback(text: str, fallback: str) -> str:
+        if text.startswith("[[") and text.endswith("]]"):
+            return fallback
+        return text
+
+    def _tr_or(self, key: str, fallback: str, **params) -> str:
+        if not key:
+            return fallback
+        return self._resolve_i18n_fallback(self._t(key, **params), fallback)
+
+    def _current_device_type(self) -> str:
+        if hasattr(self, "_device_type_combo"):
+            current = self._device_type_combo.currentData()
+            if current:
+                return str(current)
+        if self._config:
+            return (self._config.get("OPEN_AUTOGLM_DEVICE_TYPE") or "adb").strip().lower()
+        return "adb"
+
+    @staticmethod
+    def _is_truthy_text(value: object) -> bool:
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    def _current_use_platform_defaults(self) -> bool:
+        toggle_widget = self._field_widgets.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS")
+        if toggle_widget is not None:
+            return self._is_truthy_text(toggle_widget.text())
+        if self._config:
+            return self._is_truthy_text(
+                self._config.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
+            )
+        return True
+
+    def _current_thirdparty_prompt_enabled(self) -> bool:
+        toggle_widget = self._field_widgets.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT")
+        if toggle_widget is not None:
+            return self._is_truthy_text(toggle_widget.text())
+        if self._config:
+            return self._is_truthy_text(
+                self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
+            )
+        return False
+
+    def _build_action_policy_updates(
+        self,
+        *,
+        use_platform_defaults: bool | None = None,
+    ) -> dict[str, str]:
+        if use_platform_defaults is None:
+            use_platform_defaults = self._current_use_platform_defaults()
+
+        updates = {
+            "OPEN_AUTOGLM_DEVICE_TYPE": self._current_device_type(),
+            "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": (
+                "true" if use_platform_defaults else "false"
+            ),
+        }
+        if use_platform_defaults:
+            updates["OPEN_AUTOGLM_ENABLED_ACTIONS"] = ""
+            updates["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"] = ""
+        else:
+            updates.update(self._collect_action_policy_updates())
+        return updates
+
+    def _load_device_type_combo(self):
+        if not self._config or not hasattr(self, "_device_type_combo"):
+            return
+        current = (self._config.get("OPEN_AUTOGLM_DEVICE_TYPE") or "adb").strip().lower()
+        self._device_type_combo.blockSignals(True)
+        for i in range(self._device_type_combo.count()):
+            if self._device_type_combo.itemData(i) == current:
+                self._device_type_combo.setCurrentIndex(i)
+                break
+        self._device_type_combo.blockSignals(False)
+        self._rebuild_action_policy_matrix(current)
+
+    def _resolve_action_policy_for_platform(self, platform: str):
+        if not self._config:
+            return resolve_action_policy(platform)
+
+        settings = self._config.get_action_policy_settings()
+        enabled_actions = None
+        ai_visible_actions = None
+
+        try:
+            if settings.get("enabled_actions"):
+                enabled_actions = parse_action_name_collection(settings["enabled_actions"])
+            if settings.get("ai_visible_actions"):
+                ai_visible_actions = parse_action_name_collection(settings["ai_visible_actions"])
+        except ValueError:
+            enabled_actions = None
+            ai_visible_actions = None
+
+        return resolve_action_policy(
+            platform,
+            ActionPolicyInput(
+                ai_visible_actions=ai_visible_actions,
+                runtime_enabled_actions=enabled_actions,
+                policy_version=int(settings.get("policy_version", 1) or 1),
+                use_platform_defaults=bool(settings.get("use_platform_defaults", True)),
+            ),
+        )
+
+    def _parse_action_policy_names(self, value: object) -> tuple[str, ...]:
+        try:
+            parsed = parse_action_name_collection(value)
+        except ValueError:
+            return ()
+        return parsed or ()
+
+    def _set_action_policy_check_states(
+        self,
+        runtime_actions: tuple[str, ...] | list[str],
+        ai_visible_actions: tuple[str, ...] | list[str],
+    ) -> None:
+        runtime_set = set(runtime_actions)
+        ai_visible_set = set(ai_visible_actions)
+        self._action_matrix_syncing = True
+        try:
+            for action_name, runtime_checkbox in self._action_runtime_checks.items():
+                runtime_checkbox.setChecked(action_name in runtime_set)
+            for action_name, ai_checkbox in self._action_ai_checks.items():
+                enabled = action_name in runtime_set
+                ai_checkbox.setEnabled(enabled)
+                ai_checkbox.setChecked(enabled and action_name in ai_visible_set)
+        finally:
+            self._action_matrix_syncing = False
+
+    def _update_action_policy_compatibility_hint(self, platform: str, resolved_policy=None) -> None:
+        label = getattr(self, "_action_policy_status_lbl", None)
+        if label is None:
+            return
+        if not self._config:
+            label.clear()
+            label.hide()
+            return
+
+        settings = self._config.get_action_policy_settings()
+        resolved = resolved_policy or self._resolve_action_policy_for_platform(platform)
+        supported_actions = set(resolved.supported_actions)
+        incompatible_actions: list[str] = []
+
+        for raw_value in (settings.get("enabled_actions"), settings.get("ai_visible_actions")):
+            for action_name in self._parse_action_policy_names(raw_value):
+                if action_name not in supported_actions and action_name not in incompatible_actions:
+                    incompatible_actions.append(action_name)
+
+        if incompatible_actions:
+            label.setText(
+                self._t(
+                    "page.settings.actions.compatibility.filtered",
+                    actions=", ".join(incompatible_actions),
+                )
+            )
+            label.show()
+            return
+
+        label.clear()
+        label.hide()
+
+    def _persist_action_policy_updates(self, *, use_platform_defaults: bool | None = None) -> None:
+        if not self._config:
+            return
+
+        toggle_widget = self._field_widgets.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS")
+        if use_platform_defaults is None:
+            use_platform_defaults = self._current_use_platform_defaults()
+
+        updates = self._build_action_policy_updates(
+            use_platform_defaults=use_platform_defaults
+        )
+
+        if toggle_widget is not None:
+            toggle_widget.setText(updates["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"])
+
+        try:
+            self._config.set_many(updates)
+        except Exception as e:
+            QMessageBox.warning(self, self._t("page.settings.dialog.save_fail"), str(e))
+            self._load_values()
+
+    def _on_action_policy_reset_defaults(self):
+        current_platform = self._current_device_type()
+        resolved_policy = resolve_action_policy(current_platform)
+        self._set_action_policy_check_states(
+            resolved_policy.runtime_enabled_actions,
+            resolved_policy.ai_visible_actions,
+        )
+        self._persist_action_policy_updates(use_platform_defaults=True)
+
+    def _on_action_policy_select_all(self):
+        all_actions = tuple(self._action_runtime_checks.keys())
+        self._set_action_policy_check_states(all_actions, all_actions)
+        self._persist_action_policy_updates(use_platform_defaults=False)
+
+    def _on_action_policy_clear_all(self):
+        self._set_action_policy_check_states((), ())
+        self._persist_action_policy_updates(use_platform_defaults=False)
+
+    def _on_device_type_changed(self, index: int):
+        if not hasattr(self, "_device_type_combo"):
+            return
+        platform = str(self._device_type_combo.itemData(index) or "adb")
+        self._rebuild_action_policy_matrix(platform)
+        if not self._config:
+            return
+        current_saved = (self._config.get("OPEN_AUTOGLM_DEVICE_TYPE") or "adb").strip().lower()
+        if current_saved == platform.strip().lower():
+            return
+        self._persist_action_policy_updates(
+            use_platform_defaults=self._current_use_platform_defaults()
+        )
+
+    def _on_runtime_action_toggled(self, action_name: str, checked: bool):
+        ai_widget = self._action_ai_checks.get(action_name)
+        if ai_widget is None or self._action_matrix_syncing:
+            return
+        self._action_matrix_syncing = True
+        try:
+            ai_widget.setEnabled(checked)
+            if not checked:
+                ai_widget.setChecked(False)
+        finally:
+            self._action_matrix_syncing = False
+        self._persist_action_policy_updates(use_platform_defaults=False)
+
+    def _on_ai_action_toggled(self, action_name: str, checked: bool):
+        if self._action_matrix_syncing:
+            return
+        runtime_widget = self._action_runtime_checks.get(action_name)
+        if checked and runtime_widget is not None and not runtime_widget.isChecked():
+            self._action_matrix_syncing = True
+            try:
+                runtime_widget.setChecked(True)
+            finally:
+                self._action_matrix_syncing = False
+        self._persist_action_policy_updates(use_platform_defaults=False)
+
+    def _collect_action_policy_updates(self) -> dict[str, str]:
+        runtime_actions = [
+            name for name, checkbox in self._action_runtime_checks.items() if checkbox.isChecked()
+        ]
+        ai_visible_actions = [
+            name for name, checkbox in self._action_ai_checks.items() if checkbox.isChecked()
+        ]
+        return {
+            "OPEN_AUTOGLM_ENABLED_ACTIONS": json.dumps(runtime_actions, ensure_ascii=False),
+            "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": json.dumps(ai_visible_actions, ensure_ascii=False),
+        }
+
+    def _rebuild_action_policy_matrix(self, platform: str = ""):
+        container = getattr(self, "_action_matrix_container", None)
+        vbox = getattr(self, "_action_matrix_vbox", None)
+        if container is None or vbox is None:
+            return
+
+        self._action_runtime_checks.clear()
+        self._action_ai_checks.clear()
+
+        while vbox.count():
+            item = vbox.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        current_platform = (platform or self._current_device_type() or "adb").strip().lower()
+        groups = export_gui_action_groups(current_platform)
+        resolved_policy = self._resolve_action_policy_for_platform(current_platform)
+        self._update_action_policy_compatibility_hint(current_platform, resolved_policy)
+
+        for btn in (
+            getattr(self, "_btn_action_reset_defaults", None),
+            getattr(self, "_btn_action_select_all", None),
+            getattr(self, "_btn_action_clear_all", None),
+        ):
+            if btn is not None:
+                btn.setEnabled(bool(groups))
+
+        if not groups:
+            hint = QLabel(self._t("page.settings.actions.none"))
+            hint.setProperty("role", "subtle")
+            hint.setWordWrap(True)
+            vbox.addWidget(hint)
+            return
+
+        for group in groups:
+            category_box = QGroupBox(
+                self._tr_or(group.get("category_i18n_key", ""), group.get("category_label", ""))
+            )
+            category_vbox = QVBoxLayout(category_box)
+            category_vbox.setContentsMargins(10, 12, 10, 10)
+            category_vbox.setSpacing(8)
+
+            for item in group.get("items", ()):
+                action_name = item.get("name", "")
+                row = QWidget()
+                row_layout = QHBoxLayout(row)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(12)
+
+                text_layout = QVBoxLayout()
+                text_layout.setContentsMargins(0, 0, 0, 0)
+                text_layout.setSpacing(2)
+
+                label_text = self._tr_or(item.get("label_i18n_key", ""), item.get("label", action_name))
+                desc_text = self._tr_or(item.get("description_i18n_key", ""), item.get("description", ""))
+                risk_text = self._tr_or(item.get("risk_i18n_key", ""), item.get("risk_level", ""))
+
+                title_lbl = QLabel(label_text)
+                title_lbl.setStyleSheet("font-weight: 600;")
+                text_layout.addWidget(title_lbl)
+
+                desc_parts = [part for part in (desc_text, f"[{risk_text}]" if risk_text else "") if part]
+                desc_lbl = QLabel(" ".join(desc_parts))
+                desc_lbl.setProperty("role", "subtle")
+                desc_lbl.setWordWrap(True)
+                text_layout.addWidget(desc_lbl)
+
+                row_layout.addLayout(text_layout, 1)
+
+                check_widget = QWidget()
+                check_layout = QHBoxLayout(check_widget)
+                check_layout.setContentsMargins(0, 0, 0, 0)
+                check_layout.setSpacing(16)
+
+                runtime_checkbox = QCheckBox(self._t("page.settings.actions.columns.runtime"))
+                ai_checkbox = QCheckBox(self._t("page.settings.actions.columns.ai_visible"))
+                runtime_checkbox.setChecked(action_name in resolved_policy.runtime_enabled_actions)
+                ai_checkbox.setChecked(action_name in resolved_policy.ai_visible_actions)
+                ai_checkbox.setEnabled(runtime_checkbox.isChecked())
+
+                runtime_checkbox.toggled.connect(
+                    lambda checked, name=action_name: self._on_runtime_action_toggled(name, checked)
+                )
+                ai_checkbox.toggled.connect(
+                    lambda checked, name=action_name: self._on_ai_action_toggled(name, checked)
+                )
+
+                self._action_runtime_checks[action_name] = runtime_checkbox
+                self._action_ai_checks[action_name] = ai_checkbox
+
+                check_layout.addWidget(runtime_checkbox)
+                check_layout.addWidget(ai_checkbox)
+                row_layout.addWidget(check_widget, 0, Qt.AlignRight | Qt.AlignVCenter)
+
+                category_vbox.addWidget(row)
+
+            vbox.addWidget(category_box)
+
+        vbox.addStretch(1)
+
     # ================================================================
     # 数据加载与保存
     # ================================================================
@@ -973,6 +1421,8 @@ class SettingsPage(QWidget):
         for key, edit in self._field_widgets.items():
             value = self._config.get(key)
             edit.setText(value)
+        self._load_lang_combo()
+        self._load_device_type_combo()
         self._show_env_status_banner_if_needed()
         self._update_theme_hint()
         self._refresh_build_paths()
@@ -1069,9 +1519,12 @@ class SettingsPage(QWidget):
             key: edit.text().strip()
             for key, edit in self._field_widgets.items()
         }
+        if hasattr(self, "_device_type_combo"):
+            updates["OPEN_AUTOGLM_DEVICE_TYPE"] = self._device_type_combo.currentData() or "adb"
         # 将语言下拉选择单独合并进 updates
         if hasattr(self, "_lang_combo"):
             updates["OPEN_AUTOGLM_LANG"] = self._lang_combo.currentData() or "cn"
+        updates.update(self._build_action_policy_updates())
 
         updates = self._sync_active_channel_updates(updates)
 
@@ -1109,6 +1562,11 @@ class SettingsPage(QWidget):
             key: edit.text().strip()
             for key, edit in self._field_widgets.items()
         }
+        if hasattr(self, "_device_type_combo"):
+            temp_values["OPEN_AUTOGLM_DEVICE_TYPE"] = self._device_type_combo.currentData() or "adb"
+        if hasattr(self, "_lang_combo"):
+            temp_values["OPEN_AUTOGLM_LANG"] = self._lang_combo.currentData() or "cn"
+        temp_values.update(self._build_action_policy_updates())
         errors = self._config.validate(temp_values)
         if not errors:
             self._show_banner(
@@ -1212,6 +1670,9 @@ class SettingsPage(QWidget):
             (getattr(self, "_btn_run_build", None), btn_primary(self._theme_tokens)),
             (getattr(self, "_btn_open_scripts_dir", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_open_dist_dir", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_action_reset_defaults", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_action_select_all", None), btn_subtle(self._theme_tokens)),
+            (getattr(self, "_btn_action_clear_all", None), btn_subtle(self._theme_tokens)),
         ):
             if btn:
                 btn.setStyleSheet(style)
@@ -1314,6 +1775,8 @@ class SettingsPage(QWidget):
             self._channel_group.setTitle(_t("page.settings.section.channel"))
         if hasattr(self, "_run_group"):
             self._run_group.setTitle(_t("page.settings.section.run_params"))
+        if hasattr(self, "_action_policy_group"):
+            self._action_policy_group.setTitle(_t("page.settings.section.action_policy"))
         if hasattr(self, "_appearance_group"):
             self._appearance_group.setTitle(_t("page.settings.section.appearance"))
         if hasattr(self, "_build_tools_group"):
@@ -1323,8 +1786,18 @@ class SettingsPage(QWidget):
         # 行标签与说明
         if hasattr(self, "_channel_hint_lbl"):
             self._channel_hint_lbl.setText(_t("page.settings.channel.hint"))
+        if hasattr(self, "_action_policy_hint_lbl"):
+            self._action_policy_hint_lbl.setText(_t("page.settings.actions.hint"))
+        if hasattr(self, "_btn_action_reset_defaults"):
+            self._btn_action_reset_defaults.setText(_t("page.settings.actions.btn.reset_defaults"))
+        if hasattr(self, "_btn_action_select_all"):
+            self._btn_action_select_all.setText(_t("page.settings.actions.btn.select_all"))
+        if hasattr(self, "_btn_action_clear_all"):
+            self._btn_action_clear_all.setText(_t("page.settings.actions.btn.clear_all"))
         if hasattr(self, "_build_hint_lbl"):
             self._build_hint_lbl.setText(_t("page.settings.build.hint"))
+        if hasattr(self, "_device_type_label"):
+            self._device_type_label.setText(_t("page.settings.device_type.label"))
         if hasattr(self, "_lang_label"):
             self._lang_label.setText(_t("page.settings.lang.label"))
         if hasattr(self, "_theme_label"):
@@ -1337,6 +1810,10 @@ class SettingsPage(QWidget):
         if hasattr(self, "_lang_combo"):
             self._lang_combo.setItemText(0, _t("page.settings.lang.cn"))
             self._lang_combo.setItemText(1, _t("page.settings.lang.en"))
+        if hasattr(self, "_device_type_combo"):
+            self._device_type_combo.setItemText(0, _t("page.settings.device_type.adb"))
+            self._device_type_combo.setItemText(1, _t("page.settings.device_type.hdc"))
+            self._device_type_combo.setItemText(2, _t("page.settings.device_type.ios"))
         # 主题下拉文字
         if hasattr(self, "_theme_combo"):
             self._theme_combo.setItemText(0, _t("page.settings.theme.system"))
@@ -1367,6 +1844,7 @@ class SettingsPage(QWidget):
         self._update_theme_hint()
         self._refresh_build_paths()
         self._refresh_preset_active()
+        self._rebuild_action_policy_matrix(self._current_device_type())
         if self._config:
             active = self._config.get_active_channel()
             active_id = active.get("id", "") if active else ""

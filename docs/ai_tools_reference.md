@@ -536,6 +536,36 @@ AI 输出的坐标统一使用相对坐标，范围：
  python main.py --list-devices
 ```
 
+### 7.4 动作策略与白名单 / Action Policy and Whitelists
+
+当前项目已经支持通过 CLI、`.env` 与 GUI 设置页统一管理动作策略：
+
+- `--device-type adb|hdc|ios`：声明当前任务运行平台
+- `--enabled-actions '["Launch", "Tap"]'`：运行时允许执行的动作集合
+- `--ai-visible-actions '["Launch"]'`：提示词暴露给模型的动作集合
+- `--use-platform-default-actions` / `--disable-platform-default-actions`：控制空白配置时是否回退到平台注册表默认动作集
+
+对应环境变量包括：
+
+- `OPEN_AUTOGLM_DEVICE_TYPE`
+- `OPEN_AUTOGLM_ACTION_POLICY_VERSION`
+- `OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS`
+- `OPEN_AUTOGLM_ENABLED_ACTIONS`
+- `OPEN_AUTOGLM_AI_VISIBLE_ACTIONS`
+
+策略边界说明：
+
+1. `AI Visible` 只影响提示词里向模型展示哪些动作，不保证动作一定能执行
+2. `Runtime Enabled` 才是执行器的最终硬约束，未在白名单中的动作会被拒绝
+3. 任意配置都不能突破平台注册表能力上限；例如 `Find_App` 在 iOS 上会被自动过滤并在运行时拒绝
+4. GUI 设置页会基于注册表按类别渲染动作矩阵，并在平台切换时自动隐藏不支持动作
+
+示例：
+
+```powershell
+python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' --ai-visible-actions '["Launch", "Tap"]' --disable-platform-default-actions "Open Settings"
+```
+
 ---
 
 ## 8. 推荐实践 / Recommended Best Practices

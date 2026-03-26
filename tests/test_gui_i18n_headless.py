@@ -13,6 +13,7 @@ headless GUI i18n 回归测试。
 - 不依赖真实 adb / scrcpy / 子进程，仅使用最小 stub service
 """
 
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -24,13 +25,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # 确保在仓库根目录下运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from gui.i18n.manager import I18nManager
 from gui.i18n.page_adapter import PageI18nAdapter
 from gui.main_window import MainWindow
 from gui.pages.dashboard_page import DashboardPage
 from gui.pages.history_page import HistoryPage
+from gui.pages.settings_page import SettingsPage
+from gui.services.config_service import ConfigService
 from gui.services.mirror_service import MirrorMode, MirrorState
 from gui.services.task_service import TaskService, TaskState
 
@@ -55,6 +58,7 @@ class DummySignal:
 
 
 class DummyConfig:
+    FIELD_META = ConfigService.FIELD_META
     CHANNEL_PRESETS = [
         {
             "id": "modelscope",
@@ -62,6 +66,8 @@ class DummyConfig:
             "use_thirdparty": False,
             "default_url": "https://api-inference.modelscope.cn/v1",
             "default_model": "ZhipuAI/AutoGLM-Phone-9B",
+            "api_key_field": "OPEN_AUTOGLM_MODELSCOPE_API_KEY",
+            "backup_api_key_field": "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY",
         },
         {
             "id": "custom",
@@ -74,18 +80,46 @@ class DummyConfig:
 
     def __init__(self, lang: str = "cn"):
         self.config_changed = DummySignal()
+        self.env_path = ".env.test"
+        self.saved_updates = []
+        self.last_validated_updates = None
         self.values = {
             "OPEN_AUTOGLM_LANG": lang,
             "OPEN_AUTOGLM_THEME": "dark",
             "OPEN_AUTOGLM_MODEL": "demo-model",
             "OPEN_AUTOGLM_BASE_URL": "https://example.invalid/v1",
+            "OPEN_AUTOGLM_API_KEY": "",
+            "OPEN_AUTOGLM_BACKUP_API_KEY": "",
             "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false",
+            "OPEN_AUTOGLM_THIRDPARTY_THINKING": "true",
+            "OPEN_AUTOGLM_COMPRESS_IMAGE": "false",
             "OPEN_AUTOGLM_DEVICE_ID": "",
+            "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
+            "OPEN_AUTOGLM_MAX_STEPS": "20",
+            "OPEN_AUTOGLM_ACTION_POLICY_VERSION": "1",
+            "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "false",
+            "OPEN_AUTOGLM_ENABLED_ACTIONS": '["Launch", "Find_App", "Tap"]',
+            "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": '["Launch", "Find_App"]',
+            "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
+            "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": "",
         }
         self.active_channel = "modelscope"
 
     def get(self, key, default=""):
         return self.values.get(key, default)
+
+    def set(self, key, value):
+        self.values[key] = value
+        self.saved_updates.append({key: value})
+        self.config_changed.emit()
+
+    def set_many(self, updates):
+        self.values.update(updates)
+        self.saved_updates.append(dict(updates))
+        self.config_changed.emit()
+
+    def load(self):
+        return None
 
     def get_active_channel(self):
         return next(
@@ -93,11 +127,41 @@ class DummyConfig:
             None,
         )
 
+    def set_active_channel(self, channel_id):
+        self.active_channel = channel_id
+        self.config_changed.emit()
+        return True
+
     def get_preset_url(self, preset):
-        return preset.get("default_url", "")
+        return self.get("OPEN_AUTOGLM_BASE_URL") or preset.get("default_url", "")
 
     def get_preset_model(self, preset):
-        return preset.get("default_model", "")
+        return self.get("OPEN_AUTOGLM_MODEL") or preset.get("default_model", "")
+
+    def get_action_policy_settings(self):
+        return {
+            "policy_version": int(self.get("OPEN_AUTOGLM_ACTION_POLICY_VERSION", "1") or "1"),
+            "use_platform_defaults": self._is_truthy(
+                self.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
+            ),
+            "enabled_actions": self.get("OPEN_AUTOGLM_ENABLED_ACTIONS", ""),
+            "ai_visible_actions": self.get("OPEN_AUTOGLM_AI_VISIBLE_ACTIONS", ""),
+        }
+
+    def get_env_file_status(self):
+        return {
+            "path": self.env_path,
+            "exists": True,
+            "writable": True,
+            "bootstrap_error": "",
+        }
+
+    def build_channel_updates(self, channel_id, updates):
+        return {}
+
+    def validate(self, updates=None):
+        self.last_validated_updates = dict(updates or {})
+        return []
 
     @staticmethod
     def _is_truthy(value):
@@ -324,6 +388,114 @@ class TestHeadlessGuiI18n:
         finally:
             dashboard.close()
             history_page.close()
+
+    def test_settings_page_action_policy_retranslates_and_filters_platform_actions(self, app):
+        i18n = I18nManager("cn")
+        config = DummyConfig("cn")
+        services = {
+            "config": config,
+            "i18n": i18n,
+            "navigate_to_page": lambda _key: None,
+        }
+
+        settings_page = SettingsPage(services)
+        adapter = PageI18nAdapter(i18n)
+        adapter.register_page(settings_page)
+        adapter.push_current()
+
+        def has_label(text: str) -> bool:
+            return any(label.text() == text for label in settings_page.findChildren(QLabel))
+
+        try:
+            assert settings_page._action_policy_group.title() == "动作策略"
+            assert settings_page._device_type_label.text() == "设备平台"
+            assert settings_page._device_type_combo.currentData() == "adb"
+            assert settings_page._btn_action_reset_defaults.text() == "恢复平台默认"
+            assert settings_page._btn_action_select_all.text() == "全选"
+            assert settings_page._btn_action_clear_all.text() == "全不选"
+            assert "Find_App" in settings_page._action_runtime_checks
+            assert settings_page._action_runtime_checks["Find_App"].text() == "运行时启用"
+            assert settings_page._action_ai_checks["Find_App"].text() == "AI 可见"
+            assert has_label("查找应用包名")
+            assert not settings_page._action_policy_status_lbl.isVisible()
+
+            i18n.set_language("en")
+
+            assert settings_page._action_policy_group.title() == "Action Policy"
+            assert settings_page._device_type_label.text() == "Device Platform"
+            assert settings_page._device_type_combo.itemText(0) == "Android (ADB)"
+            assert settings_page._btn_action_reset_defaults.text() == "Restore Platform Defaults"
+            assert settings_page._btn_action_select_all.text() == "Select All"
+            assert settings_page._btn_action_clear_all.text() == "Clear All"
+            assert settings_page._action_runtime_checks["Find_App"].text() == "Runtime Enabled"
+            assert settings_page._action_ai_checks["Find_App"].text() == "AI Visible"
+            assert has_label("Find App Package")
+
+            settings_page._device_type_combo.setCurrentIndex(2)
+
+            assert settings_page._device_type_combo.currentData() == "ios"
+            assert config.values["OPEN_AUTOGLM_DEVICE_TYPE"] == "ios"
+            assert "Launch" in settings_page._action_runtime_checks
+            assert "Find_App" not in settings_page._action_runtime_checks
+            assert "Find_App" not in json.loads(config.values["OPEN_AUTOGLM_ENABLED_ACTIONS"])
+            assert "Find_App" not in json.loads(config.values["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"])
+            assert has_label("Launch App")
+            assert settings_page._action_policy_status_lbl.isHidden()
+
+            settings_page._btn_action_clear_all.click()
+            assert config.values["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"] == "false"
+            assert json.loads(config.values["OPEN_AUTOGLM_ENABLED_ACTIONS"]) == []
+            assert json.loads(config.values["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"]) == []
+
+            settings_page._btn_action_reset_defaults.click()
+            assert config.values["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"] == "true"
+            assert config.values["OPEN_AUTOGLM_ENABLED_ACTIONS"] == ""
+            assert config.values["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"] == ""
+
+            settings_page._on_validate()
+            assert config.last_validated_updates["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"] == "true"
+            assert config.last_validated_updates["OPEN_AUTOGLM_ENABLED_ACTIONS"] == ""
+            assert config.last_validated_updates["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"] == ""
+
+            settings_page._on_save()
+            assert config.values["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"] == "true"
+            assert config.values["OPEN_AUTOGLM_ENABLED_ACTIONS"] == ""
+            assert config.values["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"] == ""
+
+            settings_page._btn_action_select_all.click()
+            launch_checkbox = settings_page._action_runtime_checks["Launch"]
+            launch_checkbox.setChecked(False)
+            assert config.values["OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS"] == "false"
+            assert "Launch" not in json.loads(config.values["OPEN_AUTOGLM_ENABLED_ACTIONS"])
+        finally:
+            settings_page.close()
+
+    def test_settings_page_active_preset_card_tracks_thirdparty_toggle(self, app):
+        i18n = I18nManager("cn")
+        config = DummyConfig("cn")
+        services = {
+            "config": config,
+            "i18n": i18n,
+            "navigate_to_page": lambda _key: None,
+        }
+
+        settings_page = SettingsPage(services)
+        adapter = PageI18nAdapter(i18n)
+        adapter.register_page(settings_page)
+        adapter.push_current()
+
+        try:
+            active_card = next(card for card in settings_page._preset_cards if card._active)
+            original_tag = active_card._tag_lbl.text()
+            toggle = settings_page._field_widgets["OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT"]
+
+            toggle.setText("true")
+            assert active_card._tag_lbl.text() != original_tag
+
+            toggle.setText("false")
+            assert active_card._tag_lbl.text() == original_tag
+        finally:
+            settings_page.close()
 
     def test_task_add_event_snapshots_language_at_creation_time(self):
         svc = TaskService.__new__(TaskService)

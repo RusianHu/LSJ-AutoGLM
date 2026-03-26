@@ -8,6 +8,16 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from phone_agent.actions.registry import (
+    ACTION_DISABLED_ERROR,
+    ACTION_PLATFORM_UNSUPPORTED_ERROR,
+    ACTION_UNKNOWN_ERROR,
+    ActionPolicyInput,
+    ResolvedActionPolicy,
+    canonicalize_action_name,
+    check_action_availability,
+    resolve_action_policy,
+)
 from phone_agent.config.timing import TIMING_CONFIG
 from phone_agent.device_factory import DeviceType, get_device_factory
 
@@ -38,10 +48,13 @@ class ActionHandler:
         device_id: str | None = None,
         confirmation_callback: Callable[[str], bool] | None = None,
         takeover_callback: Callable[[str], None] | None = None,
+        runtime_policy: ResolvedActionPolicy | None = None,
+        policy_input: ActionPolicyInput | None = None,
     ):
         self.device_id = device_id
         self.confirmation_callback = confirmation_callback or self._default_confirmation
         self.takeover_callback = takeover_callback or self._default_takeover
+        self.runtime_policy = runtime_policy or resolve_action_policy("adb", policy_input)
 
     def execute(
         self, action: dict[str, Any], screen_width: int, screen_height: int
@@ -72,13 +85,27 @@ class ActionHandler:
             )
 
         action_name = action.get("action")
-        handler_method = self._get_handler(action_name)
+        availability = check_action_availability(action_name, self.runtime_policy)
+        if not availability.allowed:
+            return ActionResult(
+                success=False,
+                should_finish=False,
+                message=self._format_policy_rejection(availability.error_code, availability.reason),
+            )
+
+        canonical_action_name = availability.action_name
+        if canonical_action_name:
+            action["action"] = canonical_action_name
+        handler_method = self._get_handler(canonical_action_name)
 
         if handler_method is None:
             return ActionResult(
                 success=False,
                 should_finish=False,
-                message=f"Unknown action: {action_name}",
+                message=self._format_policy_rejection(
+                    ACTION_UNKNOWN_ERROR,
+                    f"No execution handler bound for action: {canonical_action_name}",
+                ),
             )
 
         try:
@@ -88,14 +115,14 @@ class ActionHandler:
                 success=False, should_finish=False, message=f"Action failed: {e}"
             )
 
-    def _get_handler(self, action_name: str) -> Callable | None:
+    def _get_handler(self, action_name: str | None) -> Callable | None:
         """Get the handler method for an action."""
+        canonical = canonicalize_action_name(action_name)
         handlers = {
             "Launch": self._handle_launch,
             "Find_App": self._handle_find_app,
             "Tap": self._handle_tap,
             "Type": self._handle_type,
-            "Type_Name": self._handle_type,
             "Swipe": self._handle_swipe,
             "Back": self._handle_back,
             "Home": self._handle_home,
@@ -107,7 +134,17 @@ class ActionHandler:
             "Call_API": self._handle_call_api,
             "Interact": self._handle_interact,
         }
-        return handlers.get(action_name)
+        return handlers.get(canonical)
+
+    @staticmethod
+    def _format_policy_rejection(error_code: str | None, reason: str | None) -> str:
+        code = error_code or ACTION_UNKNOWN_ERROR
+        detail = reason or "Action rejected"
+        if code == ACTION_DISABLED_ERROR:
+            return f"[{code}] {detail}"
+        if code == ACTION_PLATFORM_UNSUPPORTED_ERROR:
+            return f"[{code}] {detail}"
+        return f"[{code}] {detail}"
 
     def _convert_relative_to_absolute(
         self, element: list[int], screen_width: int, screen_height: int

@@ -327,19 +327,25 @@ class TestReadinessEnvFile:
 
 
 class TestConfigServiceBuildCommandArgs:
-    """验证 OPEN_AUTOGLM_LANG 会透传为 main.py --lang。"""
+    """验证 [`ConfigService.build_command_args()`](gui/services/config_service.py:738) 会透传语言、平台与动作策略。"""
 
     @staticmethod
-    def _make_service(lang: str):
+    def _make_service(lang: str, **extra_values):
         svc = ConfigService.__new__(ConfigService)
         values = {
             "OPEN_AUTOGLM_BASE_URL": "https://example.invalid/v1",
             "OPEN_AUTOGLM_MODEL": "demo-model",
+            "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
             "OPEN_AUTOGLM_DEVICE_ID": "demo-device",
             "OPEN_AUTOGLM_MAX_STEPS": "42",
             "OPEN_AUTOGLM_LANG": lang,
             "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false",
+            "OPEN_AUTOGLM_ACTION_POLICY_VERSION": "1",
+            "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "true",
+            "OPEN_AUTOGLM_ENABLED_ACTIONS": "",
+            "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": "",
         }
+        values.update(extra_values)
         svc.get = lambda key, default="": values.get(key, default)
         svc.resolve_api_key = lambda: ("sk-test", "OPEN_AUTOGLM_API_KEY")
         svc._is_truthy = lambda value: str(value).strip().lower() in {"1", "true", "yes", "on"}
@@ -361,6 +367,119 @@ class TestConfigServiceBuildCommandArgs:
 
         idx = args.index("--lang")
         assert args[idx + 1] == "cn"
+
+    def test_build_command_args_includes_device_type_and_action_policy(self):
+        svc = self._make_service(
+            "cn",
+            OPEN_AUTOGLM_DEVICE_TYPE="ios",
+            OPEN_AUTOGLM_ACTION_POLICY_VERSION="3",
+            OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS="false",
+            OPEN_AUTOGLM_ENABLED_ACTIONS='["Launch", "Tap"]',
+            OPEN_AUTOGLM_AI_VISIBLE_ACTIONS='["Launch"]',
+        )
+
+        args = ConfigService.build_command_args(svc, "demo task")
+
+        device_idx = args.index("--device-type")
+        assert args[device_idx + 1] == "ios"
+
+        policy_idx = args.index("--action-policy-version")
+        assert args[policy_idx + 1] == "3"
+        assert "--disable-platform-default-actions" in args
+
+        enabled_idx = args.index("--enabled-actions")
+        assert args[enabled_idx + 1] == '["Launch", "Tap"]'
+
+        visible_idx = args.index("--ai-visible-actions")
+        assert args[visible_idx + 1] == '["Launch"]'
+
+    def test_build_command_args_preserves_explicit_empty_action_sets(self):
+        svc = self._make_service(
+            "cn",
+            OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS="false",
+            OPEN_AUTOGLM_ENABLED_ACTIONS='[]',
+            OPEN_AUTOGLM_AI_VISIBLE_ACTIONS='[]',
+        )
+
+        args = ConfigService.build_command_args(svc, "demo task")
+
+        enabled_idx = args.index("--enabled-actions")
+        visible_idx = args.index("--ai-visible-actions")
+        assert args[enabled_idx + 1] == '[]'
+        assert args[visible_idx + 1] == '[]'
+
+
+class TestConfigServiceActionPolicyValidation:
+    """验证 [`ConfigService.validate()`](gui/services/config_service.py:478) 的动作策略约束。"""
+
+    @staticmethod
+    def _make_service(values: dict | None = None):
+        svc = ConfigService.__new__(ConfigService)
+        svc._cache = dict(ConfigService.DEFAULTS)
+        if values:
+            svc._cache.update(values)
+        return svc
+
+    def test_validate_rejects_empty_actions_when_platform_defaults_disabled(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
+                "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "false",
+                "OPEN_AUTOGLM_ENABLED_ACTIONS": "",
+                "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": "",
+            }
+        )
+
+        errors = ConfigService.validate(svc)
+        error_map = dict(errors)
+
+        assert "OPEN_AUTOGLM_ENABLED_ACTIONS" in error_map
+        assert "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS" in error_map
+
+    def test_validate_accepts_explicit_empty_action_sets_when_platform_defaults_disabled(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
+                "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "false",
+                "OPEN_AUTOGLM_ENABLED_ACTIONS": "[]",
+                "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": "[]",
+            }
+        )
+
+        errors = ConfigService.validate(svc)
+
+        assert errors == []
+
+    def test_validate_rejects_ai_visible_actions_outside_runtime_set(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
+                "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "false",
+                "OPEN_AUTOGLM_ENABLED_ACTIONS": '["Launch"]',
+                "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": '["Launch", "Tap"]',
+            }
+        )
+
+        errors = ConfigService.validate(svc)
+        error_map = dict(errors)
+
+        assert "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS" in error_map
+        assert "未包含在运行时启用集合中" in error_map["OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"]
+
+    def test_validate_accepts_supported_action_policy_for_ios(self):
+        svc = self._make_service(
+            {
+                "OPEN_AUTOGLM_DEVICE_TYPE": "ios",
+                "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "false",
+                "OPEN_AUTOGLM_ENABLED_ACTIONS": '["Launch", "Tap", "Wait"]',
+                "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": '["Launch", "Tap"]',
+                "OPEN_AUTOGLM_ACTION_POLICY_VERSION": "2",
+            }
+        )
+
+        errors = ConfigService.validate(svc)
+
+        assert errors == []
 
 
 class TestConfigServiceChannelPersistence:

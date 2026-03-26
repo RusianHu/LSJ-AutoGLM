@@ -11,6 +11,7 @@
 - build_command_args 补充第三方模型参数选择逻辑
 """
 
+import json
 import os
 import re
 import time
@@ -20,6 +21,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from PySide6.QtCore import QObject, Signal
 
 from gui.utils.runtime import build_task_subprocess_command, resolve_env_path
+from phone_agent.actions.registry import (
+    ACTION_POLICY_VERSION,
+    ActionPolicyInput,
+    parse_action_name_collection,
+    resolve_action_policy,
+)
 
 _ENV_FILE = resolve_env_path()
 
@@ -44,12 +51,17 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_MODEL": "ZhipuAI/AutoGLM-Phone-9B",
         "OPEN_AUTOGLM_API_KEY": "",
         "OPEN_AUTOGLM_BACKUP_API_KEY": "",
+        "OPEN_AUTOGLM_DEVICE_TYPE": "adb",
         "OPEN_AUTOGLM_DEVICE_ID": "",
         "OPEN_AUTOGLM_LANG": "cn",
         "OPEN_AUTOGLM_MAX_STEPS": "100",
         "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false",
         "OPEN_AUTOGLM_THIRDPARTY_THINKING": "true",
         "OPEN_AUTOGLM_COMPRESS_IMAGE": "false",
+        "OPEN_AUTOGLM_ACTION_POLICY_VERSION": str(ACTION_POLICY_VERSION),
+        "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "true",
+        "OPEN_AUTOGLM_ENABLED_ACTIONS": "",
+        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": "",
         "OPEN_AUTOGLM_MODELSCOPE_BASE_URL": "https://api-inference.modelscope.cn/v1",
         "OPEN_AUTOGLM_MODELSCOPE_MODEL": "ZhipuAI/AutoGLM-Phone-9B",
         "OPEN_AUTOGLM_MODELSCOPE_API_KEY": "",
@@ -92,12 +104,17 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": {"label": "API Key (可选)", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_DEVICE_TYPE": {"label": "设备平台", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LANG": {"label": "语言", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_MAX_STEPS": {"label": "最大步数", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "sensitive": False, "editable": True, "boolean": True},
         "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出 (think/answer 标签)", "sensitive": False, "editable": True, "boolean": True},
         "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_ACTION_POLICY_VERSION": {"label": "动作策略版本", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": {"label": "启用平台默认动作回退", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_ENABLED_ACTIONS": {"label": "运行时启用动作集合", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": {"label": "AI 可见动作集合", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_THEME": {"label": "界面主题", "sensitive": False, "editable": False},
     }
 
@@ -280,6 +297,46 @@ class ConfigService(QObject):
     @staticmethod
     def _is_truthy(value: str) -> bool:
         return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    @staticmethod
+    def _normalize_action_collection(value: object) -> str:
+        parsed = parse_action_name_collection(value)
+        if parsed is None:
+            return ""
+        return json.dumps(list(parsed), ensure_ascii=False)
+
+    def get_action_policy_settings(self) -> Dict[str, Any]:
+        policy_version_raw = (
+            self.get("OPEN_AUTOGLM_ACTION_POLICY_VERSION", str(ACTION_POLICY_VERSION))
+            or str(ACTION_POLICY_VERSION)
+        ).strip()
+        try:
+            policy_version = int(policy_version_raw)
+        except ValueError:
+            policy_version = ACTION_POLICY_VERSION
+
+        enabled_actions_raw = (self.get("OPEN_AUTOGLM_ENABLED_ACTIONS", "") or "").strip()
+        ai_visible_actions_raw = (self.get("OPEN_AUTOGLM_AI_VISIBLE_ACTIONS", "") or "").strip()
+
+        enabled_actions = (
+            self._normalize_action_collection(enabled_actions_raw)
+            if enabled_actions_raw
+            else ""
+        )
+        ai_visible_actions = (
+            self._normalize_action_collection(ai_visible_actions_raw)
+            if ai_visible_actions_raw
+            else ""
+        )
+
+        return {
+            "policy_version": policy_version,
+            "use_platform_defaults": self._is_truthy(
+                self.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
+            ),
+            "enabled_actions": enabled_actions,
+            "ai_visible_actions": ai_visible_actions,
+        }
 
     def get_masked(self, key: str) -> str:
         """读取配置值，敏感字段返回遮罩"""
@@ -505,10 +562,105 @@ class ConfigService(QObject):
         except ValueError:
             errors.append(("OPEN_AUTOGLM_MAX_STEPS", "最大步数必须是整数"))
 
+        device_type = (values.get("OPEN_AUTOGLM_DEVICE_TYPE") or "adb").strip().lower()
+        if device_type not in ("adb", "hdc", "ios"):
+            errors.append(("OPEN_AUTOGLM_DEVICE_TYPE", "设备平台仅支持 adb / hdc / ios"))
+
         lang = (values.get("OPEN_AUTOGLM_LANG") or
                 values.get("OPEN_AUTOGLM_LANGUAGE") or "cn").strip().lower()
         if lang not in ("cn", "en", "zh"):
             errors.append(("OPEN_AUTOGLM_LANG", "语言仅支持 cn / en / zh"))
+
+        policy_version = (values.get("OPEN_AUTOGLM_ACTION_POLICY_VERSION") or str(ACTION_POLICY_VERSION)).strip()
+        normalized_policy_version = ACTION_POLICY_VERSION
+        try:
+            version = int(policy_version)
+            if version < 1:
+                errors.append(("OPEN_AUTOGLM_ACTION_POLICY_VERSION", "动作策略版本必须是大于等于 1 的整数"))
+            else:
+                normalized_policy_version = version
+        except ValueError:
+            errors.append(("OPEN_AUTOGLM_ACTION_POLICY_VERSION", "动作策略版本必须是整数"))
+
+        normalized_action_values: Dict[str, tuple[str, ...] | None] = {}
+        for action_key in ("OPEN_AUTOGLM_ENABLED_ACTIONS", "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"):
+            raw_value = (values.get(action_key) or "").strip()
+            if not raw_value:
+                normalized_action_values[action_key] = None
+                continue
+            try:
+                normalized_action_values[action_key] = parse_action_name_collection(raw_value)
+            except ValueError as exc:
+                errors.append((action_key, f"动作集合格式无效: {exc}"))
+
+        use_platform_defaults = self._is_truthy(
+            values.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
+        )
+        runtime_actions = normalized_action_values.get("OPEN_AUTOGLM_ENABLED_ACTIONS")
+        ai_visible_actions = normalized_action_values.get("OPEN_AUTOGLM_AI_VISIBLE_ACTIONS")
+
+        if not use_platform_defaults:
+            if runtime_actions is None:
+                errors.append(("OPEN_AUTOGLM_ENABLED_ACTIONS", "禁用平台默认动作回退时，必须显式提供运行时动作集合（允许使用 [] 表示全部禁用）"))
+            if ai_visible_actions is None:
+                errors.append(("OPEN_AUTOGLM_AI_VISIBLE_ACTIONS", "禁用平台默认动作回退时，必须显式提供 AI 可见动作集合（允许使用 [] 表示全部隐藏）"))
+
+        if errors:
+            return errors
+
+        resolved_policy = resolve_action_policy(
+            device_type,
+            ActionPolicyInput(
+                ai_visible_actions=ai_visible_actions,
+                runtime_enabled_actions=runtime_actions,
+                policy_version=normalized_policy_version,
+                use_platform_defaults=use_platform_defaults,
+            ),
+        )
+
+        if resolved_policy.unknown_actions:
+            unknown_text = ", ".join(resolved_policy.unknown_actions)
+            errors.append(("OPEN_AUTOGLM_ENABLED_ACTIONS", f"存在未知动作名：{unknown_text}"))
+
+        if runtime_actions:
+            unsupported_runtime = [
+                name for name in runtime_actions if name not in resolved_policy.supported_actions
+            ]
+            if unsupported_runtime:
+                errors.append(
+                    (
+                        "OPEN_AUTOGLM_ENABLED_ACTIONS",
+                        f"当前平台 {device_type} 不支持这些运行时动作：{', '.join(unsupported_runtime)}",
+                    )
+                )
+
+        if ai_visible_actions:
+            unsupported_ai = [
+                name for name in ai_visible_actions if name not in resolved_policy.supported_actions
+            ]
+            if unsupported_ai:
+                errors.append(
+                    (
+                        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
+                        f"当前平台 {device_type} 不支持这些 AI 可见动作：{', '.join(unsupported_ai)}",
+                    )
+                )
+
+            runtime_enabled_set = set(resolved_policy.runtime_enabled_actions)
+            not_enabled_for_runtime = [
+                name
+                for name in ai_visible_actions
+                if name in resolved_policy.supported_actions
+                and name not in runtime_enabled_set
+            ]
+            if not_enabled_for_runtime:
+                errors.append(
+                    (
+                        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
+                        "以下 AI 可见动作未包含在运行时启用集合中："
+                        + ", ".join(not_enabled_for_runtime),
+                    )
+                )
 
         return errors
 
@@ -684,6 +836,9 @@ class ConfigService(QObject):
         if api_key:
             cli_args += ["--apikey", api_key]
 
+        device_type = (self.get("OPEN_AUTOGLM_DEVICE_TYPE", "adb") or "adb").strip().lower()
+        cli_args += ["--device-type", device_type]
+
         device_id = (device_id_override or self.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
         if device_id:
             cli_args += ["--device-id", device_id]
@@ -695,6 +850,15 @@ class ConfigService(QObject):
         if language == "zh":
             language = "cn"
         cli_args += ["--lang", language]
+
+        action_policy = self.get_action_policy_settings()
+        cli_args += ["--action-policy-version", str(action_policy["policy_version"])]
+        if not action_policy["use_platform_defaults"]:
+            cli_args.append("--disable-platform-default-actions")
+        if action_policy["enabled_actions"]:
+            cli_args += ["--enabled-actions", action_policy["enabled_actions"]]
+        if action_policy["ai_visible_actions"]:
+            cli_args += ["--ai-visible-actions", action_policy["ai_visible_actions"]]
 
         # 第三方模型（非 AutoGLM 原生）提示词工程参数，与 launcher.py 保持一致
         if self._is_truthy(self.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")):

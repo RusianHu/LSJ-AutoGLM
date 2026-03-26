@@ -6,12 +6,14 @@ import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 # 确保在仓库根目录下运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from phone_agent.adb.device import InstalledApp
 from phone_agent.device_factory import DeviceType
-from main import handle_device_commands
+from main import _build_action_policy_from_args, handle_device_commands
 
 
 class _FakeConnection:
@@ -78,3 +80,71 @@ class TestMainDeviceAppCli:
         assert handled is True
         output = capsys.readouterr().out
         assert "only supported for Android ADB devices" in output
+
+
+class TestMainActionPolicyCli:
+    @staticmethod
+    def _make_policy_args(**overrides):
+        base = {
+            "enabled_actions": None,
+            "ai_visible_actions": None,
+            "action_policy_version": 1,
+            "use_platform_default_actions": True,
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_build_action_policy_from_args_accepts_supported_ios_actions(self):
+        args = self._make_policy_args(
+            enabled_actions='["Launch", "Tap", "Wait"]',
+            ai_visible_actions='["Launch", "Tap"]',
+            use_platform_default_actions=False,
+            action_policy_version=2,
+        )
+
+        policy, resolved = _build_action_policy_from_args(args, "ios")
+
+        assert policy.policy_version == 2
+        assert policy.use_platform_defaults is False
+        assert resolved.platform == "ios"
+        assert resolved.runtime_enabled_actions == ("Launch", "Tap", "Wait")
+        assert resolved.ai_visible_actions == ("Launch", "Tap")
+
+    def test_build_action_policy_from_args_rejects_unknown_actions(self):
+        args = self._make_policy_args(enabled_actions='["Launch", "Unknown_Action"]')
+
+        with pytest.raises(ValueError, match="未知动作名"):
+            _build_action_policy_from_args(args, "adb")
+
+    def test_build_action_policy_from_args_rejects_platform_unsupported_actions(self):
+        args = self._make_policy_args(
+            enabled_actions='["Launch", "Find_App"]',
+            ai_visible_actions='["Launch"]',
+            use_platform_default_actions=False,
+        )
+
+        with pytest.raises(ValueError, match="平台 ios 不支持这些运行时动作"):
+            _build_action_policy_from_args(args, "ios")
+
+    def test_build_action_policy_from_args_rejects_missing_sets_when_defaults_disabled(self):
+        args = self._make_policy_args(
+            enabled_actions=None,
+            ai_visible_actions=None,
+            use_platform_default_actions=False,
+        )
+
+        with pytest.raises(ValueError, match="运行时启用动作集合未提供"):
+            _build_action_policy_from_args(args, "adb")
+
+    def test_build_action_policy_from_args_accepts_explicit_empty_sets_when_defaults_disabled(self):
+        args = self._make_policy_args(
+            enabled_actions='[]',
+            ai_visible_actions='[]',
+            use_platform_default_actions=False,
+        )
+
+        policy, resolved = _build_action_policy_from_args(args, "adb")
+
+        assert policy.use_platform_defaults is False
+        assert resolved.runtime_enabled_actions == ()
+        assert resolved.ai_visible_actions == ()
