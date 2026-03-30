@@ -1062,6 +1062,8 @@ class DashboardPage(QWidget):
             self._mirror.frame_ready.connect(self._on_mirror_frame)
             self._mirror.error_occurred.connect(self._on_mirror_error)
             self._mirror.window_created.connect(self._on_mirror_window_created)
+        if self._mirror_label:
+            self._mirror_label.tap_failed.connect(self._on_mirror_error)
 
         # 配置变化时同步渠道下拉框（例如设置页保存后）
         if self._config:
@@ -1478,8 +1480,8 @@ class DashboardPage(QWidget):
 
     def _on_mirror_frame(self, pixmap: QPixmap):
         """ADB 截图降级模式下收到帧"""
-        if not self._mirror_label.isVisible():
-            return
+        if self._mirror_stack and self._mirror_label:
+            self._mirror_stack.setCurrentWidget(self._mirror_label)
         # MirrorLabel.set_raw_pixmap 内部负责自适应缩放（包括 resizeEvent 时重新缩放）
         self._mirror_label.set_raw_pixmap(pixmap)
 

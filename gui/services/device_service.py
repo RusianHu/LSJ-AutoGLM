@@ -84,6 +84,41 @@ def _infer_connection_type(device_id: str) -> str:
     return "usb"
 
 
+def _list_mdns_services() -> List[Tuple[str, str, str]]:
+    """返回 [(instance_name, service_type, endpoint)]。"""
+    try:
+        r = subprocess.run(
+            ["adb", "mdns", "services"],
+            capture_output=True, text=True, timeout=5
+        )
+        services: List[Tuple[str, str, str]] = []
+        for raw_line in (r.stdout or "").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("List of discovered"):
+                continue
+            parts = line.split()
+            if len(parts) < 3:
+                continue
+            services.append((parts[0], parts[1], parts[2]))
+        return services
+    except Exception:
+        return []
+
+
+def _find_connect_endpoints(ip: str = "") -> List[str]:
+    endpoints: List[str] = []
+    for _instance_name, service_type, endpoint in _list_mdns_services():
+        if service_type != "_adb-tls-connect._tcp":
+            continue
+        if ":" not in endpoint:
+            continue
+        if ip and not endpoint.startswith(f"{ip}:"):
+            continue
+        if endpoint not in endpoints:
+            endpoints.append(endpoint)
+    return endpoints
+
+
 def _run_adb_shell(
     device_id: str,
     args: List[str],
@@ -466,10 +501,32 @@ class DeviceService(QObject):
                 capture_output=True, text=True, timeout=30
             )
             output = (r.stdout + r.stderr).strip()
-            # adb pair 成功输出包含 "Successfully paired"
-            success = "successfully paired" in output.lower()
+            lowered = output.lower()
+            success = "successfully paired" in lowered or "already paired" in lowered
             if success:
+                host = address.split(":", 1)[0].strip()
+                connect_msgs = []
+                connect_ok = False
+                attempted: List[str] = []
+                deadline = time.monotonic() + 12
+                while time.monotonic() < deadline and not connect_ok:
+                    endpoints = _find_connect_endpoints(host)
+                    for endpoint in endpoints:
+                        if endpoint in attempted:
+                            continue
+                        attempted.append(endpoint)
+                        c_ok, c_msg = self.connect_device(endpoint)
+                        connect_msgs.append(c_msg)
+                        if c_ok:
+                            connect_ok = True
+                            break
+                    if not connect_ok:
+                        time.sleep(1)
                 self.refresh()
+                if connect_msgs:
+                    output = f"{output} | 自动连接：{'；'.join(msg for msg in connect_msgs if msg)}"
+                if not connect_ok:
+                    output = f"{output} | 未发现可自动连接的无线调试端口，请在手机无线调试页确认后手动连接"
             return success, output or "无输出"
         except FileNotFoundError:
             return False, "ADB 未找到，请确认已安装并加入 PATH"

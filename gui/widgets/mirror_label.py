@@ -11,9 +11,37 @@ MirrorLabel - 设备镜像显示控件。
 import subprocess
 import sys
 
-from PySide6.QtCore import Qt, QRect, QPoint
+from PySide6.QtCore import Qt, QRect, QPoint, QThread, Signal
 from PySide6.QtGui import QPixmap, QCursor
 from PySide6.QtWidgets import QLabel, QSizePolicy
+
+
+class _AdbTapWorker(QThread):
+    failed = Signal(str)
+
+    def __init__(self, device_id: str, x: int, y: int):
+        super().__init__()
+        self._device_id = device_id
+        self._x = x
+        self._y = y
+
+    def run(self):
+        try:
+            result = subprocess.run(
+                ["adb", "-s", self._device_id, "shell", "input", "tap", str(self._x), str(self._y)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                timeout=8,
+            )
+        except Exception as e:
+            self.failed.emit(str(e))
+            return
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            self.failed.emit(detail or f"adb tap failed (code={result.returncode})")
 
 
 class MirrorLabel(QLabel):
@@ -26,16 +54,20 @@ class MirrorLabel(QLabel):
         label.set_raw_pixmap(pixmap)  # 每次收到新帧时调用
     """
 
+    tap_failed = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._raw_pixmap: QPixmap | None = None   # 原始帧（手机分辨率）
         self._device_id: str = ""
         self._tap_enabled: bool = True
+        self._tap_worker: _AdbTapWorker | None = None
 
         self.setAlignment(Qt.AlignCenter)
         self.setScaledContents(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(1, 1)
+        self.setMouseTracking(True)
         # 显示手型光标，提示可点击
         self.setCursor(QCursor(Qt.PointingHandCursor))
         self.setToolTip("点击此处控制手机")
@@ -105,20 +137,24 @@ class MirrorLabel(QLabel):
         由于图片使用 KeepAspectRatio 居中显示，实际图片区域不一定与控件等大，
         需要先算出图片在控件内的实际 Rect，再将点击坐标映射到手机原始分辨率。
         """
-        super().mousePressEvent(event)
-
         if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
             return
         if not self._tap_enabled:
+            event.ignore()
             return
         if not self._device_id:
+            self.tap_failed.emit("当前未绑定设备，无法点击")
+            event.accept()
             return
         if self._raw_pixmap is None or self._raw_pixmap.isNull():
+            event.ignore()
             return
 
         # 计算图片在控件内居中时的实际 Rect
         img_rect = self._image_rect()
         if img_rect is None:
+            event.ignore()
             return
 
         # 点击坐标（相对于控件）
@@ -126,6 +162,7 @@ class MirrorLabel(QLabel):
 
         # 判断点击是否在图片区域内
         if not img_rect.contains(click_pos):
+            event.ignore()
             return
 
         # 换算为图片内相对坐标
@@ -145,6 +182,7 @@ class MirrorLabel(QLabel):
         tap_y = max(0, min(tap_y, phone_h - 1))
 
         self._adb_tap(tap_x, tap_y)
+        event.accept()
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -179,13 +217,10 @@ class MirrorLabel(QLabel):
 
     def _adb_tap(self, x: int, y: int):
         """在后台异步执行 adb shell input tap"""
-        try:
-            subprocess.Popen(
-                ["adb", "-s", self._device_id, "shell", "input", "tap",
-                 str(x), str(y)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-            )
-        except Exception:
-            pass
+        if self._tap_worker and self._tap_worker.isRunning():
+            return
+        worker = _AdbTapWorker(self._device_id, x, y)
+        worker.failed.connect(self.tap_failed.emit)
+        worker.finished.connect(worker.deleteLater)
+        self._tap_worker = worker
+        worker.start()

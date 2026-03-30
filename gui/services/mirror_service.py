@@ -53,6 +53,7 @@ class _ScreenshotPoller(QThread):
     """
     # 传输原始 PNG bytes，主线程负责解码为 QPixmap
     frame_bytes_ready = Signal(bytes)
+    error_occurred = Signal(str)
 
     def __init__(self, device_id: str, interval_ms: int = 1500):
         super().__init__()
@@ -60,6 +61,8 @@ class _ScreenshotPoller(QThread):
         self._interval = interval_ms / 1000.0
         self._running = False
         self._proc: Optional[subprocess.Popen] = None
+        self._consecutive_failures = 0
+        self._prefer_exec_out = True
 
     def _terminate_current_proc(self):
         proc = self._proc
@@ -75,30 +78,95 @@ class _ScreenshotPoller(QThread):
             pass
         self._proc = None
 
+    def _capture_via_exec_out(self) -> Optional[bytes]:
+        self._proc = subprocess.Popen(
+            ["adb", "-s", self._device_id, "exec-out", "screencap", "-p"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        deadline = time.time() + 10
+        while self._running:
+            ret = self._proc.poll()
+            if ret is not None:
+                stdout, stderr = self._proc.communicate()
+                self._proc = None
+                if ret == 0 and stdout:
+                    return stdout
+                detail = (stderr or b"").decode("utf-8", errors="ignore").strip()
+                if detail:
+                    raise RuntimeError(detail)
+                raise RuntimeError(f"exec-out screencap failed (code={ret})")
+            if time.time() >= deadline:
+                self._terminate_current_proc()
+                raise TimeoutError("exec-out screencap timeout")
+            time.sleep(0.05)
+        return None
+
+    def _capture_via_pull(self) -> Optional[bytes]:
+        remote_path = "/sdcard/AutoGLM_gui_mirror.png"
+        try:
+            capture = subprocess.run(
+                ["adb", "-s", self._device_id, "shell", "screencap", "-p", remote_path],
+                capture_output=True,
+                timeout=12,
+            )
+            if capture.returncode != 0:
+                detail = (capture.stderr or capture.stdout or b"").decode("utf-8", errors="ignore").strip()
+                raise RuntimeError(detail or f"shell screencap failed (code={capture.returncode})")
+
+            pull = subprocess.run(
+                ["adb", "-s", self._device_id, "exec-out", "cat", remote_path],
+                capture_output=True,
+                timeout=12,
+            )
+            if pull.returncode != 0 or not pull.stdout:
+                detail = (pull.stderr or pull.stdout or b"").decode("utf-8", errors="ignore").strip()
+                raise RuntimeError(detail or f"pull screenshot failed (code={pull.returncode})")
+            return pull.stdout
+        finally:
+            try:
+                subprocess.run(
+                    ["adb", "-s", self._device_id, "shell", "rm", "-f", remote_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+            except Exception:
+                pass
+
+    def _capture_frame(self) -> Optional[bytes]:
+        errors = []
+        methods = [self._capture_via_exec_out, self._capture_via_pull]
+        if not self._prefer_exec_out:
+            methods.reverse()
+
+        for method in methods:
+            try:
+                data = method()
+                if data:
+                    self._prefer_exec_out = method is self._capture_via_exec_out
+                    return data
+            except Exception as exc:
+                errors.append(str(exc))
+
+        detail = " | ".join(msg for msg in errors if msg)
+        raise RuntimeError(detail or "截图抓取失败")
+
     def run(self):
         self._running = True
         while self._running:
             try:
-                self._proc = subprocess.Popen(
-                    ["adb", "-s", self._device_id, "exec-out", "screencap", "-p"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                deadline = time.time() + 10
-                while self._running:
-                    ret = self._proc.poll()
-                    if ret is not None:
-                        stdout, _stderr = self._proc.communicate()
-                        self._proc = None
-                        if ret == 0 and stdout:
-                            self.frame_bytes_ready.emit(stdout)
-                        break
-                    if time.time() >= deadline:
-                        self._terminate_current_proc()
-                        break
-                    time.sleep(0.05)
-            except Exception:
+                frame = self._capture_frame()
+                if frame:
+                    self._consecutive_failures = 0
+                    self.frame_bytes_ready.emit(frame)
+                else:
+                    self._consecutive_failures += 1
+            except Exception as exc:
                 self._proc = None
+                self._consecutive_failures += 1
+                if self._consecutive_failures in {1, 3, 6}:
+                    self.error_occurred.emit(f"ADB 截图失败：{exc}")
             # 分段 sleep，便于快速响应 stop()
             deadline = time.time() + self._interval
             while self._running and time.time() < deadline:
@@ -502,13 +570,16 @@ class MirrorService(QObject):
         self._screenshot_poller = _ScreenshotPoller(device_id, interval_ms=1500)
         # 修复：在主线程槽函数中解码 bytes -> QPixmap，保证 GUI 资源在主线程创建
         self._screenshot_poller.frame_bytes_ready.connect(self._on_frame_bytes)
+        self._screenshot_poller.error_occurred.connect(self.error_occurred.emit)
         self._screenshot_poller.start()
         self._set_state(MirrorState.RUNNING)
 
     def _on_frame_bytes(self, data: bytes):
         """在主线程中将 bytes 解码为 QPixmap 后发出 frame_ready"""
         img = QImage()
-        img.loadFromData(data, "PNG")
+        if not img.loadFromData(data, "PNG"):
+            self.error_occurred.emit("ADB 截图数据解码失败")
+            return
         if not img.isNull():
             pix = QPixmap.fromImage(img)
             self.frame_ready.emit(pix)

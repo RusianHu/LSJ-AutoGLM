@@ -48,20 +48,102 @@ from gui.theme.styles.logs import log_console
 
 class _PairWatcher(QThread):
     """
-    后台线程：每隔 2 秒执行 adb devices，检测新设备出现。
-    当检测到比初始列表多出新设备时，发出 device_found 信号。
+    后台线程：轮询 mDNS 配对服务与 adb devices。
+    当发现目标二维码对应的 pairing service 时，自动执行 adb pair；
+    配对成功后继续等待新设备出现并发出 device_found。
     """
     device_found = Signal(str)   # 新设备 device_id
     timed_out = Signal()
 
-    def __init__(self, known_ids: set, timeout_sec: int = 90, parent=None):
+    def __init__(
+        self,
+        known_ids: set,
+        service_name: str,
+        password: str,
+        device_service=None,
+        known_pair_services: set[str] | None = None,
+        timeout_sec: int = 90,
+        parent=None,
+    ):
         super().__init__(parent)
         self._known_ids = known_ids
+        self._service_name = service_name
+        self._password = password
+        self._device_service = device_service
+        self._known_pair_services = known_pair_services or set()
         self._timeout_sec = timeout_sec
         self._stop = False
+        self._paired = False
 
     def stop(self):
         self._stop = True
+
+    @staticmethod
+    def _list_pair_services() -> list[tuple[str, str]]:
+        import subprocess
+        services: list[tuple[str, str]] = []
+        try:
+            r = subprocess.run(
+                ["adb", "mdns", "services"],
+                capture_output=True, text=True, timeout=5
+            )
+            output = (r.stdout or "")
+            for raw_line in output.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("List of discovered"):
+                    continue
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                instance_name, service_type, endpoint = parts[0], parts[1], parts[2]
+                if service_type == "_adb-tls-pairing._tcp" and ":" in endpoint:
+                    services.append((instance_name, endpoint))
+        except Exception:
+            pass
+        return services
+
+    def _find_pair_service_addr(self) -> str:
+        services = self._list_pair_services()
+        for instance_name, endpoint in services:
+            if instance_name == self._service_name:
+                return endpoint
+
+        fresh_services = [
+            endpoint
+            for instance_name, endpoint in services
+            if f"{instance_name}|{endpoint}" not in self._known_pair_services
+        ]
+        if len(fresh_services) == 1:
+            return fresh_services[0]
+        for instance_name, endpoint in services:
+            if (
+                instance_name.startswith("studio-")
+                and f"{instance_name}|{endpoint}" not in self._known_pair_services
+            ):
+                return endpoint
+        return ""
+
+    def _try_pair(self) -> bool:
+        import subprocess
+        if self._paired:
+            return True
+        addr = self._find_pair_service_addr()
+        if not addr:
+            return False
+        try:
+            if self._device_service is not None:
+                ok, _msg = self._device_service.pair_device(addr, self._password)
+                self._paired = ok
+                return self._paired
+            r = subprocess.run(
+                ["adb", "pair", addr, self._password],
+                capture_output=True, text=True, timeout=30
+            )
+            output = ((r.stdout or "") + (r.stderr or "")).lower()
+            self._paired = "successfully paired" in output or "already paired" in output
+            return self._paired
+        except Exception:
+            return False
 
     def run(self):
         import subprocess, time
@@ -70,6 +152,7 @@ class _PairWatcher(QThread):
         while not self._stop and elapsed < self._timeout_sec:
             time.sleep(interval)
             elapsed += interval
+            self._try_pair()
             try:
                 r = subprocess.run(
                     ["adb", "devices"],
@@ -107,6 +190,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
     def __init__(
         self,
         known_device_ids: set,
+        device_service=None,
         parent=None,
         theme: str = "dark",
         theme_manager=None,
@@ -114,6 +198,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
     ):
         super().__init__(parent)
         self._known_ids = known_device_ids
+        self._device_service = device_service
         self._watcher: _PairWatcher | None = None
         self._service_name = self._rand_name()
         self._password = self._rand_password()
@@ -152,13 +237,14 @@ class QrCodeScanDialog(ThemeAwareDialog):
     # 随机凭据生成
     # ------------------------------------------------------------------
     @staticmethod
-    def _rand_name(length: int = 8) -> str:
-        alphabet = string.ascii_lowercase + string.digits
-        return "adb-" + "".join(secrets.choice(alphabet) for _ in range(length))
+    def _rand_name(length: int = 10) -> str:
+        alphabet = string.ascii_letters + string.digits + "@<>/"
+        return "studio-" + "".join(secrets.choice(alphabet) for _ in range(length))
 
     @staticmethod
-    def _rand_password(length: int = 6) -> str:
-        return "".join(str(secrets.randbelow(10)) for _ in range(length))
+    def _rand_password(length: int = 12) -> str:
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+        return "".join(secrets.choice(alphabet) for _ in range(length))
 
     # ------------------------------------------------------------------
     # ThemeAware 协议
@@ -259,7 +345,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         self._close_btn = QPushButton(self._t("dialog.confirm.no"))
-        self._close_btn.setStyleSheet(btn_subtle(self._theme_tokens))
+        self._close_btn.setStyleSheet(btn_subtle(self._tokens))
         self._close_btn.clicked.connect(self._on_close)
         btn_row.addWidget(self._close_btn)
         layout.addLayout(btn_row)
@@ -308,7 +394,19 @@ class QrCodeScanDialog(ThemeAwareDialog):
     # 后台监听新设备
     # ------------------------------------------------------------------
     def _start_watcher(self):
-        self._watcher = _PairWatcher(set(self._known_ids), timeout_sec=90, parent=None)
+        known_pair_services = {
+            f"{instance}|{endpoint}"
+            for instance, endpoint in _PairWatcher._list_pair_services()
+        }
+        self._watcher = _PairWatcher(
+            set(self._known_ids),
+            self._service_name,
+            self._password,
+            device_service=self._device_service,
+            known_pair_services=known_pair_services,
+            timeout_sec=90,
+            parent=None,
+        )
         self._watcher.device_found.connect(self._on_device_found)
         self._watcher.timed_out.connect(self._on_timed_out)
         self._watcher.start()
@@ -541,12 +639,12 @@ class QrPairDialog(ThemeAwareDialog):
         btn_row.addStretch()
 
         self._cancel_btn = QPushButton(self._t("dialog.confirm.no"))
-        self._cancel_btn.setStyleSheet(btn_subtle(self._theme_tokens))
+        self._cancel_btn.setStyleSheet(btn_subtle(self._tokens))
         self._cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(self._cancel_btn)
 
         self._pair_btn = QPushButton(self._t("page.device.qr_pair.btn.start"))
-        self._pair_btn.setStyleSheet(btn_primary(self._theme_tokens))
+        self._pair_btn.setStyleSheet(btn_primary(self._tokens))
         self._pair_btn.setDefault(True)
         self._pair_btn.clicked.connect(self._on_pair)
         btn_row.addWidget(self._pair_btn)
@@ -1007,6 +1105,7 @@ class DevicePage(QWidget):
         self._log(self._t("page.device.log.qr_generating"))
         dlg = QrCodeScanDialog(
             known_ids,
+            device_service=self._device,
             parent=self,
             theme=self._theme_mode,
             theme_manager=self._theme_manager,
@@ -1038,10 +1137,12 @@ class DevicePage(QWidget):
             ok, msg = self._device.pair_device(addr, code)
             if ok:
                 self._log(self._t("page.device.log.pair_success", msg=msg))
-                # 配对成功后，把 IP 部分填入连接输入框方便后续连接
                 ip = addr.split(":")[0]
-                self._wifi_input.setText(ip)
-                self._log(self._t("page.device.log.port_hint", ip=ip))
+                if ":5555" in msg:
+                    self._wifi_input.setText(ip)
+                else:
+                    self._wifi_input.setText(ip)
+                    self._log(self._t("page.device.log.port_hint", ip=ip))
             else:
                 self._log(self._t("page.device.log.pair_failed", msg=msg))
         else:
