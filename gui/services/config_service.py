@@ -75,6 +75,18 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": "http://127.0.0.1:1234",
         "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": "autoglm-phone-9b",
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": "",
+        "OPEN_AUTOGLM_EXPERT_MODE": "false",
+        "OPEN_AUTOGLM_EXPERT_STRICT_MODE": "false",
+        "OPEN_AUTOGLM_EXPERT_BASE_URL": "",
+        "OPEN_AUTOGLM_EXPERT_MODEL": "",
+        "OPEN_AUTOGLM_EXPERT_API_KEY": "",
+        "OPEN_AUTOGLM_EXPERT_PROMPT": "",
+        "OPEN_AUTOGLM_EXPERT_AUTO_INIT": "true",
+        "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE": "true",
+        "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION": "true",
+        "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD": "4",
+        "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": "3",
+        "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": "3",
         "OPEN_AUTOGLM_THEME": "system",
     }
 
@@ -87,6 +99,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY",
         "OPEN_AUTOGLM_ZHIPU_API_KEY",
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY",
+        "OPEN_AUTOGLM_EXPERT_API_KEY",
     }
 
     # 字段元数据，供 SettingsPage 渲染表单行
@@ -104,6 +117,18 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": {"label": "API Key (可选)", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MODE": {"label": "启用专家模式", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_STRICT_MODE": {"label": "严格模式", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_BASE_URL": {"label": "专家 Base URL", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MODEL": {"label": "专家模型", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_API_KEY": {"label": "专家 API Key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_PROMPT": {"label": "专家提示词", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_AUTO_INIT": {"label": "初始化咨询", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE": {"label": "自动救援", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION": {"label": "允许 Ask_AI 动作", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD": {"label": "页面不变阈值", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": {"label": "连续失败阈值", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": {"label": "最大救援次数", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_DEVICE_TYPE": {"label": "设备平台", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LANG": {"label": "语言", "sensitive": False, "editable": True},
@@ -566,6 +591,33 @@ class ConfigService(QObject):
         if device_type not in ("adb", "hdc", "ios"):
             errors.append(("OPEN_AUTOGLM_DEVICE_TYPE", "设备平台仅支持 adb / hdc / ios"))
 
+        expert_mode = self._is_truthy(values.get("OPEN_AUTOGLM_EXPERT_MODE", "false"))
+        expert_strict_mode = self._is_truthy(values.get("OPEN_AUTOGLM_EXPERT_STRICT_MODE", "false"))
+        expert_base_url = (values.get("OPEN_AUTOGLM_EXPERT_BASE_URL") or "").strip()
+        expert_model = (values.get("OPEN_AUTOGLM_EXPERT_MODEL") or "").strip()
+        if expert_strict_mode and not expert_mode:
+            errors.append(("OPEN_AUTOGLM_EXPERT_STRICT_MODE", "启用严格模式前，必须先启用专家模式"))
+        if expert_mode:
+            if not expert_base_url:
+                errors.append(("OPEN_AUTOGLM_EXPERT_BASE_URL", "启用专家模式时，专家 Base URL 不能为空"))
+            elif not (expert_base_url.startswith("http://") or expert_base_url.startswith("https://")):
+                errors.append(("OPEN_AUTOGLM_EXPERT_BASE_URL", "专家 Base URL 必须以 http:// 或 https:// 开头"))
+            if not expert_model:
+                errors.append(("OPEN_AUTOGLM_EXPERT_MODEL", "启用专家模式时，专家模型不能为空"))
+
+        for key, label in (
+            ("OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD", "页面不变阈值"),
+            ("OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD", "连续失败阈值"),
+            ("OPEN_AUTOGLM_EXPERT_MAX_RESCUES", "最大救援次数"),
+        ):
+            raw_value = (values.get(key) or "").strip()
+            try:
+                parsed_value = int(raw_value)
+                if parsed_value < 1:
+                    errors.append((key, f"{label}必须是大于等于 1 的整数"))
+            except ValueError:
+                errors.append((key, f"{label}必须是整数"))
+
         lang = (values.get("OPEN_AUTOGLM_LANG") or
                 values.get("OPEN_AUTOGLM_LANGUAGE") or "cn").strip().lower()
         if lang not in ("cn", "en", "zh"):
@@ -869,6 +921,43 @@ class ConfigService(QObject):
             compress_image = self._is_truthy(self.get("OPEN_AUTOGLM_COMPRESS_IMAGE", "false"))
             if not compress_image:
                 cli_args.append("--no-compress-image")
+
+        if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_MODE", "false")):
+            cli_args.append("--expert-mode")
+            expert_base_url = (self.get("OPEN_AUTOGLM_EXPERT_BASE_URL") or "").strip()
+            expert_model = (self.get("OPEN_AUTOGLM_EXPERT_MODEL") or "").strip()
+            expert_api_key = (self.get("OPEN_AUTOGLM_EXPERT_API_KEY") or "").strip()
+            expert_prompt = self.get("OPEN_AUTOGLM_EXPERT_PROMPT") or ""
+            if expert_base_url:
+                cli_args += ["--expert-base-url", expert_base_url]
+            if expert_model:
+                cli_args += ["--expert-model", expert_model]
+            if expert_api_key:
+                cli_args += ["--expert-apikey", expert_api_key]
+            if expert_prompt.strip():
+                cli_args += ["--expert-prompt", expert_prompt]
+            if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_STRICT_MODE", "false")):
+                cli_args.append("--expert-strict-mode")
+            if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_AUTO_INIT", "true")):
+                cli_args.append("--expert-auto-init")
+            else:
+                cli_args.append("--expert-no-auto-init")
+            if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_AUTO_RESCUE", "true")):
+                cli_args.append("--expert-auto-rescue")
+            else:
+                cli_args.append("--expert-no-auto-rescue")
+            if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_MANUAL_ACTION", "true")):
+                cli_args.append("--expert-manual-action")
+            else:
+                cli_args.append("--expert-no-manual-action")
+            cli_args += [
+                "--expert-screen-unchanged-threshold",
+                self.get("OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD", "4") or "4",
+                "--expert-consecutive-failure-threshold",
+                self.get("OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD", "3") or "3",
+                "--expert-max-rescues",
+                self.get("OPEN_AUTOGLM_EXPERT_MAX_RESCUES", "3") or "3",
+            ]
 
         cli_args.append(task_text)
         return build_task_subprocess_command(cli_args)

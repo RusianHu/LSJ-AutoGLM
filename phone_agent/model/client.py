@@ -38,6 +38,39 @@ class ModelResponse:
     total_time: float | None = None  # Total inference time (seconds)
 
 
+@dataclass
+class ExpertConfig:
+    """Configuration for the expert guidance model."""
+
+    enabled: bool = False
+    base_url: str = ""
+    api_key: str = ""
+    model_name: str = ""
+    prompt: str = ""
+    max_tokens: int = 1800
+    temperature: float = 0.2
+    top_p: float = 0.9
+    frequency_penalty: float = 0.0
+    extra_body: dict[str, Any] = field(default_factory=dict)
+    auto_init: bool = True
+    auto_rescue: bool = True
+    manual_action: bool = True
+    strict_mode: bool = False
+    screen_unchanged_threshold: int = 4
+    consecutive_failure_threshold: int = 3
+    max_rescues: int = 3
+    lang: str = "cn"
+
+
+@dataclass
+class ExpertResponse:
+    """Response from the expert guidance model."""
+
+    guidance: str
+    raw_content: str
+    total_time: float | None = None
+
+
 class ModelClient:
     """
     Client for interacting with OpenAI-compatible vision-language models.
@@ -191,6 +224,41 @@ class ModelClient:
             time_to_first_token=time_to_first_token,
             time_to_thinking_end=time_to_thinking_end,
             total_time=total_time,
+        )
+
+    def request_text(self, messages: list[dict[str, Any]]) -> ExpertResponse:
+        """Send a plain-text request, used by expert guidance flows."""
+        start_time = time.time()
+        response = self.client.chat.completions.create(
+            messages=messages,
+            model=self.config.model_name,
+            max_tokens=self.config.max_tokens,
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
+            frequency_penalty=self.config.frequency_penalty,
+            extra_body=self.config.extra_body,
+            stream=False,
+        )
+        message = response.choices[0].message if response.choices else None
+        content = getattr(message, "content", "") if message is not None else ""
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    text = item.get("text") or item.get("content") or ""
+                    if text:
+                        parts.append(str(text))
+                else:
+                    text = getattr(item, "text", None) or getattr(item, "content", None)
+                    if text:
+                        parts.append(str(text))
+            text_content = "\n".join(part for part in parts if part).strip()
+        else:
+            text_content = str(content or "").strip()
+        return ExpertResponse(
+            guidance=text_content,
+            raw_content=text_content,
+            total_time=time.time() - start_time,
         )
 
     def _parse_response(self, content: str) -> tuple[str, str]:

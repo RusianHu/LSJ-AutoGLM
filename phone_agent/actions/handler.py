@@ -48,12 +48,14 @@ class ActionHandler:
         device_id: str | None = None,
         confirmation_callback: Callable[[str], bool] | None = None,
         takeover_callback: Callable[[str], None] | None = None,
+        expert_assist_callback: Callable[[dict[str, Any]], str | None] | None = None,
         runtime_policy: ResolvedActionPolicy | None = None,
         policy_input: ActionPolicyInput | None = None,
     ):
         self.device_id = device_id
         self.confirmation_callback = confirmation_callback or self._default_confirmation
         self.takeover_callback = takeover_callback or self._default_takeover
+        self.expert_assist_callback = expert_assist_callback
         self.runtime_policy = runtime_policy or resolve_action_policy("adb", policy_input)
 
     def execute(
@@ -131,6 +133,7 @@ class ActionHandler:
             "Wait": self._handle_wait,
             "Take_over": self._handle_takeover,
             "Note": self._handle_note,
+            "Ask_AI": self._handle_ask_ai,
             "Call_API": self._handle_call_api,
             "Interact": self._handle_interact,
         }
@@ -344,6 +347,16 @@ class ActionHandler:
         # This action is typically used for recording page content
         # Implementation depends on specific requirements
         return ActionResult(True, False)
+
+    def _handle_ask_ai(self, action: dict, width: int, height: int) -> ActionResult:
+        """Handle explicit expert assistance request."""
+        if self.expert_assist_callback is None:
+            return ActionResult(False, False, "Expert assistance is not configured")
+        try:
+            message = self.expert_assist_callback(action) or "专家建议已注入上下文"
+            return ActionResult(True, False, message)
+        except Exception as exc:
+            return ActionResult(False, False, f"Ask_AI failed: {exc}")
 
     def _handle_call_api(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle API call action (placeholder for summarization)."""

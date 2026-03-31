@@ -13,12 +13,14 @@ from phone_agent.actions.handler import do, finish, parse_action
 from phone_agent.actions.registry import (
     ActionPolicyInput,
     ResolvedActionPolicy,
+    export_prompt_action_specs,
     resolve_action_policy,
 )
 from phone_agent.config import get_messages, get_system_prompt
 from phone_agent.device_factory import get_device_factory
-from phone_agent.model import ModelClient, ModelConfig
+from phone_agent.model import ExpertConfig, ModelClient, ModelConfig
 from phone_agent.model.client import MessageBuilder
+from phone_agent.prompts.prompt_sections import render_action_protocol_section
 
 
 @dataclass
@@ -35,6 +37,7 @@ class AgentConfig:
     platform: str | None = None
     action_policy: ActionPolicyInput | None = None
     runtime_action_policy: ResolvedActionPolicy | None = None
+    expert_config: ExpertConfig | None = None
 
     def __post_init__(self):
         normalized_lang = (self.lang or "cn").strip().lower()
@@ -105,10 +108,28 @@ class PhoneAgent:
         self.agent_config = agent_config or AgentConfig()
 
         self.model_client = ModelClient(self.model_config)
+        self.expert_client = (
+            ModelClient(
+                ModelConfig(
+                    base_url=self.agent_config.expert_config.base_url,
+                    model_name=self.agent_config.expert_config.model_name,
+                    api_key=self.agent_config.expert_config.api_key or "EMPTY",
+                    max_tokens=self.agent_config.expert_config.max_tokens,
+                    temperature=self.agent_config.expert_config.temperature,
+                    top_p=self.agent_config.expert_config.top_p,
+                    frequency_penalty=self.agent_config.expert_config.frequency_penalty,
+                    extra_body=self.agent_config.expert_config.extra_body,
+                    lang=self.agent_config.expert_config.lang,
+                )
+            )
+            if self.agent_config.expert_config and self.agent_config.expert_config.enabled
+            else None
+        )
         self.action_handler = ActionHandler(
             device_id=self.agent_config.device_id,
             confirmation_callback=confirmation_callback,
             takeover_callback=takeover_callback,
+            expert_assist_callback=self._handle_expert_action,
             runtime_policy=self.agent_config.runtime_action_policy,
         )
 
@@ -117,7 +138,13 @@ class PhoneAgent:
         self._last_screen_hash: str | None = None
         self._screen_unchanged_steps = 0
         self._recent_action_signatures: deque[str] = deque(maxlen=12)
+        self._recent_failures: deque[str] = deque(maxlen=5)
         self._stuck_warnings = 0
+        self._task_text = ""
+        self._consecutive_failures = 0
+        self._expert_guidance_count = 0
+        self._expert_rescue_count = 0
+        self._last_expert_trigger_step = 0
 
     @staticmethod
     def _screen_hash(base64_data: str) -> str:
@@ -218,6 +245,7 @@ class PhoneAgent:
         """
         self._context = []
         self._step_count = 0
+        self._task_text = task
 
         # First step with user prompt
         result = self._execute_step(task, is_first=True)
@@ -260,7 +288,215 @@ class PhoneAgent:
         self._last_screen_hash = None
         self._screen_unchanged_steps = 0
         self._recent_action_signatures.clear()
+        self._recent_failures.clear()
         self._stuck_warnings = 0
+        self._task_text = ""
+        self._consecutive_failures = 0
+        self._expert_guidance_count = 0
+        self._expert_rescue_count = 0
+        self._last_expert_trigger_step = 0
+
+    def _build_expert_prompt(self) -> str:
+        expert_config = self.agent_config.expert_config
+        if expert_config and expert_config.prompt.strip():
+            return expert_config.prompt.strip()
+        action_policy = self.agent_config.runtime_action_policy
+        platform = self.agent_config.platform or "adb"
+        action_specs = export_prompt_action_specs(
+            platform,
+            lang=self.agent_config.lang,
+            include_actions=action_policy.ai_visible_actions if action_policy else (),
+            thirdparty=False,
+            minimal=False,
+        )
+        action_protocol = render_action_protocol_section(
+            action_specs,
+            lang=self.agent_config.lang,
+            include_examples=True,
+            include_rules=True,
+        )
+        runtime_enabled = ", ".join(action_policy.runtime_enabled_actions) if action_policy else ""
+        ai_visible = ", ".join(action_policy.ai_visible_actions) if action_policy else ""
+        return (
+            "你是一个手机自动化任务专家顾问。你的职责是基于任务目标、当前截图、页面状态、"
+            "最近动作与失败信息，给出简明、可执行、贴合当前工具约束的指导建议。"
+            "\n要求："
+            "\n1. 不要输出 do()/finish()；"
+            "\n2. 不要假设不存在的工具；"
+            "\n3. 只围绕当前 AI 可见动作和运行时允许运行动作给建议；"
+            "\n4. 优先指出当前卡点原因、下一步策略、以及若失败时的替代思路。"
+            f"\n\nAI 可见动作：{ai_visible or '（无）'}"
+            f"\n运行时允许运行动作：{runtime_enabled or '（无）'}"
+            f"\n\n动作协议参考：\n{action_protocol}"
+        )
+
+    @staticmethod
+    def _truncate_log_text(text: str, max_chars: int = 1200, max_lines: int = 12) -> str:
+        normalized = (text or "").strip().replace("\r\n", "\n")
+        if not normalized:
+            return ""
+        lines = [line.rstrip() for line in normalized.split("\n")]
+        if len(lines) > max_lines:
+            lines = lines[:max_lines] + ["...(已截断)"]
+        truncated = "\n".join(lines)
+        if len(truncated) > max_chars:
+            truncated = truncated[: max_chars - 9].rstrip() + "...(已截断)"
+        return truncated
+
+    @staticmethod
+    def _expert_reason_label(reason: str) -> str:
+        mapping = {
+            "init": "初始化",
+            "strict_step": "严格模式逐步咨询",
+            "manual_action": "Ask_AI 手动求助",
+            "screen_unchanged": "页面长时间无变化",
+            "consecutive_failures": "连续动作失败",
+            "action_loop": "动作循环",
+        }
+        return mapping.get(reason, reason)
+
+    @staticmethod
+    def _print_expert_log(message: str) -> None:
+        print(f"[EXPERT] {message}", flush=True)
+
+    def _log_expert_guidance(self, reason: str, guidance: str) -> None:
+        preview = self._truncate_log_text(guidance)
+        if not preview:
+            return
+        reason_label = self._expert_reason_label(reason)
+        self._print_expert_log(f"专家建议（{reason_label}）")
+        for line in preview.split("\n"):
+            if line.strip():
+                self._print_expert_log(f"  {line}")
+            else:
+                self._print_expert_log("")
+
+    def _request_expert_guidance(
+        self,
+        *,
+        reason: str,
+        screenshot_base64: str,
+        current_app: str,
+        extra_message: str = "",
+    ) -> str | None:
+        expert_config = self.agent_config.expert_config
+        if not expert_config or not expert_config.enabled or self.expert_client is None:
+            return None
+        action_policy = self.agent_config.runtime_action_policy
+        screen_info = MessageBuilder.build_screen_info(
+            current_app,
+            step=self._step_count,
+            screen_unchanged_steps=self._screen_unchanged_steps,
+            recent_actions=list(self._recent_action_signatures),
+            recent_failures=list(self._recent_failures),
+            trigger_reason=reason,
+            ai_visible_actions=list(action_policy.ai_visible_actions) if action_policy else [],
+            runtime_enabled_actions=list(action_policy.runtime_enabled_actions) if action_policy else [],
+            last_expert_trigger_step=self._last_expert_trigger_step,
+            expert_guidance_count=self._expert_guidance_count,
+        )
+        task_text = self._task_text or extra_message or ""
+        prompt = self._build_expert_prompt()
+        recent_context = []
+        for message in self._context[-6:]:
+            text = self._message_text(message).strip()
+            if text:
+                recent_context.append(f"[{message.get('role', 'unknown')}] {text}")
+        recent_context_text = "\n\n".join(recent_context).strip()
+        user_text = (
+            f"任务：{task_text}\n\n"
+            f"触发原因：{reason}\n\n"
+            f"当前运行状态：\n{screen_info}"
+        )
+        if recent_context_text:
+            user_text += f"\n\n最近上下文摘录：\n{recent_context_text}"
+        if extra_message:
+            user_text += f"\n\n补充问题：{extra_message}"
+        messages = [
+            MessageBuilder.create_system_message(prompt),
+            MessageBuilder.create_user_message(text=user_text, image_base64=screenshot_base64),
+        ]
+        reason_label = self._expert_reason_label(reason)
+        self._print_expert_log(
+            f"发起专家请求：{reason_label}｜步骤 {self._step_count}｜当前应用 {current_app}"
+        )
+        try:
+            response = self.expert_client.request_text(messages)
+        except Exception as exc:
+            self._print_expert_log(f"专家请求失败：{reason_label}｜错误 {exc}")
+            if self.agent_config.verbose:
+                traceback.print_exc()
+            return None
+        guidance = (response.guidance or "").strip()
+        if not guidance:
+            self._print_expert_log(f"专家请求失败：{reason_label}｜返回空建议")
+            return None
+        self._print_expert_log(
+            f"专家请求成功：{reason_label}｜耗时 {response.total_time:.2f}s｜{len(guidance)} 字符"
+        )
+        self._log_expert_guidance(reason, guidance)
+        return guidance
+
+    def _inject_expert_guidance(self, guidance: str, reason: str) -> None:
+        text = (
+            f"** Expert Guidance **\n\n"
+            f"Trigger: {reason}\n\n{guidance}"
+        )
+        self._context.append(MessageBuilder.create_user_message(text=text))
+
+    def _should_trigger_expert_rescue(self) -> str | None:
+        expert_config = self.agent_config.expert_config
+        if not expert_config or not expert_config.enabled or not expert_config.auto_rescue:
+            return None
+        if self._expert_rescue_count >= expert_config.max_rescues:
+            return None
+        if self._step_count - self._last_expert_trigger_step <= 1:
+            return None
+        if self._screen_unchanged_steps >= expert_config.screen_unchanged_threshold:
+            return "screen_unchanged"
+        if self._consecutive_failures >= expert_config.consecutive_failure_threshold:
+            return "consecutive_failures"
+        if self._looks_like_loop(list(self._recent_action_signatures)):
+            return "action_loop"
+        return None
+
+    def _strict_expert_guidance_decision(self) -> tuple[bool, str]:
+        expert_config = self.agent_config.expert_config
+        if not expert_config or not expert_config.enabled:
+            return False, "专家模式未启用"
+        if not expert_config.strict_mode:
+            return False, "严格模式未启用"
+        if self.expert_client is None:
+            return False, "专家客户端不可用"
+        if self._last_expert_trigger_step == self._step_count:
+            return False, "本步已存在专家建议，跳过重复咨询"
+        return True, "允许触发严格模式专家咨询"
+
+    def _handle_expert_action(self, action: dict[str, Any]) -> str | None:
+        expert_config = self.agent_config.expert_config
+        if not expert_config or not expert_config.enabled or not expert_config.manual_action:
+            self._print_expert_log("Ask_AI 请求被拒绝：专家模式未启用或未允许手动求助")
+            return "专家模式未启用或未允许 Ask_AI 动作"
+        device_factory = get_device_factory()
+        screenshot = device_factory.get_screenshot(self.agent_config.device_id)
+        current_app = device_factory.get_current_app(self.agent_config.device_id)
+        extra_message = (action.get("message") or "").strip()
+        self._print_expert_log(
+            f"Ask_AI 请求专家协助：{self._truncate_log_text(extra_message, max_chars=200, max_lines=3) or '（未提供补充问题）'}"
+        )
+        guidance = self._request_expert_guidance(
+            reason="manual_action",
+            screenshot_base64=screenshot.base64_data,
+            current_app=current_app,
+            extra_message=extra_message,
+        )
+        if not guidance:
+            return "专家模型未返回有效建议"
+        self._inject_expert_guidance(guidance, "manual_action")
+        self._expert_guidance_count += 1
+        self._last_expert_trigger_step = self._step_count
+        self._print_expert_log("专家建议已注入主模型上下文（Ask_AI）")
+        return "专家建议已注入上下文"
 
     def _execute_step(
         self, user_prompt: str | None = None, is_first: bool = False
@@ -280,6 +516,7 @@ class PhoneAgent:
         self._last_screen_hash = current_hash
 
         # Build messages
+        rescue_reason = None if is_first else self._should_trigger_expert_rescue()
         if is_first:
             screen_info = MessageBuilder.build_screen_info(current_app)
             self._context.append(
@@ -291,7 +528,36 @@ class PhoneAgent:
                     text=text_content, image_base64=screenshot.base64_data
                 )
             )
+            expert_config = self.agent_config.expert_config
+            if expert_config and expert_config.enabled and expert_config.auto_init:
+                guidance = self._request_expert_guidance(
+                    reason="init",
+                    screenshot_base64=screenshot.base64_data,
+                    current_app=current_app,
+                )
+                if guidance:
+                    self._inject_expert_guidance(guidance, "init")
+                    self._expert_guidance_count += 1
+                    self._last_expert_trigger_step = self._step_count
+                    self._print_expert_log("专家建议已注入主模型上下文（初始化）")
         else:
+            if rescue_reason:
+                self._print_expert_log(
+                    f"触发自动专家救援：{self._expert_reason_label(rescue_reason)}"
+                )
+                guidance = self._request_expert_guidance(
+                    reason=rescue_reason,
+                    screenshot_base64=screenshot.base64_data,
+                    current_app=current_app,
+                )
+                if guidance:
+                    self._inject_expert_guidance(guidance, rescue_reason)
+                    self._expert_guidance_count += 1
+                    self._expert_rescue_count += 1
+                    self._last_expert_trigger_step = self._step_count
+                    self._print_expert_log(
+                        f"专家建议已注入主模型上下文（{self._expert_reason_label(rescue_reason)}）"
+                    )
             screen_info = MessageBuilder.build_screen_info(current_app)
             text_content = f"** Screen Info **\n\n{screen_info}"
             self._context.append(
@@ -299,6 +565,24 @@ class PhoneAgent:
                     text=text_content, image_base64=screenshot.base64_data
                 )
             )
+
+        strict_should_trigger, strict_reason = self._strict_expert_guidance_decision()
+        if strict_should_trigger:
+            self._print_expert_log(
+                f"触发严格模式专家咨询：第 {self._step_count} 步"
+            )
+            strict_guidance = self._request_expert_guidance(
+                reason="strict_step",
+                screenshot_base64=screenshot.base64_data,
+                current_app=current_app,
+            )
+            if strict_guidance:
+                self._inject_expert_guidance(strict_guidance, "strict_step")
+                self._expert_guidance_count += 1
+                self._last_expert_trigger_step = self._step_count
+                self._print_expert_log("专家建议已注入主模型上下文（严格模式）")
+        elif self.agent_config.expert_config and self.agent_config.expert_config.strict_mode:
+            self._print_expert_log(f"跳过严格模式专家咨询：{strict_reason}")
 
         # Get model response
         try:
@@ -389,6 +673,13 @@ class PhoneAgent:
                     text=f"** Action Result **\n\n{result_prefix}: {result.message}"
                 )
             )
+
+        if result.success:
+            self._consecutive_failures = 0
+        else:
+            self._consecutive_failures += 1
+            if result.message:
+                self._recent_failures.append(result.message)
 
         if self.agent_config.verbose and (not result.success) and result.message:
             print(f"⚠️ Action failed: {result.message}")

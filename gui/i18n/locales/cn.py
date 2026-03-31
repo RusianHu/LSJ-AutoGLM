@@ -301,6 +301,8 @@ CN: dict[str, str] = {
     "action.call_api.description": "调用外部 API 或扩展能力；默认关闭，仅在明确授权时启用。",
     "action.interact.label": "请求交互确认",
     "action.interact.description": "请求用户补充选择或确认信息。",
+    "action.ask_ai.label": "请求专家协助",
+    "action.ask_ai.description": "请求独立专家模型分析当前卡点并返回指导建议。",
 
     # ============================================================
     # 历史页 (History)

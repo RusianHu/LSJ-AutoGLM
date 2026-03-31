@@ -419,6 +419,26 @@ _ACTIONS: tuple[ActionSpec, ...] = (
         i18n_key_prefix="action.note",
     ),
     ActionSpec(
+        name="Ask_AI",
+        label="请求专家协助",
+        category="coordination",
+        risk_level="low",
+        description="请求独立专家模型分析当前卡点并返回指导建议。",
+        params=(
+            ActionParamSpec("message", "str", False, "向专家补充的问题或上下文。", '"当前页面像登录确认，请给出下一步建议"'),
+        ),
+        prompt=ActionPromptSpec(
+            signature='do(action="Ask_AI", message="...")',
+            summary_zh="请求专家模型给出策略指导。",
+            summary_en="Ask the expert model for guidance.",
+            examples=('do(action="Ask_AI", message="请分析为何当前页面停滞")',),
+        ),
+        support=ActionSupportSpec(platforms=("adb", "hdc", "ios")),
+        tags=("safe", "expert_assist"),
+        sort_order=325,
+        i18n_key_prefix="action.ask_ai",
+    ),
+    ActionSpec(
         name="Call_API",
         label="调用外部 API",
         category="integration",

@@ -301,6 +301,8 @@ EN: dict[str, str] = {
     "action.call_api.description": "Call an external API or extension capability. Disabled by default unless explicitly authorized.",
     "action.interact.label": "Request Interaction",
     "action.interact.description": "Ask the user for extra selection or confirmation.",
+    "action.ask_ai.label": "Request Expert Help",
+    "action.ask_ai.description": "Ask the dedicated expert model to analyze the current blocker and return guidance.",
 
     # ============================================================
     # History

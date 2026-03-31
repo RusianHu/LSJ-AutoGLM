@@ -14,7 +14,7 @@ import os
 import time
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QColor, QFont, QPixmap, QTextCursor
+from PySide6.QtGui import QColor, QFont, QPixmap, QTextCharFormat, QTextCursor
 from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
 from gui.widgets.mirror_label import MirrorLabel
 from PySide6.QtWidgets import (
@@ -1314,9 +1314,30 @@ class DashboardPage(QWidget):
     def _on_log_line(self, line: str):
         self._append_log(line)
 
+    @staticmethod
+    def _log_color_for_line(line: str) -> str:
+        stripped = line.strip()
+        if not stripped:
+            return "#c9d1d9"
+        if "专家请求失败" in stripped or stripped.startswith("⚠️"):
+            return "#f85149"
+        if "专家请求成功" in stripped or "已注入主模型上下文" in stripped:
+            return "#3fb950"
+        if "触发严格模式专家咨询" in stripped or "触发自动专家救援" in stripped:
+            return "#e3b341"
+        if "跳过严格模式专家咨询" in stripped:
+            return "#8b949e"
+        if stripped.startswith("[EXPERT]"):
+            return "#79c0ff"
+        return "#c9d1d9"
+
     def _append_log(self, line: str):
-        self._log_view.moveCursor(QTextCursor.End)
-        self._log_view.insertPlainText(line)
+        cursor = self._log_view.textCursor()
+        cursor.movePosition(QTextCursor.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(self._log_color_for_line(line)))
+        cursor.insertText(line, fmt)
+        self._log_view.setTextCursor(cursor)
         self._log_view.moveCursor(QTextCursor.End)
 
     @staticmethod

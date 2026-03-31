@@ -515,6 +515,32 @@ class SettingsPage(QWidget):
         self._add_fields(model_form, api_fields)
         scroll_layout.addWidget(self._model_group)
 
+        # ---- 专家模式 ----
+        self._expert_group = QGroupBox("专家模式")
+        expert_form = QFormLayout(self._expert_group)
+        expert_form.setLabelAlignment(Qt.AlignRight)
+        expert_form.setSpacing(10)
+        expert_fields = [
+            "OPEN_AUTOGLM_EXPERT_MODE",
+            "OPEN_AUTOGLM_EXPERT_STRICT_MODE",
+            "OPEN_AUTOGLM_EXPERT_BASE_URL",
+            "OPEN_AUTOGLM_EXPERT_MODEL",
+            "OPEN_AUTOGLM_EXPERT_API_KEY",
+            "OPEN_AUTOGLM_EXPERT_PROMPT",
+            "OPEN_AUTOGLM_EXPERT_AUTO_INIT",
+            "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE",
+            "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION",
+            "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD",
+            "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD",
+            "OPEN_AUTOGLM_EXPERT_MAX_RESCUES",
+        ]
+        self._add_fields(expert_form, expert_fields)
+        self._expert_hint_lbl = QLabel("专家提示词留空时，将使用内置默认预设；默认会附带任务、截图、页面状态、动作协议摘要与最近上下文。严格模式启用后，每一步主模型决策前都会先请求一次专家，这会显著增加时延与调用成本。")
+        self._expert_hint_lbl.setProperty("role", "subtle")
+        self._expert_hint_lbl.setWordWrap(True)
+        expert_form.addRow(QLabel("说明:"), self._expert_hint_lbl)
+        scroll_layout.addWidget(self._expert_group)
+
         # ---- 渠道配置（动态，随活跃预设变化）----
         self._channel_group = QGroupBox(self._t("page.settings.section.channel"))
         channel_vbox = QVBoxLayout(self._channel_group)

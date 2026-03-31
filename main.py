@@ -37,7 +37,7 @@ from phone_agent.config.apps import list_supported_apps
 from phone_agent.config.apps_harmonyos import list_supported_apps as list_harmonyos_apps
 from phone_agent.config.apps_ios import list_supported_apps as list_ios_apps
 from phone_agent.device_factory import DeviceType, get_device_factory, set_device_type
-from phone_agent.model import ModelConfig
+from phone_agent.model import ExpertConfig, ModelConfig
 from phone_agent.xctest import XCTestConnection
 from phone_agent.xctest import list_devices as list_ios_devices
 
@@ -661,6 +661,103 @@ Examples:
     )
 
     parser.add_argument(
+        "--expert-mode",
+        action="store_true",
+        default=_env_truthy("PHONE_AGENT_EXPERT_MODE", "OPEN_AUTOGLM_EXPERT_MODE", "false"),
+        help="Enable expert guidance mode with a dedicated multimodal expert model.",
+    )
+    parser.add_argument(
+        "--expert-base-url",
+        type=str,
+        default=_env_value("PHONE_AGENT_EXPERT_BASE_URL", "OPEN_AUTOGLM_EXPERT_BASE_URL", ""),
+        help="Expert model API base URL.",
+    )
+    parser.add_argument(
+        "--expert-model",
+        type=str,
+        default=_env_value("PHONE_AGENT_EXPERT_MODEL", "OPEN_AUTOGLM_EXPERT_MODEL", ""),
+        help="Expert model name.",
+    )
+    parser.add_argument(
+        "--expert-apikey",
+        type=str,
+        default=_env_value("PHONE_AGENT_EXPERT_API_KEY", "OPEN_AUTOGLM_EXPERT_API_KEY", ""),
+        help="API key for the expert model.",
+    )
+    parser.add_argument(
+        "--expert-prompt",
+        type=str,
+        default=_env_value("PHONE_AGENT_EXPERT_PROMPT", "OPEN_AUTOGLM_EXPERT_PROMPT", ""),
+        help="Optional custom expert prompt.",
+    )
+    parser.add_argument(
+        "--expert-strict-mode",
+        action="store_true",
+        default=_env_truthy("PHONE_AGENT_EXPERT_STRICT_MODE", "OPEN_AUTOGLM_EXPERT_STRICT_MODE", "false"),
+        help="Force an expert consultation before every main-model decision step.",
+    )
+    expert_auto_init_group = parser.add_mutually_exclusive_group()
+    expert_auto_init_group.add_argument(
+        "--expert-auto-init",
+        dest="expert_auto_init",
+        action="store_true",
+        default=_env_truthy("PHONE_AGENT_EXPERT_AUTO_INIT", "OPEN_AUTOGLM_EXPERT_AUTO_INIT", "true"),
+        help="Request expert guidance before the first main-model step.",
+    )
+    expert_auto_init_group.add_argument(
+        "--expert-no-auto-init",
+        dest="expert_auto_init",
+        action="store_false",
+        help="Disable automatic expert guidance on task initialization.",
+    )
+    expert_auto_rescue_group = parser.add_mutually_exclusive_group()
+    expert_auto_rescue_group.add_argument(
+        "--expert-auto-rescue",
+        dest="expert_auto_rescue",
+        action="store_true",
+        default=_env_truthy("PHONE_AGENT_EXPERT_AUTO_RESCUE", "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE", "true"),
+        help="Enable automatic expert rescue when the agent appears stuck.",
+    )
+    expert_auto_rescue_group.add_argument(
+        "--expert-no-auto-rescue",
+        dest="expert_auto_rescue",
+        action="store_false",
+        help="Disable automatic expert rescue.",
+    )
+    expert_manual_action_group = parser.add_mutually_exclusive_group()
+    expert_manual_action_group.add_argument(
+        "--expert-manual-action",
+        dest="expert_manual_action",
+        action="store_true",
+        default=_env_truthy("PHONE_AGENT_EXPERT_MANUAL_ACTION", "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION", "true"),
+        help="Allow Ask_AI action to request expert assistance explicitly.",
+    )
+    expert_manual_action_group.add_argument(
+        "--expert-no-manual-action",
+        dest="expert_manual_action",
+        action="store_false",
+        help="Disable Ask_AI explicit expert assistance action.",
+    )
+    parser.add_argument(
+        "--expert-screen-unchanged-threshold",
+        type=int,
+        default=int(_env_value("PHONE_AGENT_EXPERT_SCREEN_UNCHANGED_THRESHOLD", "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD", "4")),
+        help="Trigger automatic expert rescue after this many unchanged-screen steps.",
+    )
+    parser.add_argument(
+        "--expert-consecutive-failure-threshold",
+        type=int,
+        default=int(_env_value("PHONE_AGENT_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD", "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD", "3")),
+        help="Trigger automatic expert rescue after this many consecutive failures.",
+    )
+    parser.add_argument(
+        "--expert-max-rescues",
+        type=int,
+        default=int(_env_value("PHONE_AGENT_EXPERT_MAX_RESCUES", "OPEN_AUTOGLM_EXPERT_MAX_RESCUES", "3")),
+        help="Maximum automatic expert rescue attempts per task.",
+    )
+
+    parser.add_argument(
         "--enabled-actions",
         type=str,
         default=_env_value("PHONE_AGENT_ENABLED_ACTIONS", "OPEN_AUTOGLM_ENABLED_ACTIONS"),
@@ -982,9 +1079,31 @@ def main():
         lang=args.lang,
     )
 
+    expert_enabled = bool(args.expert_mode)
+    expert_strict_mode = bool(args.expert_strict_mode) and expert_enabled
+    expert_config = ExpertConfig(
+        enabled=expert_enabled,
+        base_url=args.expert_base_url,
+        model_name=args.expert_model,
+        api_key=args.expert_apikey,
+        prompt=args.expert_prompt,
+        auto_init=bool(args.expert_auto_init),
+        auto_rescue=bool(args.expert_auto_rescue),
+        manual_action=bool(args.expert_manual_action),
+        strict_mode=expert_strict_mode,
+        screen_unchanged_threshold=max(1, int(args.expert_screen_unchanged_threshold)),
+        consecutive_failure_threshold=max(1, int(args.expert_consecutive_failure_threshold)),
+        max_rescues=max(1, int(args.expert_max_rescues)),
+        lang=args.lang,
+    )
+
     if device_type == DeviceType.IOS:
         if args.thirdparty:
             print("Warning: --thirdparty is not supported on iOS yet; ignoring.")
+        if args.expert_mode:
+            print("Warning: expert mode is not supported on iOS yet; ignoring.")
+        if args.expert_strict_mode:
+            print("Warning: expert strict mode is not supported on iOS yet; ignoring.")
 
         # Create iOS agent
         agent_config = IOSAgentConfig(
@@ -1017,6 +1136,7 @@ def main():
             platform=args.device_type,
             action_policy=action_policy,
             runtime_action_policy=resolved_action_policy,
+            expert_config=expert_config,
         )
 
         # 第三方模式截图压缩开关：
@@ -1076,6 +1196,11 @@ def main():
     print(f"Language: {agent_config.lang}")
     print(f"Device Type: {args.device_type.upper()}")
     print(f"Action Policy Version: {resolved_action_policy.policy_version}")
+    if device_type != DeviceType.IOS:
+        print(f"Expert Mode: {'ON' if agent_config.expert_config and agent_config.expert_config.enabled else 'OFF'}")
+        if agent_config.expert_config and agent_config.expert_config.enabled:
+            print(f"Expert Strict Mode: {'ON' if agent_config.expert_config.strict_mode else 'OFF'}")
+            print(f"Expert Model: {agent_config.expert_config.model_name}")
     print(
         "Runtime Actions: "
         + (", ".join(resolved_action_policy.runtime_enabled_actions) or "(none)")

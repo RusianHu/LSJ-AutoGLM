@@ -366,6 +366,39 @@ class TaskService(QObject):
         """从日志内容推断高层事件（基于关键字匹配）。"""
         stripped = line.strip()
         lower = stripped.lower()
+
+        if stripped.startswith("[EXPERT]"):
+            payload = stripped[len("[EXPERT]"):].strip()
+            if "失败" in payload:
+                if self._current_record:
+                    self._current_record.error_summary = payload[:200]
+                self._add_event("expert_failure", payload)
+                return
+            if "发起专家请求" in payload:
+                self._add_event("expert_request", payload)
+                return
+            if "请求成功" in payload:
+                self._add_event("expert_success", payload)
+                return
+            if "触发严格模式专家咨询" in payload:
+                self._add_event("expert_strict_trigger", payload)
+                return
+            if "自动专家救援" in payload:
+                self._add_event("expert_auto_rescue", payload)
+                return
+            if "跳过严格模式专家咨询" in payload:
+                self._add_event("expert_strict_skip", payload)
+                return
+            if "Ask_AI 请求专家协助" in payload:
+                self._add_event("expert_manual_request", payload)
+                return
+            if "已注入主模型上下文" in payload:
+                self._add_event("expert_context_injected", payload)
+                return
+            if payload.startswith("专家建议（") or payload.startswith("  "):
+                self._add_event("expert_guidance", payload)
+                return
+
         triggers = (
             {"keywords": ("设备检查", "checking system"), "event_type": "device_check", "message_key": "event.device_check"},
             {"keywords": ("device connected", "设备已连接"), "event_type": "device_connected", "message_key": "event.device_connected"},
