@@ -12,8 +12,8 @@ import subprocess
 import sys
 
 from PySide6.QtCore import Qt, QRect, QPoint, QThread, Signal
-from PySide6.QtGui import QPixmap, QCursor
-from PySide6.QtWidgets import QLabel, QSizePolicy
+from PySide6.QtGui import QPixmap, QCursor, QKeySequence
+from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
 
 class _AdbTapWorker(QThread):
@@ -44,6 +44,46 @@ class _AdbTapWorker(QThread):
             self.failed.emit(detail or f"adb tap failed (code={result.returncode})")
 
 
+class _AdbTextWorker(QThread):
+    failed = Signal(str)
+
+    def __init__(self, device_id: str, text: str | None = None, keycode: int | None = None):
+        super().__init__()
+        self._device_id = device_id
+        self._text = text
+        self._keycode = keycode
+
+    def run(self):
+        try:
+            if self._keycode is not None:
+                result = subprocess.run(
+                    ["adb", "-s", self._device_id, "shell", "input", "keyevent", str(self._keycode)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    timeout=8,
+                )
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "").strip()
+                    self.failed.emit(detail or f"adb keyevent failed (code={result.returncode})")
+                return
+
+            if not self._text:
+                return
+
+            from phone_agent.adb.input import detect_and_set_adb_keyboard, restore_keyboard, type_text
+
+            original_ime = detect_and_set_adb_keyboard(self._device_id)
+            try:
+                type_text(self._text, self._device_id)
+            finally:
+                if original_ime:
+                    restore_keyboard(original_ime, self._device_id)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 class MirrorLabel(QLabel):
     """
     自适应镜像图片显示控件。
@@ -62,15 +102,17 @@ class MirrorLabel(QLabel):
         self._device_id: str = ""
         self._tap_enabled: bool = True
         self._tap_worker: _AdbTapWorker | None = None
+        self._input_worker: _AdbTextWorker | None = None
 
         self.setAlignment(Qt.AlignCenter)
         self.setScaledContents(False)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(1, 1)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
         # 显示手型光标，提示可点击
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setToolTip("点击此处控制手机")
+        self.setToolTip("点击此处控制手机；点击后可直接键盘输入，Ctrl+V 粘贴")
 
     # ------------------------------------------------------------------
     # 公共接口
@@ -86,7 +128,7 @@ class MirrorLabel(QLabel):
         self.setCursor(
             QCursor(Qt.PointingHandCursor) if enabled else QCursor(Qt.ArrowCursor)
         )
-        self.setToolTip("点击此处控制手机" if enabled else "")
+        self.setToolTip("点击此处控制手机；点击后可直接键盘输入，Ctrl+V 粘贴" if enabled else "")
 
     def set_raw_pixmap(self, pixmap: QPixmap):
         """
@@ -181,8 +223,51 @@ class MirrorLabel(QLabel):
         tap_x = max(0, min(tap_x, phone_w - 1))
         tap_y = max(0, min(tap_y, phone_h - 1))
 
+        self.setFocus(Qt.MouseFocusReason)
         self._adb_tap(tap_x, tap_y)
         event.accept()
+
+    def keyPressEvent(self, event):
+        if not self._device_id:
+            self.tap_failed.emit("当前未绑定设备，无法输入")
+            event.accept()
+            return
+
+        if event.matches(QKeySequence.Paste):
+            clipboard = QApplication.clipboard()
+            text = clipboard.text() if clipboard is not None else ""
+            if text:
+                self._adb_type_text(text)
+            else:
+                self.tap_failed.emit("剪贴板为空，无法粘贴")
+            event.accept()
+            return
+
+        key_map = {
+            Qt.Key_Return: 66,
+            Qt.Key_Enter: 66,
+            Qt.Key_Backspace: 67,
+            Qt.Key_Delete: 112,
+            Qt.Key_Tab: 61,
+            Qt.Key_Left: 21,
+            Qt.Key_Right: 22,
+            Qt.Key_Up: 19,
+            Qt.Key_Down: 20,
+            Qt.Key_Escape: 4,
+        }
+        keycode = key_map.get(event.key())
+        if keycode is not None:
+            self._adb_keyevent(keycode)
+            event.accept()
+            return
+
+        text = event.text()
+        if text:
+            self._adb_type_text(text)
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -223,4 +308,24 @@ class MirrorLabel(QLabel):
         worker.failed.connect(self.tap_failed.emit)
         worker.finished.connect(worker.deleteLater)
         self._tap_worker = worker
+        worker.start()
+
+    def _adb_type_text(self, text: str):
+        """在后台异步执行 ADB Keyboard 文本输入"""
+        if self._input_worker and self._input_worker.isRunning():
+            return
+        worker = _AdbTextWorker(self._device_id, text=text)
+        worker.failed.connect(self.tap_failed.emit)
+        worker.finished.connect(worker.deleteLater)
+        self._input_worker = worker
+        worker.start()
+
+    def _adb_keyevent(self, keycode: int):
+        """在后台异步执行 adb shell input keyevent"""
+        if self._input_worker and self._input_worker.isRunning():
+            return
+        worker = _AdbTextWorker(self._device_id, keycode=keycode)
+        worker.failed.connect(self.tap_failed.emit)
+        worker.finished.connect(worker.deleteLater)
+        self._input_worker = worker
         worker.start()

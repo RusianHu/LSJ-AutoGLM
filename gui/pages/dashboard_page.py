@@ -12,12 +12,16 @@
 
 import os
 import time
+import subprocess
+import sys
 
 from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QPixmap, QTextCharFormat, QTextCursor
 from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
 from gui.widgets.mirror_label import MirrorLabel
 from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
     QComboBox,
     QFrame,
     QGroupBox,
@@ -84,6 +88,37 @@ STATE_DISPLAY = {k: (k.value, v) for k, v in STATE_COLORS.items()}
 MIRROR_STATE_DISPLAY = {k: (k.value, v) for k, v in MIRROR_STATE_COLORS.items()}
 
 
+class _MirrorClipboardPasteWorker(QThread):
+    failed = Signal(str)
+    succeeded = Signal(str)
+
+    def __init__(self, device_id: str, text: str):
+        super().__init__()
+        self._device_id = device_id
+        self._text = text or ""
+
+    def run(self):
+        try:
+            if not self._device_id:
+                self.failed.emit("当前未绑定设备，无法粘贴")
+                return
+            if not self._text:
+                self.failed.emit("剪贴板为空，无法粘贴")
+                return
+
+            from phone_agent.adb.input import detect_and_set_adb_keyboard, restore_keyboard, type_text
+
+            original_ime = detect_and_set_adb_keyboard(self._device_id)
+            try:
+                type_text(self._text, self._device_id)
+            finally:
+                if original_ime:
+                    restore_keyboard(original_ime, self._device_id)
+            self.succeeded.emit(self._text)
+        except Exception as e:
+            self.failed.emit(f"{e}；请先点击设备输入框聚焦后再重试")
+
+
 class _ReadinessWorker(QThread):
     """后台执行启动环境检查，避免阻塞工作台页面。"""
 
@@ -110,6 +145,93 @@ class _ReadinessWorker(QThread):
         if self._stop_requested:
             return
         self.results_ready.emit(results)
+
+
+class _MirrorPopupWindow(QWidget):
+    """设备镜像顶层窗口。"""
+
+    closing = Signal()
+
+    def __init__(self):
+        super().__init__(None)
+        self._closing_in_progress = False
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
+        self.setAttribute(Qt.WA_DeleteOnClose, False)
+        self.setMinimumSize(420, 760)
+        self.resize(520, 920)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(0)
+
+        self._container = QWidget(self)
+        self._container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._stack = QStackedLayout(self._container)
+        self._stack.setContentsMargins(0, 0, 0, 0)
+
+        self._placeholder = QLabel()
+        self._placeholder.setAlignment(Qt.AlignCenter)
+        self._placeholder.setWordWrap(True)
+        self._stack.addWidget(self._placeholder)
+
+        self._label = MirrorLabel()
+        self._stack.addWidget(self._label)
+
+        self._host = QWidget()
+        self._host.setAttribute(Qt.WA_NativeWindow, True)
+        self._stack.addWidget(self._host)
+        self._stack.setCurrentWidget(self._placeholder)
+
+        layout.addWidget(self._container, 1)
+
+    def container_widget(self) -> QWidget:
+        return self._container
+
+    def host_widget(self) -> QWidget:
+        return self._host
+
+    def label_widget(self) -> MirrorLabel:
+        return self._label
+
+    def set_placeholder_text(self, text: str):
+        self._placeholder.setText(text)
+
+    def show_placeholder(self):
+        self._stack.setCurrentWidget(self._placeholder)
+
+    def show_label(self):
+        self._stack.setCurrentWidget(self._label)
+
+    def show_host(self):
+        self._stack.setCurrentWidget(self._host)
+
+    def show_frame(self, pixmap: QPixmap):
+        self._label.set_raw_pixmap(pixmap)
+        self.show_label()
+
+    def is_closing(self) -> bool:
+        return self._closing_in_progress
+
+    def restore_and_show(self):
+        self._closing_in_progress = False
+        state = self.windowState()
+        if state & Qt.WindowMinimized:
+            self.setWindowState((state & ~Qt.WindowMinimized) | Qt.WindowActive)
+        self.show()
+        app = QApplication.instance()
+        platform_name = (app.platformName() if app else "").lower()
+        if platform_name not in {"offscreen", "minimal"}:
+            self.raise_()
+            self.activateWindow()
+
+    def closeEvent(self, event):
+        self._closing_in_progress = True
+        self.closing.emit()
+        super().closeEvent(event)
 
 
 class DashboardPage(QWidget):
@@ -143,7 +265,15 @@ class DashboardPage(QWidget):
         self._mirror_container: QWidget = None
         self._mirror_host: QWidget = None        # scrcpy 内嵌专用原生宿主控件
         self._mirror_stack: QStackedLayout = None
+        self._mirror_view_stack: QStackedLayout = None
+        self._mirror_open_in_new_window_check: QCheckBox = None
+        self._btn_mirror_paste_clipboard: QPushButton = None
+        self._mirror_clipboard_worker: _MirrorClipboardPasteWorker | None = None
+        self._mirror_detached_placeholder: QLabel = None
+        self._mirror_popup_window: _MirrorPopupWindow = None
         self._mirror_embedded = False
+        self._mirror_popup_ignore_close = False
+        self._shutting_down = False
         self._last_mirror_geometry_debug = None
         self._mirror_debug_enabled = self._is_truthy(
             os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
@@ -155,6 +285,7 @@ class DashboardPage(QWidget):
         self._build_ui()
         self._apply_action_button_styles()
         self._connect_signals()
+        self._sync_mirror_open_mode_preference()
         self._update_button_states(TaskState.IDLE)
         self._refresh_status_bar()
         # 初始化时同步已选中设备的 device_id 到镜像控件
@@ -506,6 +637,14 @@ class DashboardPage(QWidget):
         layout.addWidget(self._lbl_mirror_status)
         layout.addStretch(1)
 
+        # 镜像兜底粘贴按钮（主要用于独立 scrcpy 窗口模式）
+        self._btn_mirror_paste_clipboard = QPushButton(self._t("page.dashboard.mirror.btn.paste_clipboard"))
+        self._btn_mirror_paste_clipboard.setFixedHeight(22)
+        self._btn_mirror_paste_clipboard.setProperty("variant", "subtle")
+        self._btn_mirror_paste_clipboard.clicked.connect(self._on_mirror_paste_clipboard)
+        self._btn_mirror_paste_clipboard.setEnabled(False)
+        layout.addWidget(self._btn_mirror_paste_clipboard)
+
         # 镜像控制按钮
         self._btn_mirror_toggle = QPushButton(self._t("page.dashboard.mirror.btn.start_mirror"))
         self._btn_mirror_toggle.setFixedHeight(22)
@@ -670,6 +809,13 @@ class DashboardPage(QWidget):
         self._device_info_lbl.setWordWrap(True)
         layout.addWidget(self._device_info_lbl)
 
+        # 镜像打开方式
+        self._mirror_open_in_new_window_check = QCheckBox(
+            self._t("page.dashboard.mirror.open_in_new_window")
+        )
+        self._mirror_open_in_new_window_check.toggled.connect(self._on_mirror_open_mode_toggled)
+        layout.addWidget(self._mirror_open_in_new_window_check, 0, Qt.AlignLeft)
+
         # 镜像显示容器
         self._mirror_container = QWidget()
         self._mirror_container.setStyleSheet("background:#0a0e17; border-radius:6px;")
@@ -699,7 +845,20 @@ class DashboardPage(QWidget):
         self._mirror_stack.addWidget(self._mirror_host)
         self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
 
-        layout.addWidget(self._mirror_container, 1)
+        self._mirror_detached_placeholder = QLabel(
+            self._t("page.dashboard.mirror.detached_placeholder")
+        )
+        self._mirror_detached_placeholder.setAlignment(Qt.AlignCenter)
+        self._mirror_detached_placeholder.setWordWrap(True)
+
+        mirror_viewport = QWidget()
+        self._mirror_view_stack = QStackedLayout(mirror_viewport)
+        self._mirror_view_stack.setContentsMargins(0, 0, 0, 0)
+        self._mirror_view_stack.addWidget(self._mirror_container)
+        self._mirror_view_stack.addWidget(self._mirror_detached_placeholder)
+        self._mirror_view_stack.setCurrentWidget(self._mirror_container)
+
+        layout.addWidget(mirror_viewport, 1)
 
         # 接管提示横幅（隐藏）
         self._takeover_banner = QLabel(self._t("page.dashboard.takeover.banner"))
@@ -997,9 +1156,21 @@ class DashboardPage(QWidget):
             self._mirror_placeholder.setStyleSheet(
                 f"color:{v.get('text_muted', '#66778d')}; font-size:13px; line-height:1.8; padding:16px;"
             )
+        if hasattr(self, "_mirror_detached_placeholder"):
+            self._mirror_detached_placeholder.setStyleSheet(
+                f"color:{v.get('text_muted', '#66778d')}; font-size:13px; line-height:1.8; padding:24px;"
+            )
         if hasattr(self, "_device_info_lbl"):
             self._device_info_lbl.setStyleSheet(
                 f"color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:4px 6px 8px 6px;"
+            )
+        if hasattr(self, "_mirror_open_in_new_window_check"):
+            self._mirror_open_in_new_window_check.setStyleSheet(
+                f"QCheckBox {{ color:{v.get('text_secondary', '#526273')}; font-size:12px; padding:2px 4px 8px 4px; }}"
+            )
+        if getattr(self, "_mirror_popup_window", None):
+            self._mirror_popup_window.setStyleSheet(
+                f"background:{v.get('bg_main', '#0d1117')};"
             )
         if hasattr(self, "_readiness_bar"):
             self._readiness_bar.setStyleSheet(self._readiness_bar_style(self._last_readiness_state[1]))
@@ -1068,6 +1239,7 @@ class DashboardPage(QWidget):
         # 配置变化时同步渠道下拉框（例如设置页保存后）
         if self._config:
             self._config.config_changed.connect(self._sync_channel_combo)
+            self._config.config_changed.connect(self._sync_mirror_open_mode_preference)
             self._config.config_changed.connect(lambda: self._schedule_readiness_check(300))
 
     # ================================================================
@@ -1231,6 +1403,189 @@ class DashboardPage(QWidget):
         if self._task:
             self._task.resume_task()
 
+    def _mirror_prefers_new_window(self) -> bool:
+        if self._mirror_open_in_new_window_check is not None:
+            return self._mirror_open_in_new_window_check.isChecked()
+        if self._config:
+            return self._is_truthy(self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "false"))
+        return False
+
+    def _sync_mirror_open_mode_preference(self):
+        if not self._mirror_open_in_new_window_check:
+            return
+        checked = False
+        if self._config:
+            checked = self._is_truthy(
+                self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "false")
+            )
+        self._mirror_open_in_new_window_check.blockSignals(True)
+        self._mirror_open_in_new_window_check.setChecked(checked)
+        self._mirror_open_in_new_window_check.blockSignals(False)
+
+    def _on_mirror_open_mode_toggled(self, checked: bool):
+        if not self._config:
+            return
+        try:
+            self._config.set(
+                "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW",
+                "true" if checked else "false",
+            )
+        except Exception as exc:
+            self._mirror_open_in_new_window_check.blockSignals(True)
+            self._mirror_open_in_new_window_check.setChecked(not checked)
+            self._mirror_open_in_new_window_check.blockSignals(False)
+            self._append_log(
+                self._t(
+                    "page.dashboard.mirror.log.preference_save_failed",
+                    error=str(exc),
+                )
+            )
+
+    def _set_dashboard_mirror_detached(self, detached: bool):
+        if not self._mirror_view_stack or not self._mirror_detached_placeholder or not self._mirror_container:
+            return
+        self._mirror_view_stack.setCurrentWidget(
+            self._mirror_detached_placeholder if detached else self._mirror_container
+        )
+
+    def _popup_window_active(self) -> bool:
+        return bool(
+            self._mirror_popup_window
+            and self._mirror_popup_window.isVisible()
+            and not self._mirror_popup_window.is_closing()
+        )
+
+    def _update_mirror_popup_title(self, device_id: str = ""):
+        if self._mirror_popup_window is None:
+            return
+        resolved_device_id = device_id or self._current_device_id()
+        self._mirror_popup_window.setWindowTitle(
+            self._t(
+                "page.dashboard.mirror.popup.window_title",
+                device_id=resolved_device_id or "—",
+            )
+        )
+
+    def _ensure_mirror_popup_window(self):
+        if self._mirror_popup_window is None:
+            self._mirror_popup_window = _MirrorPopupWindow()
+            self._mirror_popup_window.closing.connect(self._on_mirror_popup_window_closing)
+            self._mirror_popup_window.container_widget().installEventFilter(self)
+            self._mirror_popup_window.host_widget().installEventFilter(self)
+            self._mirror_popup_window.label_widget().tap_failed.connect(self._on_mirror_error)
+        self._mirror_popup_window.set_placeholder_text(self._t("page.dashboard.mirror.placeholder"))
+        self._mirror_popup_window.label_widget().set_device_id(self._current_device_id())
+        self._update_mirror_popup_title()
+        if self._theme_tokens is not None:
+            self.refresh_theme_surfaces()
+        return self._mirror_popup_window
+
+    def _show_mirror_popup_window(self, device_id: str = ""):
+        window = self._ensure_mirror_popup_window()
+        self._update_mirror_popup_title(device_id)
+        window.label_widget().set_device_id(device_id or self._current_device_id())
+        self._set_dashboard_mirror_detached(True)
+        window.restore_and_show()
+        return window
+
+    def _close_mirror_popup_window(self, *, ignore_stop: bool):
+        if not self._mirror_popup_window:
+            self._set_dashboard_mirror_detached(False)
+            return
+        self._mirror_popup_ignore_close = ignore_stop
+        try:
+            if self._mirror_popup_window.isVisible():
+                self._mirror_popup_window.close()
+            else:
+                self._set_dashboard_mirror_detached(False)
+        finally:
+            self._mirror_popup_ignore_close = False
+
+    def _on_mirror_popup_window_closing(self):
+        should_stop_mirror = (
+            not self._mirror_popup_ignore_close
+            and not self._shutting_down
+            and bool(self._mirror and self._mirror.is_running)
+        )
+        self._set_dashboard_mirror_detached(False)
+        if should_stop_mirror:
+            self._mirror.stop()
+
+    def _active_mirror_widgets(self):
+        if self._mirror_prefers_new_window() and self._popup_window_active():
+            popup = self._mirror_popup_window
+            return popup.host_widget(), popup.container_widget(), popup.label_widget(), popup
+        return self._mirror_host, self._mirror_container, self._mirror_label, None
+
+    def _build_mirror_start_context(self, device_id: str):
+        embed_wid = None
+        embed_container_size = None
+        host = None
+        container = None
+
+        if self._mirror_prefers_new_window():
+            popup = self._show_mirror_popup_window(device_id)
+            popup.show_host()
+            host = popup.host_widget()
+            container = popup.container_widget()
+        elif self._mirror_host and self._mirror_container:
+            if self._mirror_stack:
+                self._mirror_stack.setCurrentWidget(self._mirror_host)
+            self._mirror_host.show()
+            self._set_dashboard_mirror_detached(False)
+            host = self._mirror_host
+            container = self._mirror_container
+
+        if not (host and container and container.isVisible()):
+            return embed_wid, embed_container_size
+
+        try:
+            host_rect = host.contentsRect()
+            if host_rect.width() > 0 and host_rect.height() > 0:
+                embed_container_size = (host_rect.width(), host_rect.height())
+            else:
+                container_rect = container.contentsRect()
+                if container_rect.width() > 0 and container_rect.height() > 0:
+                    embed_container_size = (container_rect.width(), container_rect.height())
+            embed_wid = int(host.winId())
+        except Exception:
+            embed_wid = None
+            embed_container_size = None
+        return embed_wid, embed_container_size
+
+    def _start_mirror_for_device(self, device_id: str, external_window: bool = False):
+        if not self._mirror or not device_id:
+            return
+        if external_window:
+            embed_wid = None
+            embed_container_size = None
+            self._close_mirror_popup_window(ignore_stop=True)
+            self._set_dashboard_mirror_detached(False)
+        else:
+            embed_wid, embed_container_size = self._build_mirror_start_context(device_id)
+        self._mirror.start(
+            device_id,
+            embed_wid=embed_wid,
+            embed_container_size=embed_container_size,
+        )
+        self._append_mirror_debug_log(
+            self._t(
+                "page.dashboard.mirror.debug.start_request",
+                device_id=device_id,
+                embed_wid=embed_wid or "None",
+                embed_size=embed_container_size or "None",
+            )
+        )
+
+    def _schedule_popup_mirror_start(self, device_id: str, attempt: int = 0):
+        if not self._mirror or self._shutting_down:
+            return
+        if self._mirror.is_running or self._mirror.state == MirrorState.STARTING:
+            return
+        if not self._mirror_prefers_new_window():
+            return
+        self._start_mirror_for_device(device_id, external_window=True)
+
     def _on_mirror_toggle(self):
         if not self._mirror:
             return
@@ -1238,40 +1593,13 @@ class DashboardPage(QWidget):
             self._mirror.stop()
         else:
             device_id = self._current_device_id()
-            if device_id:
-                embed_wid = None
-                embed_container_size = None
-                if self._mirror_host and self._mirror_container and self._mirror_container.isVisible():
-                    try:
-                        if self._mirror_stack:
-                            self._mirror_stack.setCurrentWidget(self._mirror_host)
-                        self._mirror_host.show()
-                        host_rect = self._mirror_host.contentsRect()
-                        if host_rect.width() > 0 and host_rect.height() > 0:
-                            embed_container_size = (host_rect.width(), host_rect.height())
-                        else:
-                            container_rect = self._mirror_container.contentsRect()
-                            if container_rect.width() > 0 and container_rect.height() > 0:
-                                embed_container_size = (container_rect.width(), container_rect.height())
-                        embed_wid = int(self._mirror_host.winId())
-                    except Exception:
-                        embed_wid = None
-                        embed_container_size = None
-                self._mirror.start(
-                    device_id,
-                    embed_wid=embed_wid,
-                    embed_container_size=embed_container_size,
-                )
-                self._append_mirror_debug_log(
-                    self._t(
-                        "page.dashboard.mirror.debug.start_request",
-                        device_id=device_id,
-                        embed_wid=embed_wid or "None",
-                        embed_size=embed_container_size or "None",
-                    )
-                )
-            else:
+            if not device_id:
                 self._append_log(self._t("page.dashboard.mirror.log.no_device"))
+                return
+            if self._mirror_prefers_new_window():
+                self._start_mirror_for_device(device_id, external_window=True)
+            else:
+                self._start_mirror_for_device(device_id)
 
     # ================================================================
     # 任务状态回调
@@ -1459,6 +1787,7 @@ class DashboardPage(QWidget):
         else:
             self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
 
+        self._update_mirror_aux_buttons()
         if readiness_changed:
             self._schedule_readiness_check(300)
 
@@ -1483,24 +1812,47 @@ class DashboardPage(QWidget):
 
     def _on_mirror_mode_changed(self, mode: MirrorMode):
         self._mirror_embedded = mode == MirrorMode.SCRCPY_EMBEDDED
+        popup = self._mirror_popup_window if self._popup_window_active() else None
+        if popup is not None:
+            self._set_dashboard_mirror_detached(True)
+        elif not self._mirror_prefers_new_window():
+            self._set_dashboard_mirror_detached(False)
+
         if mode == MirrorMode.ADB_SCREENSHOT:
-            if self._mirror_stack and self._mirror_label:
+            if popup is not None:
+                popup.show_label()
+            elif self._mirror_stack and self._mirror_label:
                 self._mirror_stack.setCurrentWidget(self._mirror_label)
         elif mode == MirrorMode.NONE:
-            self._mirror_placeholder.setText(self._t("page.dashboard.mirror.stopped"))
+            stopped_text = self._t("page.dashboard.mirror.stopped")
+            self._mirror_placeholder.setText(stopped_text)
             if self._mirror_stack and self._mirror_placeholder:
                 self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
+            if popup is not None:
+                popup.set_placeholder_text(stopped_text)
+                popup.show_placeholder()
         elif mode == MirrorMode.SCRCPY_EXTERNAL:
-            self._mirror_placeholder.setText(self._t("page.dashboard.mirror.scrcpy_external"))
+            external_text = self._t("page.dashboard.mirror.scrcpy_external")
+            self._mirror_placeholder.setText(external_text)
             if self._mirror_stack and self._mirror_placeholder:
                 self._mirror_stack.setCurrentWidget(self._mirror_placeholder)
+            if popup is not None:
+                popup.set_placeholder_text(external_text)
+                popup.show_placeholder()
         elif mode == MirrorMode.SCRCPY_EMBEDDED:
-            if self._mirror_stack and self._mirror_host:
+            if popup is not None:
+                popup.show_host()
+            elif self._mirror_stack and self._mirror_host:
                 self._mirror_stack.setCurrentWidget(self._mirror_host)
             self._sync_embedded_mirror_geometry()
+        self._update_mirror_aux_buttons()
 
     def _on_mirror_frame(self, pixmap: QPixmap):
         """ADB 截图降级模式下收到帧"""
+        if self._popup_window_active() and self._mirror_prefers_new_window():
+            self._set_dashboard_mirror_detached(True)
+            self._mirror_popup_window.show_frame(pixmap)
+            return
         if self._mirror_stack and self._mirror_label:
             self._mirror_stack.setCurrentWidget(self._mirror_label)
         # MirrorLabel.set_raw_pixmap 内部负责自适应缩放（包括 resizeEvent 时重新缩放）
@@ -1508,6 +1860,67 @@ class DashboardPage(QWidget):
 
     def _on_mirror_error(self, msg: str):
         self._append_log(self._t("page.dashboard.mirror.log.error", msg=msg))
+
+    def _update_mirror_aux_buttons(self):
+        btn = getattr(self, "_btn_mirror_paste_clipboard", None)
+        if btn is None:
+            return
+        current_device_id = self._current_device_id()
+        mirror_mode = self._mirror.mode if self._mirror else MirrorMode.NONE
+        mirror_state = self._mirror.state if self._mirror else MirrorState.IDLE
+        worker_busy = bool(self._mirror_clipboard_worker and self._mirror_clipboard_worker.isRunning())
+        enabled = (
+            bool(current_device_id)
+            and mirror_mode == MirrorMode.SCRCPY_EXTERNAL
+            and mirror_state == MirrorState.RUNNING
+            and not worker_busy
+        )
+        btn.setEnabled(enabled)
+        if worker_busy:
+            btn.setText(self._t("page.dashboard.mirror.btn.pasting_clipboard"))
+        else:
+            btn.setText(self._t("page.dashboard.mirror.btn.paste_clipboard"))
+
+    def _paste_clipboard_to_device_text(self, text: str):
+        device_id = self._current_device_id()
+        if not device_id:
+            self._append_log(self._t("page.dashboard.mirror.log.no_device"))
+            return
+        if self._mirror_clipboard_worker and self._mirror_clipboard_worker.isRunning():
+            return
+        worker = _MirrorClipboardPasteWorker(device_id, text)
+        worker.failed.connect(self._on_mirror_error)
+        worker.succeeded.connect(
+            lambda pasted_text: self._append_log(
+                self._t(
+                    "page.dashboard.mirror.log.clipboard_paste_done",
+                    chars=len(pasted_text),
+                )
+            )
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.finished.connect(self._on_mirror_clipboard_worker_finished)
+        self._mirror_clipboard_worker = worker
+        self._append_log(
+            self._t(
+                "page.dashboard.mirror.log.clipboard_paste_start",
+                chars=len(text),
+            )
+        )
+        self._update_mirror_aux_buttons()
+        worker.start()
+
+    def _on_mirror_clipboard_worker_finished(self):
+        self._mirror_clipboard_worker = None
+        self._update_mirror_aux_buttons()
+
+    def _on_mirror_paste_clipboard(self):
+        clipboard = QApplication.clipboard()
+        text = clipboard.text() if clipboard is not None else ""
+        if not text:
+            self._on_mirror_error(self._t("page.dashboard.mirror.log.clipboard_empty_inline"))
+            return
+        self._paste_clipboard_to_device_text(text)
 
     def _on_mirror_window_created(self, hwnd: int):
         self._last_mirror_geometry_debug = None
@@ -1533,7 +1946,8 @@ class DashboardPage(QWidget):
         return fit_x, fit_y, fit_w, fit_h
 
     def _sync_embedded_mirror_geometry(self):
-        host = self._mirror_host or self._mirror_container
+        host, _container, _label, _popup = self._active_mirror_widgets()
+        host = host or self._mirror_container
         if not (self._mirror and host and self._mirror_embedded):
             return
         if not host.isVisible():
@@ -1611,7 +2025,9 @@ class DashboardPage(QWidget):
         )
 
     def eventFilter(self, watched, event):
-        if watched in (self._mirror_container, self._mirror_host) and event.type() in (QEvent.Resize, QEvent.Show):
+        popup_container = self._mirror_popup_window.container_widget() if self._mirror_popup_window else None
+        popup_host = self._mirror_popup_window.host_widget() if self._mirror_popup_window else None
+        if watched in (self._mirror_container, self._mirror_host, popup_container, popup_host) and event.type() in (QEvent.Resize, QEvent.Show):
             QTimer.singleShot(0, self._sync_embedded_mirror_geometry)
         return super().eventFilter(watched, event)
 
@@ -1682,8 +2098,15 @@ class DashboardPage(QWidget):
             self._schedule_readiness_check(0)
 
     def shutdown(self):
+        self._shutting_down = True
+        self._close_mirror_popup_window(ignore_stop=True)
         if hasattr(self, "_readiness_refresh_timer"):
             self._readiness_refresh_timer.stop()
+        if self._mirror_clipboard_worker:
+            if self._mirror_clipboard_worker.isRunning():
+                self._mirror_clipboard_worker.wait(8000)
+            self._mirror_clipboard_worker.deleteLater()
+            self._mirror_clipboard_worker = None
         if self._readiness_worker:
             if self._readiness_worker.isRunning():
                 self._readiness_worker.request_stop()
@@ -1737,6 +2160,7 @@ class DashboardPage(QWidget):
             ),
             (getattr(self, "_btn_takeover", None), btn_warning(self._theme_tokens)),
             (getattr(self, "_btn_resume_exec", None), btn_primary(self._theme_tokens)),
+            (getattr(self, "_btn_mirror_paste_clipboard", None), btn_subtle(self._theme_tokens, size="compact")),
             (
                 getattr(self, "_btn_mirror_toggle", None),
                 btn_danger(self._theme_tokens, size="compact") if mirror_running else btn_subtle(self._theme_tokens, size="compact"),
@@ -1820,6 +2244,13 @@ class DashboardPage(QWidget):
             self._set_device_status(_t("page.dashboard.device_info.no_selected"), "#8b949e")
         if hasattr(self, "_mirror_panel_group"):
             self._mirror_panel_group.setTitle(_t("page.dashboard.mirror.title"))
+        if hasattr(self, "_mirror_open_in_new_window_check"):
+            self._mirror_open_in_new_window_check.setText(_t("page.dashboard.mirror.open_in_new_window"))
+        if hasattr(self, "_btn_mirror_paste_clipboard"):
+            self._btn_mirror_paste_clipboard.setText(_t("page.dashboard.mirror.btn.paste_clipboard"))
+        if hasattr(self, "_mirror_detached_placeholder"):
+            self._mirror_detached_placeholder.setText(_t("page.dashboard.mirror.detached_placeholder"))
+        self._update_mirror_popup_title()
         if hasattr(self, "_takeover_banner"):
             self._takeover_banner.setText(_t("page.dashboard.takeover.banner"))
         if hasattr(self, "_btn_resume_exec"):
@@ -1827,6 +2258,8 @@ class DashboardPage(QWidget):
         if self._mirror:
             self._on_mirror_state_changed(self._mirror.state)
             self._on_mirror_mode_changed(self._mirror.mode)
+        else:
+            self._update_mirror_aux_buttons()
         if hasattr(self, "_channel_combo"):
             self._populate_channel_combo()
             self._refresh_status_bar()

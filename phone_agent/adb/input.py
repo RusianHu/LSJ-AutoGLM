@@ -5,6 +5,17 @@ import subprocess
 from typing import Optional
 
 
+ADB_KEYBOARD_IME = "com.android.adbkeyboard/.AdbIME"
+
+
+def _format_result_detail(result: subprocess.CompletedProcess) -> str:
+    stdout = (result.stdout or "").strip()
+    stderr = (result.stderr or "").strip()
+    merged = " | ".join(part for part in (stdout, stderr) if part)
+    return merged or "empty"
+
+
+
 def type_text(text: str, device_id: str | None = None) -> None:
     """
     Type text into the currently focused input field using ADB Keyboard.
@@ -20,7 +31,7 @@ def type_text(text: str, device_id: str | None = None) -> None:
     adb_prefix = _get_adb_prefix(device_id)
     encoded_text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
 
-    subprocess.run(
+    result = subprocess.run(
         adb_prefix
         + [
             "shell",
@@ -35,6 +46,11 @@ def type_text(text: str, device_id: str | None = None) -> None:
         capture_output=True,
         text=True,
     )
+    detail = _format_result_detail(result)
+    if result.returncode != 0:
+        raise RuntimeError(f"ADBKeyboard 广播失败(code={result.returncode}): {detail}")
+    if "Broadcast completed" not in detail and "result=" not in detail and text:
+        raise RuntimeError(f"ADBKeyboard 广播结果异常: {detail}")
 
 
 def clear_text(device_id: str | None = None) -> None:
@@ -71,15 +87,38 @@ def detect_and_set_adb_keyboard(device_id: str | None = None) -> str:
         capture_output=True,
         text=True,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"读取默认输入法失败(code={result.returncode}): {_format_result_detail(result)}"
+        )
     current_ime = (result.stdout + result.stderr).strip()
 
     # Switch to ADB Keyboard if not already set
-    if "com.android.adbkeyboard/.AdbIME" not in current_ime:
-        subprocess.run(
-            adb_prefix + ["shell", "ime", "set", "com.android.adbkeyboard/.AdbIME"],
+    if ADB_KEYBOARD_IME not in current_ime:
+        switch_result = subprocess.run(
+            adb_prefix + ["shell", "ime", "set", ADB_KEYBOARD_IME],
             capture_output=True,
             text=True,
         )
+        if switch_result.returncode != 0:
+            raise RuntimeError(
+                "切换到 ADBKeyboard 失败"
+                f"(code={switch_result.returncode}): {_format_result_detail(switch_result)}"
+            )
+
+        verify_result = subprocess.run(
+            adb_prefix + ["shell", "settings", "get", "secure", "default_input_method"],
+            capture_output=True,
+            text=True,
+        )
+        if verify_result.returncode != 0:
+            raise RuntimeError(
+                "切换后校验输入法失败"
+                f"(code={verify_result.returncode}): {_format_result_detail(verify_result)}"
+            )
+        current_after = (verify_result.stdout + verify_result.stderr).strip()
+        if ADB_KEYBOARD_IME not in current_after:
+            raise RuntimeError(f"ADBKeyboard 未生效，当前输入法为: {current_after or 'empty'}")
 
     # Warm up the keyboard
     type_text("", device_id)
@@ -97,9 +136,13 @@ def restore_keyboard(ime: str, device_id: str | None = None) -> None:
     """
     adb_prefix = _get_adb_prefix(device_id)
 
-    subprocess.run(
+    result = subprocess.run(
         adb_prefix + ["shell", "ime", "set", ime], capture_output=True, text=True
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"恢复输入法失败(code={result.returncode}): {_format_result_detail(result)}"
+        )
 
 
 def _get_adb_prefix(device_id: str | None) -> list:

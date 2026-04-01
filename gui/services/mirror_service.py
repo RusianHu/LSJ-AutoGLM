@@ -275,6 +275,106 @@ class _EmbedWindowThread(QThread):
             self.embed_failed.emit(f"窗口嵌入失败: {e}")
 
 
+class _ExternalWindowThread(QThread):
+    """异步等待独立 scrcpy 顶层窗口出现并前置（仅 Windows）。"""
+
+    window_ready = Signal(int)   # HWND
+    window_failed = Signal(str)
+
+    WINDOW_WAIT_TIMEOUT = 10
+
+    def __init__(self, window_title: str, pid: int):
+        super().__init__()
+        self._window_title = window_title.strip()
+        self._pid = int(pid or 0)
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def run(self):
+        if sys.platform != "win32":
+            self.window_failed.emit("非 Windows 平台，跳过独立窗口前置")
+            return
+        try:
+            import ctypes
+            import ctypes.wintypes
+
+            user32 = ctypes.windll.user32
+            hwnd = None
+            deadline = time.time() + self.WINDOW_WAIT_TIMEOUT
+
+            WNDENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+            )
+
+            def enum_callback(h, _):
+                nonlocal hwnd
+                if self._stop_requested:
+                    return False
+                pid = ctypes.wintypes.DWORD()
+                user32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+                if self._pid and pid.value != self._pid:
+                    return True
+                buf = ctypes.create_unicode_buffer(256)
+                user32.GetWindowTextW(h, buf, 256)
+                title = buf.value.strip()
+                if not title:
+                    return True
+                if title == self._window_title or self._window_title in title:
+                    hwnd = h
+                    return False
+                return True
+
+            cb = WNDENUMPROC(enum_callback)
+
+            while not self._stop_requested and hwnd is None and time.time() < deadline:
+                user32.EnumWindows(cb, 0)
+                if hwnd is None:
+                    time.sleep(0.25)
+
+            if self._stop_requested:
+                return
+
+            if not hwnd:
+                self.window_failed.emit(
+                    f"未找到 scrcpy 独立窗口（pid={self._pid}, title={self._window_title}）"
+                )
+                return
+
+            SW_RESTORE = 9
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_SHOWWINDOW = 0x0040
+
+            user32.ShowWindow(hwnd, SW_RESTORE)
+            user32.SetWindowPos(
+                hwnd,
+                HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+            user32.SetWindowPos(
+                hwnd,
+                HWND_NOTOPMOST,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+            )
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+            self.window_ready.emit(hwnd)
+        except Exception as e:
+            self.window_failed.emit(f"独立窗口前置失败: {e}")
+
+
 class MirrorService(QObject):
     """
     镜像服务。
@@ -301,6 +401,7 @@ class MirrorService(QObject):
         self._scrcpy_proc: Optional[subprocess.Popen] = None
         self._screenshot_poller: Optional[_ScreenshotPoller] = None
         self._embed_thread: Optional[_EmbedWindowThread] = None
+        self._external_window_thread: Optional[_ExternalWindowThread] = None
         self._window_hwnd: Optional[int] = None
         self._device_screen_size: Optional[tuple[int, int]] = None
         self._last_resize_request: Optional[tuple[int, int, int, int]] = None
@@ -404,6 +505,46 @@ class MirrorService(QObject):
         if self._mirror_debug_enabled:
             self.error_occurred.emit(f"[调试] {message}")
 
+    def _start_external_window_watch(self, window_title: str, pid: int):
+        if sys.platform != "win32":
+            return
+        if self._external_window_thread:
+            if self._external_window_thread.isRunning():
+                self._external_window_thread.request_stop()
+                self._external_window_thread.wait(2000)
+            self._external_window_thread.deleteLater()
+            self._external_window_thread = None
+        self._external_window_thread = _ExternalWindowThread(window_title, pid)
+        self._external_window_thread.window_ready.connect(self._on_external_window_ready)
+        self._external_window_thread.window_failed.connect(self._on_external_window_failed)
+        self._external_window_thread.start()
+
+    def _on_external_window_ready(self, hwnd: int):
+        self._window_hwnd = hwnd
+        self._emit_debug(f"scrcpy 独立窗口已就绪并前置: hwnd={hwnd}")
+        if self._external_window_thread:
+            self._external_window_thread.deleteLater()
+            self._external_window_thread = None
+
+    def _on_external_window_failed(self, msg: str):
+        self.error_occurred.emit(msg)
+        if self._external_window_thread:
+            self._external_window_thread.deleteLater()
+            self._external_window_thread = None
+        if self._mode != MirrorMode.SCRCPY_EXTERNAL:
+            return
+        if not self._device_id:
+            return
+        if self._scrcpy_proc and self._scrcpy_proc.poll() is None:
+            self.error_occurred.emit("scrcpy 独立窗口未出现，切换到 ADB 截图降级模式...")
+            self._monitor_timer.stop()
+            self._kill_scrcpy()
+            self._window_hwnd = None
+            self._mode = MirrorMode.NONE
+            self.mode_changed.emit(MirrorMode.NONE)
+            self._set_state(MirrorState.ERROR)
+            QTimer.singleShot(300, lambda: self._start_adb_screenshot(self._device_id))
+
     @staticmethod
     def _parse_screen_size_output(output: str) -> Optional[tuple[int, int]]:
         for line in output.splitlines():
@@ -485,10 +626,11 @@ class MirrorService(QObject):
                     max(1, int(device_h * scale)),
                 )
 
+        window_title = f"AutoGLM Mirror - {device_id}"
         args = [
             scrcpy_path,
             "--serial", device_id,
-            "--window-title", f"AutoGLM Mirror - {device_id}",
+            "--window-title", window_title,
             "--stay-awake",
         ]
         if embedded_requested:
@@ -499,10 +641,33 @@ class MirrorService(QObject):
                     "--window-height", str(safe_embed_fit_size[1]),
                     "--max-size", str(max(safe_embed_fit_size)),
                 ]
+        elif sys.platform == "win32":
+            # Windows 独立窗口模式：显式放在可见区域，并尽量与 GUI 进程解耦。
+            # 同时增强文本输入与剪贴板体验：
+            # - --prefer-text：优先文本注入，减少部分输入法/应用场景下按键转发失效
+            # - --legacy-paste：兼容部分设备上的剪贴板粘贴问题
+            # - --shortcut-mod=lctrl,rctrl：允许直接用 Ctrl 触发 scrcpy 快捷键，便于 Ctrl+V 粘贴
+            args += [
+                "--window-x", "120",
+                "--window-y", "120",
+                "--prefer-text",
+                "--legacy-paste",
+                "--shortcut-mod", "lctrl,rctrl",
+            ]
+
+        creationflags = 0
+        if sys.platform == "win32":
+            if embedded_requested:
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            else:
+                creationflags = (
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+                )
 
         self._emit_debug(
             f"scrcpy 启动参数: embedded_requested={embedded_requested}, "
-            f"args={subprocess.list2cmdline(args)}"
+            f"creationflags={creationflags}, args={subprocess.list2cmdline(args)}"
         )
         if safe_embed_fit_size:
             self._emit_debug(
@@ -522,7 +687,7 @@ class MirrorService(QObject):
                 args,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                creationflags=creationflags,
             )
         except Exception as e:
             self.error_occurred.emit(f"scrcpy 启动失败: {e}")
@@ -542,6 +707,11 @@ class MirrorService(QObject):
             self._embed_thread.embed_done.connect(self._on_embed_done)
             self._embed_thread.embed_failed.connect(self._on_embed_failed)
             self._embed_thread.start()
+        elif sys.platform == "win32":
+            self._emit_debug(
+                f"等待 scrcpy 独立窗口出现并前置: pid={self._scrcpy_proc.pid}, title={window_title}"
+            )
+            self._start_external_window_watch(window_title, self._scrcpy_proc.pid)
 
         # 启动进程监控
         self._monitor_timer.start(2000)
@@ -605,6 +775,14 @@ class MirrorService(QObject):
             self._embed_thread.deleteLater()
             self._embed_thread = None
 
+        # 停止独立窗口等待线程
+        if self._external_window_thread:
+            if self._external_window_thread.isRunning():
+                self._external_window_thread.request_stop()
+                self._external_window_thread.wait(2000)
+            self._external_window_thread.deleteLater()
+            self._external_window_thread = None
+
         # 三阶段终止 scrcpy
         self._kill_scrcpy()
 
@@ -649,8 +827,19 @@ class MirrorService(QObject):
         if self._scrcpy_proc:
             ret = self._scrcpy_proc.poll()
             if ret is not None:
+                last_mode = self._mode
                 self._scrcpy_proc = None
                 self._monitor_timer.stop()
+
+                # 外部独立窗口被用户手动关闭时，scrcpy 常以 code=0 正常退出。
+                # 这属于正常停止，不应误判为错误并自动降级到 ADB 截图模式。
+                if last_mode == MirrorMode.SCRCPY_EXTERNAL and ret == 0:
+                    self._window_hwnd = None
+                    self._mode = MirrorMode.NONE
+                    self.mode_changed.emit(MirrorMode.NONE)
+                    self._set_state(MirrorState.STOPPED)
+                    return
+
                 self.error_occurred.emit(f"scrcpy 进程已退出（code={ret}）")
                 self._set_state(MirrorState.ERROR)
                 # 降级到 ADB 截图模式

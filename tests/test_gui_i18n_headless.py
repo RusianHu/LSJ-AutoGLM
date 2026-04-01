@@ -17,6 +17,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -25,6 +26,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 # 确保在仓库根目录下运行
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from gui.i18n.manager import I18nManager
@@ -34,7 +37,7 @@ from gui.pages.dashboard_page import DashboardPage
 from gui.pages.history_page import HistoryPage
 from gui.pages.settings_page import SettingsPage
 from gui.services.config_service import ConfigService
-from gui.services.mirror_service import MirrorMode, MirrorState
+from gui.services.mirror_service import MirrorMode, MirrorService, MirrorState
 from gui.services.task_service import TaskService, TaskState
 
 
@@ -209,9 +212,52 @@ class DummyMirror:
         self.mode = MirrorMode.NONE
         self.is_running = False
         self.device_screen_size = None
+        self.stop_calls = 0
+        self.start_calls = []
+
+    def start(self, device_id, embed_wid=None, embed_container_size=None):
+        self.start_calls.append(
+            {
+                "device_id": device_id,
+                "embed_wid": embed_wid,
+                "embed_container_size": embed_container_size,
+            }
+        )
+        self.is_running = True
+        self.state = MirrorState.RUNNING
+        self.mode = MirrorMode.ADB_SCREENSHOT
+        self.state_changed.emit(self.state)
+        self.mode_changed.emit(self.mode)
+
+    def stop(self):
+        self.stop_calls += 1
+        self.is_running = False
+        self.mode = MirrorMode.NONE
+        self.state = MirrorState.STOPPED
+        self.mode_changed.emit(self.mode)
+        self.state_changed.emit(self.state)
 
     def shutdown(self):
         return None
+
+
+class DummyMirrorWithStarting(DummyMirror):
+    def start(self, device_id, embed_wid=None, embed_container_size=None):
+        self.start_calls.append(
+            {
+                "device_id": device_id,
+                "embed_wid": embed_wid,
+                "embed_container_size": embed_container_size,
+            }
+        )
+        self.is_running = False
+        self.state = MirrorState.STARTING
+        self.state_changed.emit(self.state)
+        self.is_running = True
+        self.mode = MirrorMode.ADB_SCREENSHOT
+        self.mode_changed.emit(self.mode)
+        self.state = MirrorState.RUNNING
+        self.state_changed.emit(self.state)
 
 
 class DummyHistory:
@@ -388,6 +434,232 @@ class TestHeadlessGuiI18n:
         finally:
             dashboard.close()
             history_page.close()
+
+    def test_dashboard_new_window_pref_uses_external_scrcpy_request(self, app):
+        i18n = I18nManager("cn")
+        config = DummyConfig("cn")
+        config.values["OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW"] = "true"
+        task = DummyTask()
+        device = DummyDevice()
+        mirror = DummyMirror()
+        history = DummyHistory()
+        services = {
+            "config": config,
+            "task": task,
+            "device": device,
+            "mirror": mirror,
+            "history": history,
+            "i18n": i18n,
+            "navigate_to_page": lambda _key: None,
+        }
+
+        dashboard = DashboardPage(services)
+        adapter = PageI18nAdapter(i18n)
+        adapter.register_page(dashboard)
+        adapter.push_current()
+
+        try:
+            device.selected_device = SimpleNamespace(device_id="device-1")
+            dashboard._on_mirror_toggle()
+            app.processEvents()
+
+            assert mirror.start_calls
+            assert mirror.start_calls[0]["embed_wid"] is None
+            assert dashboard._mirror_popup_window is None
+            assert dashboard._mirror_view_stack.currentWidget() is dashboard._mirror_container
+            assert dashboard._mirror_open_in_new_window_check.isChecked() is True
+            assert config.values["OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW"] == "true"
+
+            dashboard._mirror.stop()
+            app.processEvents()
+
+            dashboard._mirror_open_in_new_window_check.setChecked(False)
+            assert config.values["OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW"] == "false"
+
+            dashboard._on_mirror_toggle()
+            app.processEvents()
+            assert len(mirror.start_calls) == 2
+            assert dashboard._mirror_open_in_new_window_check.isChecked() is False
+        finally:
+            dashboard.close()
+
+    def test_dashboard_new_window_pref_survives_starting_state(self, app):
+        i18n = I18nManager("cn")
+        config = DummyConfig("cn")
+        config.values["OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW"] = "true"
+        task = DummyTask()
+        device = DummyDevice()
+        mirror = DummyMirrorWithStarting()
+        history = DummyHistory()
+        services = {
+            "config": config,
+            "task": task,
+            "device": device,
+            "mirror": mirror,
+            "history": history,
+            "i18n": i18n,
+            "navigate_to_page": lambda _key: None,
+        }
+
+        dashboard = DashboardPage(services)
+        adapter = PageI18nAdapter(i18n)
+        adapter.register_page(dashboard)
+        adapter.push_current()
+
+        try:
+            device.selected_device = SimpleNamespace(device_id="device-1")
+            dashboard._on_mirror_toggle()
+            app.processEvents()
+
+            assert mirror.start_calls
+            assert mirror.start_calls[0]["embed_wid"] is None
+            assert dashboard._mirror_popup_window is None
+            assert mirror.state == MirrorState.RUNNING
+        finally:
+            dashboard.close()
+
+    def test_mirror_label_supports_text_input_and_paste(self, app, monkeypatch):
+        from gui.widgets.mirror_label import MirrorLabel
+
+        label = MirrorLabel()
+        label.set_device_id("device-1")
+        typed = []
+        keyevents = []
+
+        monkeypatch.setattr(label, "_adb_type_text", lambda text: typed.append(text))
+        monkeypatch.setattr(label, "_adb_keyevent", lambda code: keyevents.append(code))
+
+        app.clipboard().setText("来自剪贴板")
+        label.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_A, Qt.KeyboardModifier.NoModifier, "a"))
+        label.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_V, Qt.KeyboardModifier.ControlModifier, "v"))
+        label.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key_Backspace, Qt.KeyboardModifier.NoModifier))
+
+        assert typed == ["a", "来自剪贴板"]
+        assert keyevents == [67]
+
+    def test_dashboard_external_mirror_paste_button_injects_clipboard_text(self, app, monkeypatch):
+        i18n = I18nManager("cn")
+        config = DummyConfig("cn")
+        config.values["OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW"] = "true"
+        task = DummyTask()
+        device = DummyDevice()
+        mirror = DummyMirror()
+        history = DummyHistory()
+        services = {
+            "config": config,
+            "task": task,
+            "device": device,
+            "mirror": mirror,
+            "history": history,
+            "i18n": i18n,
+            "navigate_to_page": lambda _key: None,
+        }
+
+        dashboard = DashboardPage(services)
+        adapter = PageI18nAdapter(i18n)
+        adapter.register_page(dashboard)
+        adapter.push_current()
+
+        injected = []
+        monkeypatch.setattr(dashboard, "_paste_clipboard_to_device_text", lambda text: injected.append(text))
+
+        try:
+            device.selected_device = SimpleNamespace(
+                device_id="device-1",
+                display_name="device-1",
+                connection_type="wifi",
+                adb_keyboard_status="已启用",
+                adb_keyboard_enabled=True,
+                status=SimpleNamespace(value="connected"),
+            )
+            dashboard._on_device_selected(device.selected_device)
+            mirror.state = MirrorState.RUNNING
+            mirror.mode = MirrorMode.SCRCPY_EXTERNAL
+            mirror.state_changed.emit(mirror.state)
+            mirror.mode_changed.emit(mirror.mode)
+            app.processEvents()
+
+            assert dashboard._btn_mirror_paste_clipboard.isEnabled() is True
+            app.clipboard().setText("外部窗口剪贴板")
+            dashboard._btn_mirror_paste_clipboard.click()
+
+            assert injected == ["外部窗口剪贴板"]
+        finally:
+            dashboard.close()
+
+    def test_mirror_service_external_scrcpy_uses_visible_window_flags(self, monkeypatch):
+        service = MirrorService()
+        captured = {}
+
+        monkeypatch.setattr(service, "_probe_device_screen_size", lambda _device_id: (1080, 2400))
+
+        class DummyProc:
+            pid = 4321
+
+            def poll(self):
+                return None
+
+        def fake_popen(args, stdout=None, stderr=None, creationflags=0):
+            captured["args"] = list(args)
+            captured["stdout"] = stdout
+            captured["stderr"] = stderr
+            captured["creationflags"] = creationflags
+            return DummyProc()
+
+        mirror_service_module = sys.modules["gui.services.mirror_service"]
+        start_mock = Mock()
+        external_watch_mock = Mock()
+        monkeypatch.setattr(service._monitor_timer, "start", start_mock)
+        monkeypatch.setattr(service, "_start_external_window_watch", external_watch_mock)
+        monkeypatch.setattr(mirror_service_module.sys, "platform", "win32")
+        monkeypatch.setattr(mirror_service_module.subprocess, "Popen", fake_popen)
+        monkeypatch.setattr(mirror_service_module.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200, raising=False)
+        monkeypatch.setattr(mirror_service_module.subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0x01000000, raising=False)
+
+        try:
+            service._start_scrcpy("scrcpy.exe", "device-1", embed_wid=None)
+
+            assert captured["creationflags"] == 0x01000200
+            assert "--window-x" in captured["args"]
+            assert "--window-y" in captured["args"]
+            assert "--prefer-text" in captured["args"]
+            assert "--legacy-paste" in captured["args"]
+            assert "--shortcut-mod" in captured["args"]
+            shortcut_mod_index = captured["args"].index("--shortcut-mod")
+            assert captured["args"][shortcut_mod_index + 1] == "lctrl,rctrl"
+            assert service.mode == MirrorMode.SCRCPY_EXTERNAL
+            assert service.state == MirrorState.RUNNING
+            external_watch_mock.assert_called_once_with("AutoGLM Mirror - device-1", 4321)
+            start_mock.assert_called_once_with(2000)
+        finally:
+            service.stop()
+
+    def test_mirror_service_external_process_exit_code_zero_is_treated_as_stopped(self, monkeypatch):
+        service = MirrorService()
+        error_messages = []
+        mode_events = []
+        state_events = []
+
+        class DummyProc:
+            def poll(self):
+                return 0
+
+        service.error_occurred.connect(error_messages.append)
+        service.mode_changed.connect(mode_events.append)
+        service.state_changed.connect(state_events.append)
+        monkeypatch.setattr(service._monitor_timer, "stop", Mock())
+        service._scrcpy_proc = DummyProc()
+        service._device_id = "device-1"
+        service._mode = MirrorMode.SCRCPY_EXTERNAL
+        service._state = MirrorState.RUNNING
+
+        service._monitor_process()
+
+        assert service.mode == MirrorMode.NONE
+        assert service.state == MirrorState.STOPPED
+        assert error_messages == []
+        assert MirrorMode.NONE in mode_events
+        assert MirrorState.STOPPED in state_events
 
     def test_settings_page_action_policy_retranslates_and_filters_platform_actions(self, app):
         i18n = I18nManager("cn")

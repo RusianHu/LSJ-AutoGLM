@@ -88,6 +88,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": "3",
         "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": "3",
         "OPEN_AUTOGLM_THEME": "system",
+        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": "false",
     }
 
     # 敏感字段（显示时遮罩）
@@ -141,6 +142,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_ENABLED_ACTIONS": {"label": "运行时启用动作集合", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": {"label": "AI 可见动作集合", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_THEME": {"label": "界面主题", "sensitive": False, "editable": False},
+        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": {"label": "镜像新窗口模式", "sensitive": False, "editable": False, "boolean": True},
     }
 
     # 兼容第一轮 GUI 中已写入/读取过的旧键名
