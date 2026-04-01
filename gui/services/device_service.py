@@ -119,6 +119,48 @@ def _find_connect_endpoints(ip: str = "") -> List[str]:
     return endpoints
 
 
+def _normalize_connect_address(address: str) -> str:
+    normalized = (address or "").strip()
+    if not normalized:
+        return ""
+    if ":" not in normalized:
+        return f"{normalized}:5555"
+    return normalized
+
+
+
+def _is_reconnectable_wifi_address(address: str) -> bool:
+    normalized = _normalize_connect_address(address)
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if (
+        "._adb-tls-connect._tcp" in lowered
+        or "._adb-tls-pairing._tcp" in lowered
+    ):
+        return False
+    host, _, port = normalized.rpartition(":")
+    return bool(host and port.isdigit())
+
+
+
+def _run_adb_connect(address: str, timeout: int = 15) -> Tuple[bool, str]:
+    normalized = _normalize_connect_address(address)
+    if not normalized:
+        return False, "设备地址不能为空"
+    result = subprocess.run(
+        ["adb", "connect", normalized],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    output = (result.stdout or "").strip() or (result.stderr or "").strip()
+    lowered = output.lower()
+    success = result.returncode == 0 and "connected" in lowered
+    return success, output or "无输出"
+
+
+
 def _run_adb_shell(
     device_id: str,
     args: List[str],
@@ -213,10 +255,11 @@ class _RefreshWorker(QThread):
     result_ready = Signal(list)   # List[DeviceInfo]
     adb_error = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, reconnect_address: str = "", parent=None):
         super().__init__(parent)
         self._stop_requested = False
         self._proc: Optional[subprocess.Popen] = None
+        self._reconnect_address = _normalize_connect_address(reconnect_address)
 
     def request_stop(self):
         self._stop_requested = True
@@ -238,6 +281,21 @@ class _RefreshWorker(QThread):
             devices = self._parse(result.stdout)
             if self._should_stop():
                 return
+
+            if self._reconnect_address and not self._has_connected_device(devices, self._reconnect_address):
+                self._try_reconnect(self._reconnect_address)
+                if self._should_stop():
+                    return
+                result = self._run_adb_devices(timeout=10)
+                if self._should_stop():
+                    return
+                if result.returncode != 0:
+                    self.adb_error.emit(f"adb devices 失败: {result.stderr}")
+                    return
+                devices = self._parse(result.stdout)
+                if self._should_stop():
+                    return
+
             self.result_ready.emit(devices)
         except InterruptedError:
             return
@@ -248,6 +306,22 @@ class _RefreshWorker(QThread):
                 self.adb_error.emit(f"设备刷新异常: {e}")
         finally:
             self._proc = None
+
+    @staticmethod
+    def _has_connected_device(devices: List[DeviceInfo], device_id: str) -> bool:
+        normalized = _normalize_connect_address(device_id)
+        return any(
+            d.device_id == normalized and d.status == DeviceStatus.CONNECTED
+            for d in devices
+        )
+
+    def _try_reconnect(self, address: str) -> None:
+        try:
+            _run_adb_connect(address, timeout=8)
+        except FileNotFoundError:
+            raise
+        except Exception:
+            pass
 
     def _run_adb_devices(self, timeout: int = 10) -> subprocess.CompletedProcess:
         self._proc = subprocess.Popen(
@@ -373,15 +447,19 @@ class DeviceService(QObject):
     error_occurred = Signal(str)
 
     POLL_INTERVAL_MS = 5000
+    AUTO_RECONNECT_COOLDOWN_SEC = 15.0
 
-    def __init__(self, parent=None):
+    def __init__(self, config_service=None, parent=None):
         super().__init__(parent)
+        self._config = config_service
         self._adb_path: str = "adb"
         self._devices: List[DeviceInfo] = []
         self._selected_device: Optional[DeviceInfo] = None
         self._adb_available: bool = False
         self._worker: Optional[_RefreshWorker] = None
         self._stopping: bool = False
+        self._last_auto_reconnect_address: str = ""
+        self._last_auto_reconnect_at: float = 0.0
 
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self.refresh)
@@ -436,6 +514,52 @@ class DeviceService(QObject):
     def adb_available(self) -> bool:
         return self._adb_available
 
+    def _remember_connected_address(self, address: str):
+        normalized = _normalize_connect_address(address)
+        if not self._config or not _is_reconnectable_wifi_address(normalized):
+            return
+        current = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+        if current == normalized:
+            return
+        try:
+            self._config.set("OPEN_AUTOGLM_DEVICE_ID", normalized)
+        except Exception as e:
+            self.error_occurred.emit(f"保存设备记忆失败: {e}")
+
+    def _clear_remembered_address(self, address: str):
+        normalized = _normalize_connect_address(address)
+        if not self._config or not _is_reconnectable_wifi_address(normalized):
+            return
+        current = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+        if current != normalized:
+            return
+        try:
+            self._config.set("OPEN_AUTOGLM_DEVICE_ID", "")
+        except Exception as e:
+            self.error_occurred.emit(f"清除设备记忆失败: {e}")
+
+    def _preferred_reconnect_address(self) -> str:
+        if not self._config:
+            return ""
+        configured = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+        if not _is_reconnectable_wifi_address(configured):
+            return ""
+        normalized = _normalize_connect_address(configured)
+        if any(
+            d.device_id == normalized and d.status == DeviceStatus.CONNECTED
+            for d in self._devices
+        ):
+            return ""
+        now = time.monotonic()
+        if (
+            self._last_auto_reconnect_address == normalized
+            and now - self._last_auto_reconnect_at < self.AUTO_RECONNECT_COOLDOWN_SEC
+        ):
+            return ""
+        self._last_auto_reconnect_address = normalized
+        self._last_auto_reconnect_at = now
+        return normalized
+
     # ---------- 异步设备枚举 ----------
 
     def refresh(self):
@@ -451,7 +575,8 @@ class DeviceService(QObject):
         if self._worker and self._worker.isRunning():
             return
 
-        self._worker = _RefreshWorker()
+        reconnect_address = self._preferred_reconnect_address()
+        self._worker = _RefreshWorker(reconnect_address=reconnect_address)
         self._worker.result_ready.connect(self._on_refresh_done)
         self._worker.finished.connect(self._cleanup_worker)
         self._worker.adb_error.connect(self._on_refresh_error)
@@ -535,16 +660,11 @@ class DeviceService(QObject):
 
     def connect_device(self, address: str) -> Tuple[bool, str]:
         """无线连接设备"""
-        if ":" not in address:
-            address = f"{address}:5555"
+        normalized = _normalize_connect_address(address)
         try:
-            r = subprocess.run(
-                ["adb", "connect", address],
-                capture_output=True, text=True, timeout=15
-            )
-            success = "connected" in r.stdout.lower()
-            msg = r.stdout.strip() or r.stderr.strip()
+            success, msg = _run_adb_connect(normalized, timeout=15)
             if success:
+                self._remember_connected_address(normalized)
                 self.refresh()
             return success, msg
         except Exception as e:
@@ -552,12 +672,15 @@ class DeviceService(QObject):
 
     def disconnect_device(self, device_id: str) -> Tuple[bool, str]:
         """断开指定设备"""
+        target = _normalize_connect_address(device_id) if _is_reconnectable_wifi_address(device_id) else device_id
         try:
             r = subprocess.run(
-                ["adb", "disconnect", device_id],
+                ["adb", "disconnect", target],
                 capture_output=True, text=True, timeout=10
             )
             msg = r.stdout.strip() or r.stderr.strip()
+            if r.returncode == 0:
+                self._clear_remembered_address(target)
             self.refresh()
             return r.returncode == 0, msg
         except Exception as e:

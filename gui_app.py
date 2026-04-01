@@ -89,7 +89,7 @@ def main():
     config  = ConfigService()
     history = HistoryService()
     mirror  = MirrorService()
-    device  = DeviceService()
+    device  = DeviceService(config_service=config)
     task    = TaskService(config_service=config, history_service=history)
 
     services = {
