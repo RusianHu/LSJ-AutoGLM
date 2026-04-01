@@ -8,7 +8,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="phone-agent",
-    version="1.0.2",
+    version="1.0.3",
     author="Zhipu AI",
     author_email="",
     description="AI-powered phone automation framework",
