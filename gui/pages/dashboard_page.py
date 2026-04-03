@@ -372,6 +372,7 @@ class DashboardPage(QWidget):
         layout.setSpacing(8)
 
         layout.addWidget(self._build_toolbar())
+        layout.addWidget(self._build_instruction_bar())
         layout.addWidget(self._build_status_bar())
         layout.addWidget(self._build_readiness_bar())
         return panel
@@ -602,6 +603,70 @@ class DashboardPage(QWidget):
         layout.addWidget(self._btn_takeover)
 
         self._sync_toolbar_action_button_widths()
+        return bar
+
+    def _build_instruction_bar(self) -> QWidget:
+        """构建运行中追加指令栏（位于工具栏下方、状态条上方）。"""
+        bar = QFrame()
+        self._instruction_bar = bar
+        bar.setObjectName("DashboardInstructionBar")
+
+        # 使用垂直布局：上行（标题+状态+输入框+按钮），下行（说明文字）
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setSpacing(6)
+
+        # 上行：标题 + 状态 + 输入框 + 按钮
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        # 标题标签
+        title_lbl = QLabel(self._t("page.dashboard.instruction.card.title"))
+        title_lbl.setObjectName("DashboardInstructionBarTitle")
+        self._instruction_bar_title_lbl = title_lbl
+        row.addWidget(title_lbl)
+
+        # 状态指示器
+        status_chip = QLabel()
+        status_chip.setObjectName("DashboardInstructionBarStatusChip")
+        self._instruction_status_chip = status_chip
+        row.addWidget(status_chip)
+
+        # 指令输入框
+        self._instruction_input = QLineEdit()
+        self._instruction_input.setPlaceholderText(
+            self._t("page.dashboard.instruction.input.placeholder")
+        )
+        self._instruction_input.setObjectName("DashboardInstructionInput")
+        self._instruction_input.setFixedHeight(32)
+        self._instruction_input.returnPressed.connect(self._on_send_instruction)
+        row.addWidget(self._instruction_input, 1)
+
+        # 发送按钮
+        self._btn_send_instruction = QPushButton(self._t("page.dashboard.instruction.btn.send"))
+        self._btn_send_instruction.setProperty("variant", "primary")
+        self._btn_send_instruction.setFixedHeight(32)
+        self._btn_send_instruction.clicked.connect(self._on_send_instruction)
+        row.addWidget(self._btn_send_instruction)
+
+        # 清空按钮
+        self._btn_clear_instruction = QPushButton(self._t("page.dashboard.instruction.btn.clear"))
+        self._btn_clear_instruction.setProperty("variant", "subtle")
+        self._btn_clear_instruction.setFixedHeight(32)
+        self._btn_clear_instruction.clicked.connect(self._on_clear_instruction)
+        row.addWidget(self._btn_clear_instruction)
+
+        outer.addLayout(row)
+
+        # 下行：说明文字
+        self._instruction_hint_lbl = QLabel(self._t("page.dashboard.instruction.hint"))
+        self._instruction_hint_lbl.setObjectName("DashboardInstructionBarHint")
+        self._instruction_hint_lbl.setWordWrap(True)
+        outer.addWidget(self._instruction_hint_lbl)
+
+        # 初始状态更新
+        self._update_instruction_card_state()
+
         return bar
 
     # ----------------------------------------------------------------
@@ -897,59 +962,33 @@ class DashboardPage(QWidget):
         # 原始日志 Tab
         self._log_view = QPlainTextEdit()
         self._log_view.setReadOnly(True)
-        self._log_view.setStyleSheet("""
-            QPlainTextEdit {
-                background:#0a0e17; color:#c9d1d9;
-                border:none; border-radius:4px;
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size:12px;
-                padding:8px;
-            }
-        """)
+        self._log_view.setObjectName("DashboardLogView")
         self._log_view.setMaximumBlockCount(5000)
         tabs.addTab(self._log_view, self._t("page.dashboard.log.tab.log"))
 
         # 事件时间线 Tab
         self._event_list = QListWidget()
-        self._event_list.setStyleSheet("""
-            QListWidget {
-                background:#0a0e17; border:none; border-radius:4px;
-                color:#c9d1d9; font-size:12px; padding:4px;
-            }
-            QListWidget::item {
-                padding:4px 8px;
-                border-bottom:1px solid #161b22;
-            }
-            QListWidget::item:selected { background:#264f78; }
-        """)
+        self._event_list.setObjectName("DashboardEventList")
         tabs.addTab(self._event_list, self._t("page.dashboard.log.tab.events"))
 
         layout.addWidget(tabs, 1)
 
-        # 运行中追加指令卡片（位于结果摘要上方）
-        self._instruction_card = self._build_instruction_card()
-        layout.addWidget(self._instruction_card)
-
         # 底部结果摘要区
         self._result_lbl = QLabel(self._t("page.dashboard.log.empty_result"))
+        self._result_lbl.setObjectName("DashboardResultSummary")
         self._result_lbl.setWordWrap(True)
-        self._result_lbl.setStyleSheet("""
-            background:#161b22; border:1px solid #21262d;
-            border-radius:4px; padding:8px; font-size:12px; color:#8b949e;
-            margin-top:6px;
-        """)
         self._result_lbl.setMinimumHeight(40)
         layout.addWidget(self._result_lbl)
 
         return panel
 
     # ----------------------------------------------------------------
-    # 运行中追加指令卡片回调
+    # 运行中追加指令栏回调
     # ----------------------------------------------------------------
 
     def _on_send_instruction(self):
         """发送运行中追加指令到 TaskService inbox。"""
-        text = self._instruction_input.toPlainText().strip()
+        text = self._instruction_input.text().strip()
         if not text:
             return
 
@@ -971,85 +1010,8 @@ class DashboardPage(QWidget):
                 self._t("page.dashboard.instruction.status.ready")
             )
 
-    # ----------------------------------------------------------------
-    # 运行中追加指令卡片
-    # ----------------------------------------------------------------
-
-    def _build_instruction_card(self) -> QWidget:
-        """构建运行中追加指令输入卡片（位于日志区底部、结果摘要上方）。"""
-        card = QFrame()
-        card.setObjectName("DashboardInstructionCard")
-        outer = QVBoxLayout(card)
-        outer.setContentsMargins(12, 12, 12, 12)
-        outer.setSpacing(8)
-
-        # 标题行
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
-
-        title_lbl = QLabel(self._t("page.dashboard.instruction.card.title"))
-        title_lbl.setObjectName("DashboardInstructionCardTitle")
-        title_lbl.setStyleSheet("font-size:13px; font-weight:700;")
-        self._instruction_card_title_lbl = title_lbl
-
-        status_chip = QLabel()
-        status_chip.setObjectName("DashboardInstructionStatusChip")
-        self._instruction_status_chip = status_chip
-
-        title_row.addWidget(title_lbl)
-        title_row.addStretch(1)
-        title_row.addWidget(status_chip)
-
-        outer.addLayout(title_row)
-
-        # 输入区
-        self._instruction_input = QPlainTextEdit()
-        self._instruction_input.setPlaceholderText(
-            self._t("page.dashboard.instruction.input.placeholder")
-        )
-        self._instruction_input.setMaximumHeight(120)
-        self._instruction_input.setMinimumHeight(60)
-        self._instruction_input.setObjectName("DashboardInstructionInput")
-
-        outer.addWidget(self._instruction_input)
-
-        # 按钮行
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-
-        self._btn_send_instruction = QPushButton(self._t("page.dashboard.instruction.btn.send"))
-        self._btn_send_instruction.setProperty("variant", "primary")
-        self._btn_send_instruction.clicked.connect(self._on_send_instruction)
-        btn_row.addWidget(self._btn_send_instruction)
-
-        self._btn_clear_instruction = QPushButton(self._t("page.dashboard.instruction.btn.clear"))
-        self._btn_clear_instruction.setProperty("variant", "subtle")
-        self._btn_clear_instruction.clicked.connect(self._on_clear_instruction)
-        btn_row.addWidget(self._btn_clear_instruction)
-
-        btn_row.addStretch(1)
-
-        # 说明文本
-        hint_lbl = QLabel(self._t("page.dashboard.instruction.hint"))
-        hint_lbl.setObjectName("DashboardInstructionHint")
-        hint_lbl.setWordWrap(True)
-        hint_lbl.setStyleSheet("font-size:11px; color:#8b949e;")
-        self._instruction_hint_lbl = hint_lbl
-
-        btn_hint_col = QVBoxLayout()
-        btn_hint_col.setSpacing(4)
-        btn_hint_col.addLayout(btn_row)
-        btn_hint_col.addWidget(hint_lbl)
-
-        outer.addLayout(btn_hint_col)
-
-        # 初始状态更新
-        self._update_instruction_card_state()
-
-        return card
-
     def _update_instruction_card_state(self):
-        """更新指令卡片状态（启用/禁用、状态文字）。"""
+        """更新指令栏状态（启用/禁用、状态文字、主题样式）。"""
         if not hasattr(self, "_btn_send_instruction"):
             return
 
@@ -1063,31 +1025,78 @@ class DashboardPage(QWidget):
         self._btn_clear_instruction.setEnabled(can_send)
         self._instruction_input.setEnabled(can_send)
 
+        v = self._theme_vars or {}
         if not can_send:
             if task is None or task.state == TaskState.IDLE:
                 status_text = self._t("page.dashboard.instruction.status.idle")
-                status_color = "#8b949e"
             else:
                 status_text = self._t("page.dashboard.instruction.status.completed")
-                status_color = "#8b949e"
+            status_color = v.get("text_muted", "#8b949e")
             self._instruction_status_chip.setText(status_text)
             self._instruction_status_chip.setStyleSheet(f"color:{status_color};")
             self._instruction_input.setPlaceholderText(
                 self._t("page.dashboard.instruction.input.placeholder_disabled")
             )
-            self._instruction_input.setStyleSheet(
-                f"background:#161b22; color:#484f58; border:1px solid #30363d; border-radius:6px;"
-            )
         else:
             status_text = self._t("page.dashboard.instruction.status.ready")
-            status_color = "#3fb950"
+            status_color = v.get("success", "#3fb950")
             self._instruction_status_chip.setText(status_text)
             self._instruction_status_chip.setStyleSheet(f"color:{status_color};")
             self._instruction_input.setPlaceholderText(
                 self._t("page.dashboard.instruction.input.placeholder")
             )
+
+        # 应用主题样式
+        self._apply_instruction_bar_tokens()
+
+    def _apply_instruction_bar_tokens(self):
+        """应用主题 tokens 到指令栏各组件。"""
+        if not hasattr(self, "_instruction_bar"):
+            return
+        v = self._theme_vars or {}
+
+        # 指令栏外壳
+        if hasattr(self, "_instruction_bar"):
+            self._instruction_bar.setStyleSheet(
+                f"background:{v.get('bg_elevated', '#f7f9fc')}; "
+                f"border:1px solid {v.get('border', '#d5deea')}; "
+                f"border-radius:12px;"
+            )
+
+        # 标题文字
+        if hasattr(self, "_instruction_bar_title_lbl"):
+            self._instruction_bar_title_lbl.setStyleSheet(
+                f"color:{v.get('text_primary', '#18212f')}; font-size:12px; font-weight:600;"
+            )
+
+        # 输入框
+        if hasattr(self, "_instruction_input"):
+            task = self._task
+            can_send = (
+                task is not None
+                and task.runtime_inbox_path is not None
+                and task.state in {TaskState.RUNNING, TaskState.PAUSED}
+            )
+            if can_send:
+                bg = v.get('input_bg', '#ffffff')
+                text = v.get('input_text', '#18212f')
+                border = v.get('input_border', '#d5deea')
+                placeholder = v.get('input_placeholder', '#7b8aa0')
+            else:
+                bg = v.get('input_disabled_bg', '#eef3f9')
+                text = v.get('text_muted', '#7b8aa0')
+                border = v.get('border', '#d5deea')
+                placeholder = v.get('input_placeholder', '#7b8aa0')
             self._instruction_input.setStyleSheet(
-                f"background:#0a0e17; color:#c9d1d9; border:1px solid #30363d; border-radius:6px;"
+                f"background:{bg}; color:{text}; "
+                f"border:1px solid {border}; border-radius:8px; "
+                f"padding:0 12px; font-size:13px; min-height:32px;"
+            )
+
+        # 说明文字
+        if hasattr(self, "_instruction_hint_lbl"):
+            self._instruction_hint_lbl.setStyleSheet(
+                f"color:{v.get('text_secondary', '#526273')}; font-size:11px;"
             )
 
     def _format_status_chip(self, key: str, value: str, color: str) -> str:
@@ -1331,32 +1340,8 @@ class DashboardPage(QWidget):
                 f"font-size:12px; border:1px solid {v.get('warning_border', '#6e4800')}; "
                 f"border-radius:12px; padding:10px 12px;"
             )
-        # 运行中追加指令卡片样式
-        if hasattr(self, "_instruction_card"):
-            self._instruction_card.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#121924')}; border:1px solid {v.get('border', '#30363d')}; "
-                f"border-radius:12px; padding:12px;"
-            )
-        if hasattr(self, "_instruction_status_chip"):
-            self._instruction_status_chip.setStyleSheet(f"color:{v.get('text_secondary', '#8b949e')};")
-        if hasattr(self, "_instruction_input"):
-            self._instruction_input.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#121924')}; color:{v.get('text_primary', '#c9d1d9')}; "
-                f"border:1px solid {v.get('border', '#30363d')}; border-radius:6px; "
-                f"padding:8px; font-size:13px;"
-            )
-        if hasattr(self, "_instruction_card_title_lbl"):
-            title_obj = getattr(self, "_instruction_card_title_lbl", None)
-            if title_obj:
-                title_obj.setStyleSheet(
-                    f"color:{v.get('text_primary', '#c9d1d9')}; font-size:13px; font-weight:700;"
-                )
-        if hasattr(self, "_instruction_hint_lbl"):
-            hint_obj = getattr(self, "_instruction_hint_lbl", None)
-            if hint_obj:
-                hint_obj.setStyleSheet(
-                    f"color:{v.get('text_secondary', '#8b949e')}; font-size:11px;"
-                )
+        # 运行中追加指令栏样式
+        self._apply_instruction_bar_tokens()
         if hasattr(self, "_log_view"):
             self._log_view.setStyleSheet(log_console(self._theme_tokens))
         if hasattr(self, "_event_list"):
@@ -2471,9 +2456,9 @@ class DashboardPage(QWidget):
         elif hasattr(self, "_result_lbl") and not self._last_result_color:
             self._result_lbl.setText(_t("page.dashboard.log.empty_result"))
 
-        # 运行中追加指令卡片翻译
-        if hasattr(self, "_instruction_card_title_lbl"):
-            self._instruction_card_title_lbl.setText(_t("page.dashboard.instruction.card.title"))
+        # 运行中追加指令栏翻译
+        if hasattr(self, "_instruction_bar_title_lbl"):
+            self._instruction_bar_title_lbl.setText(_t("page.dashboard.instruction.card.title"))
         if hasattr(self, "_btn_send_instruction"):
             self._btn_send_instruction.setText(_t("page.dashboard.instruction.btn.send"))
         if hasattr(self, "_btn_clear_instruction"):

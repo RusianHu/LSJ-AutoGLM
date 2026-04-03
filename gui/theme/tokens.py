@@ -194,7 +194,7 @@ class ThemeTokens:
         向后兼容：将 tokens 转换为旧格式 dict。
         用于渐进迁移期间，旧代码仍消费 dict 的场景。
         """
-        return {
+        d = {
             "bg_main":       self.bg_main,
             "bg_nav":        self.bg_nav,
             "bg_toolbar":    self.bg_toolbar,
@@ -226,3 +226,14 @@ class ThemeTokens:
             "nav_text_hover": self.nav_text_hover,
             "nav_hover_bg":  self.nav_hover_bg,
         }
+        # 组件级输入框 tokens（供指令栏等输入组件消费）
+        if self.comp is not None:
+            d.update({
+                "input_bg": self.comp.input_bg,
+                "input_text": self.comp.input_text,
+                "input_border": self.comp.input_border,
+                "input_focus_border": self.comp.input_focus_border,
+                "input_placeholder": self.comp.input_placeholder,
+                "input_disabled_bg": self.comp.input_disabled_bg,
+            })
+        return d
