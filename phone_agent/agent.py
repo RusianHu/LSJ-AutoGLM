@@ -38,6 +38,7 @@ class AgentConfig:
     action_policy: ActionPolicyInput | None = None
     runtime_action_policy: ResolvedActionPolicy | None = None
     expert_config: ExpertConfig | None = None
+    runtime_inbox_path: str | None = None  # JSONL inbox for GUI-injected user instructions
 
     def __post_init__(self):
         normalized_lang = (self.lang or "cn").strip().lower()
@@ -145,6 +146,13 @@ class PhoneAgent:
         self._expert_guidance_count = 0
         self._expert_rescue_count = 0
         self._last_expert_trigger_step = 0
+
+        # 运行时用户指令收件箱（GUI 桥接）
+        self._runtime_inbox_path: str | None = (
+            getattr(self.agent_config, "runtime_inbox_path", None) or None
+        )
+        self._consumed_instruction_ids: set[str] = set()   # 已消费指令 ID 去重集合
+        self._inbox_file_position: int = 0                  # 文件读取游标（字节偏移）
 
     @staticmethod
     def _screen_hash(base64_data: str) -> str:
@@ -517,6 +525,83 @@ class PhoneAgent:
             return False, "本步已存在专家建议，跳过重复咨询"
         return True, "允许触发严格模式专家咨询"
 
+    # ---------- 运行时用户指令收件箱（GUI 桥接） ----------
+
+    def _drain_runtime_user_instructions(self):
+        """
+        从 JSONL inbox 文件读取并消费 GUI 追加的用户指令。
+
+        每次调用时从上次读取位置（游标）开始，将新指令以 user message
+        形式追加到 self._context 中。消费后打印日志供 GUI 日志区可见。
+
+        设计要点：
+        - 使用文件偏移量游标（非全量重读），避免大文件性能问题
+        - 基于 instruction id 去重，防止重复注入
+        - IO 异常时静默跳过，不影响主任务循环
+        """
+        if not self._runtime_inbox_path:
+            return
+        import os as _os
+
+        inbox_path = self._runtime_inbox_path
+        if not _os.path.isfile(inbox_path):
+            return
+
+        new_instructions: list[dict] = []
+        try:
+            with open(inbox_path, "r", encoding="utf-8") as f:
+                # 从上次游标位置开始 seek
+                f.seek(self._inbox_file_position)
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if isinstance(entry, dict) and entry.get("id") and entry.get("text"):
+                            new_instructions.append(entry)
+                    except (json.JSONDecodeError, TypeError):
+                        # 跳过损坏行，不中断流程
+                        pass
+                # 更新游标到文件末尾
+                self._inbox_file_position = f.tell()
+        except Exception as exc:
+            if self.agent_config.verbose:
+                print(f"[WARN] 读取运行时指令 inbox 失败: {exc}")
+            return
+
+        if not new_instructions:
+            return
+
+        injected_count = 0
+        for entry in new_instructions:
+            instr_id = entry["id"]
+            if instr_id in self._consumed_instruction_ids:
+                continue
+            self._consumed_instruction_ids.add(instr_id)
+
+            text = entry["text"]
+            # 将用户追加指令包装为一条 user message 注入上下文
+            wrapper_text = (
+                "[用户在任务执行中追加了新指令]\n"
+                f"{text}\n"
+                "请在后续步骤中优先遵循此指示（除非与原任务目标存在根本冲突）。"
+            )
+            self._context.append(
+                MessageBuilder.create_user_message(text=wrapper_text)
+            )
+            injected_count += 1
+
+        if injected_count > 0:
+            preview_texts = [e["text"][:40] for e in new_instructions[:injected_count]]
+            print(
+                f"\n{'=' * 50}\n"
+                f"[RUNTIME INSTRUCTION] 已接收 {injected_count} 条运行中用户指令并注入主模型上下文\n"
+                f"  预览: {'; '.join(preview_texts)}\n"
+                f"{'=' * 50}\n",
+                flush=True,
+            )
+
     def _handle_expert_action(self, action: dict[str, Any]) -> str | None:
         expert_config = self.agent_config.expert_config
         if not expert_config or not expert_config.enabled or not expert_config.manual_action:
@@ -559,6 +644,9 @@ class PhoneAgent:
         else:
             self._screen_unchanged_steps = 0
         self._last_screen_hash = current_hash
+
+        # --- 消费运行时用户指令（GUI 追加指令 inbox） ---
+        self._drain_runtime_user_instructions()
 
         # Build messages
         rescue_reason = None if is_first else self._should_trigger_expert_rescue()

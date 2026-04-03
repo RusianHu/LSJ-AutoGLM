@@ -110,6 +110,18 @@ EN: dict[str, str] = {
     "page.dashboard.log.result.device": "Device: {device}",
     "page.dashboard.log.result.error": "Error: {error}",
 
+    # Runtime instruction card
+    "page.dashboard.instruction.card.title": "Runtime Instruction",
+    "page.dashboard.instruction.input.placeholder": "Enter instruction to append to current task...",
+    "page.dashboard.instruction.input.placeholder_disabled": "Task not running or finished, cannot append instructions",
+    "page.dashboard.instruction.btn.send": "Send",
+    "page.dashboard.instruction.btn.clear": "Clear",
+    "page.dashboard.instruction.hint": "Appended instructions will be injected into the AI context immediately. The AI will prioritize this instruction (unless it fundamentally conflicts with the original task goal).",
+    "page.dashboard.instruction.status.idle": "Idle",
+    "page.dashboard.instruction.status.ready": "Ready",
+    "page.dashboard.instruction.status.completed": "Completed",
+    "page.dashboard.instruction.log.sent": "[Instruction] Runtime instruction sent: {instruction}",
+
     # Dashboard additions
     "page.dashboard.readiness.hint_retry": "Will retry automatically, or click Refresh",
     "page.dashboard.readiness.no_results": "Readiness check returned no results",

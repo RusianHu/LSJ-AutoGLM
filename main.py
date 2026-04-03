@@ -804,6 +804,14 @@ Examples:
         help="Task to execute (interactive mode if not provided)",
     )
 
+    # Runtime user instruction inbox (GUI bridge)
+    parser.add_argument(
+        "--runtime-inbox-path",
+        type=str,
+        default=None,
+        help="[Internal] Path to a JSONL inbox file for runtime user instructions injected by GUI.",
+    )
+
     return parser.parse_args()
 
 
@@ -1114,6 +1122,7 @@ def main():
             lang=args.lang,
             action_policy=action_policy,
             runtime_action_policy=resolved_action_policy,
+            runtime_inbox_path=getattr(args, "runtime_inbox_path", None) or None,
         )
 
         agent = IOSPhoneAgent(
@@ -1137,6 +1146,7 @@ def main():
             action_policy=action_policy,
             runtime_action_policy=resolved_action_policy,
             expert_config=expert_config,
+            runtime_inbox_path=getattr(args, "runtime_inbox_path", None) or None,
         )
 
         # 第三方模式截图压缩开关：

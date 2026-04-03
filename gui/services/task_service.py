@@ -14,6 +14,7 @@
 - 窗口关闭时提供 shutdown() 阻塞等待接口
 """
 
+import json
 import os
 import signal
 import subprocess
@@ -136,6 +137,7 @@ class TaskService(QObject):
     - task_finished(TaskRecord)
     - takeover_requested(str)  -- 接管请求
     - stuck_detected()         -- 疑似卡住
+    - instruction_submitted(str)  -- 用户追加指令已写入 inbox
     """
 
     state_changed = Signal(object)      # TaskState
@@ -145,6 +147,7 @@ class TaskService(QObject):
     task_finished = Signal(object)      # TaskRecord
     takeover_requested = Signal(str)    # reason
     stuck_detected = Signal()
+    instruction_submitted = Signal(str)  # instruction text
 
     # 无输出超时判定（秒）
     STUCK_TIMEOUT_S = 120
@@ -161,6 +164,11 @@ class TaskService(QObject):
         self._current_record: Optional[TaskRecord] = None
         self._reader: Optional[_LogReaderThread] = None
         self._finishing = False   # 防止 _finish_task 重入
+
+        # 运行时用户指令收件箱（inbox）管理
+        self._runtime_dir: Optional[Path] = None
+        self._inbox_path: Optional[Path] = None
+        self._instruction_seq: int = 0   # 当前任务内指令序号，用于去重
 
         # 卡住检测定时器
         self._stuck_timer = QTimer(self)
@@ -188,6 +196,11 @@ class TaskService(QObject):
 
     # ---------- 启动任务 ----------
 
+    @property
+    def runtime_inbox_path(self) -> Optional[str]:
+        """返回当前任务的 inbox 文件路径（供 DashboardPage 判断是否可发送）。"""
+        return str(self._inbox_path) if self._inbox_path else None
+
     def start_task(self, task_text: str, device_id_override: str = "") -> bool:
         """
         启动任务子进程。
@@ -202,14 +215,30 @@ class TaskService(QObject):
             return False
 
         effective_device_id = (device_id_override or self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+
+        # --- 创建运行时目录与 inbox（用于中途插入用户指令） ---
+        runtime_base = Path("gui_history") / "runtime"
+        runtime_base.mkdir(parents=True, exist_ok=True)
+        task_id = str(uuid.uuid4())[:8]
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        self._runtime_dir = runtime_base / f"{ts}_{task_id}"
+        self._runtime_dir.mkdir(parents=True, exist_ok=True)
+        self._inbox_path = self._runtime_dir / "inbox.jsonl"
+        self._instruction_seq = 0
+        # 创建空 inbox 文件（确保 Agent 端能检测到存在性）
+        self._inbox_path.write_text("", encoding="utf-8")
+
         args = self._config.build_command_args(task_text, device_id_override=effective_device_id)
+
+        # 将 --runtime-inbox-path 插入命令行参数列表末尾（task_text 之前）
+        inbox_arg = ["--runtime-inbox-path", str(self._inbox_path)]
+        args = args[:-1] + inbox_arg + [args[-1]]   # 最后一个元素是 task_text
+
         env = self._build_env()
 
         # 构建日志文件路径
         log_dir = Path("gui_history") / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        task_id = str(uuid.uuid4())[:8]
-        ts = time.strftime("%Y%m%d_%H%M%S")
         log_file = log_dir / f"{ts}_{task_id}.log"
 
         record = TaskRecord(
@@ -325,6 +354,57 @@ class TaskService(QObject):
         # 重启卡住检测
         self._last_output_time = time.time()
         self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
+
+    def submit_runtime_instruction(self, instruction_text: str) -> bool:
+        """
+        向运行中任务的 inbox 追加一条用户指令。
+
+        GUI 在任务执行中或暂停/接管态调用此方法，
+        将用户追加的指令写入 JSONL inbox 文件。
+        Agent 在每步决策前会自动读取并消费。
+
+        Args:
+            instruction_text: 用户输入的追加指令文本。
+
+        Returns:
+            True 表示写入成功，False 表示失败（无活跃任务或 IO 异常）。
+        """
+        text = (instruction_text or "").strip()
+        if not text:
+            return False
+        if not self._inbox_path or not self._inbox_path.exists():
+            return False
+        # 仅在运行中、暂停、接管态允许发送
+        active_states = {TaskState.RUNNING, TaskState.PAUSED}
+        if self._state not in active_states:
+            return False
+
+        try:
+            self._instruction_seq += 1
+            entry = {
+                "id": f"ui-{self._instruction_seq:04d}",
+                "text": text,
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "source": "gui_dashboard",
+            }
+            line = json.dumps(entry, ensure_ascii=False) + "\n"
+            with open(self._inbox_path, "a", encoding="utf-8") as f:
+                f.write(line)
+
+            self._add_event(
+                "user_instruction_queued",
+                f"用户追加指令: {text[:80]}{'...' if len(text) > 80 else ''}",
+                message_key="event.user_instruction_queued",
+                message_params={"instruction_preview": text[:80]},
+            )
+            self.instruction_submitted.emit(text)
+            self.log_line.emit(
+                f"[INFO] 用户追加指令已排队 (#{self._instruction_seq})，将在 AI 下一轮决策时注入上下文\n"
+            )
+            return True
+        except Exception as exc:
+            self.log_line.emit(f"[WARN] 写入运行时指令 inbox 失败: {exc}\n")
+            return False
 
     def request_takeover(self, reason: str = "人工接管"):
         """触发人工接管：暂停任务并发送接管信号"""
@@ -461,6 +541,9 @@ class TaskService(QObject):
 
         self._poll_timer.stop()
         self._stuck_timer.stop()
+
+        # 清理运行时目录（含 inbox）
+        self._cleanup_runtime_dir()
 
         # 确保进程已完全退出，获取真实退出码
         if self._process is not None:
@@ -711,3 +794,20 @@ class TaskService(QObject):
 
         self._poll_timer.stop()
         self._stuck_timer.stop()
+
+        # 清理运行时目录
+        self._cleanup_runtime_dir()
+
+    # ---------- 运行时目录清理 ----------
+
+    def _cleanup_runtime_dir(self):
+        """清理当前任务的运行时目录（含 inbox）。"""
+        if self._runtime_dir and self._runtime_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(self._runtime_dir, ignore_errors=True)
+            except Exception:
+                pass
+        self._runtime_dir = None
+        self._inbox_path = None
+        self._instruction_seq = 0

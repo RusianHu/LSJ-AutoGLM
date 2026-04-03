@@ -110,6 +110,18 @@ CN: dict[str, str] = {
     "page.dashboard.log.result.device": "设备: {device}",
     "page.dashboard.log.result.error": "错误: {error}",
 
+    # 运行中追加指令卡片
+    "page.dashboard.instruction.card.title": "运行中追加指令",
+    "page.dashboard.instruction.input.placeholder": "在此输入要追加到当前任务的指令...",
+    "page.dashboard.instruction.input.placeholder_disabled": "任务未运行或已结束，无法追加指令",
+    "page.dashboard.instruction.btn.send": "发送指令",
+    "page.dashboard.instruction.btn.clear": "清空",
+    "page.dashboard.instruction.hint": "追加的指令将立即注入到 AI 上下文中，AI 将优先遵循此指示（除非与原任务目标存在根本冲突）。",
+    "page.dashboard.instruction.status.idle": "空闲",
+    "page.dashboard.instruction.status.ready": "就绪",
+    "page.dashboard.instruction.status.completed": "已完成",
+    "page.dashboard.instruction.log.sent": "[指令] 已发送运行中指令: {instruction}",
+
     # Dashboard 补漏
     "page.dashboard.readiness.hint_retry": "稍后将自动重试，或点击重新检查",
     "page.dashboard.readiness.no_results": "启动环境检查未返回结果",
