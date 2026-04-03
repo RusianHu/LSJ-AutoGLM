@@ -72,7 +72,7 @@ def main():
     # 提高浅色/深色主题下按钮填充、边框、文字颜色的一致性。
     app.setStyle("Fusion")
     app.setApplicationName("Open-AutoGLM")
-    app.setApplicationVersion("1.0.3")
+    app.setApplicationVersion("1.0.4")
     app.setOrganizationName("Open-AutoGLM")
 
     # 设置默认字体

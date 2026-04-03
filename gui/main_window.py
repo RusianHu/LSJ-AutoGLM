@@ -82,7 +82,7 @@ class MainWindow(QMainWindow):
         self._app_version = (
             QApplication.instance().applicationVersion().strip()
             if QApplication.instance() and QApplication.instance().applicationVersion()
-            else "1.0.3"
+            else "1.0.4"
         )
         self.setWindowTitle(self._i18n_manager.t("shell.window.title"))
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)

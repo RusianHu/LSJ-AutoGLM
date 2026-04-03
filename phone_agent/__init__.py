@@ -8,5 +8,5 @@ using AI models for visual understanding and decision making.
 from phone_agent.agent import PhoneAgent
 from phone_agent.agent_ios import IOSPhoneAgent
 
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 __all__ = ["PhoneAgent", "IOSPhoneAgent"]

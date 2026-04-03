@@ -992,7 +992,8 @@ class DashboardPage(QWidget):
         if not text:
             return
 
-        if self._task and self._task.submit_runtime_instruction(text):
+        submit_instruction = getattr(self._task, "submit_runtime_instruction", None)
+        if callable(submit_instruction) and submit_instruction(text):
             self._instruction_input.clear()
             self._append_log(
                 self._t("page.dashboard.instruction.log.sent", instruction=text[:80])
@@ -1016,9 +1017,10 @@ class DashboardPage(QWidget):
             return
 
         task = self._task
+        runtime_inbox_path = getattr(task, "runtime_inbox_path", None) if task is not None else None
         can_send = (
             task is not None
-            and task.runtime_inbox_path is not None
+            and runtime_inbox_path is not None
             and task.state in {TaskState.RUNNING, TaskState.PAUSED}
         )
         self._btn_send_instruction.setEnabled(can_send)
@@ -1072,9 +1074,10 @@ class DashboardPage(QWidget):
         # 输入框
         if hasattr(self, "_instruction_input"):
             task = self._task
+            runtime_inbox_path = getattr(task, "runtime_inbox_path", None) if task is not None else None
             can_send = (
                 task is not None
-                and task.runtime_inbox_path is not None
+                and runtime_inbox_path is not None
                 and task.state in {TaskState.RUNNING, TaskState.PAUSED}
             )
             if can_send:
@@ -1385,7 +1388,9 @@ class DashboardPage(QWidget):
             self._task.log_line.connect(self._on_log_line)
             self._task.event_added.connect(self._on_event_added)
             self._task.task_finished.connect(self._on_task_finished)
-            self._task.instruction_submitted.connect(self._on_instruction_submitted)
+            instruction_submitted = getattr(self._task, "instruction_submitted", None)
+            if instruction_submitted is not None:
+                instruction_submitted.connect(self._on_instruction_submitted)
 
         if self._device:
             self._device.devices_changed.connect(self._on_devices_changed)
