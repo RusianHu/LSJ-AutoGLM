@@ -75,6 +75,10 @@ def _render_standard_action_guide(
 ) -> str:
     title = "操作指令及其作用如下：" if lang == "cn" else "Available actions:"
     lines = [title]
+    if lang == "cn":
+        lines.append("任务完成时，必须输出 finish(message=\"完成说明\")；不要使用 do(action=\"Note\", ...) 作为结束动作。")
+    else:
+        lines.append("When the task is complete, you must output finish(message=\"completion note\") instead of do(action=\"Note\", ...).")
     for spec in action_specs:
         prompt = spec.prompt
         if prompt is None:
@@ -103,6 +107,10 @@ def _render_thirdparty_action_guide(
 ) -> str:
     title = "## 动作输出格式（必须严格遵守）" if lang == "cn" else "## Action output format (must be followed exactly)"
     lines = [title]
+    if lang == "cn":
+        lines.append("任务完成时，必须输出 finish(message=\"完成说明\")；不要使用 do(action=\"Note\", ...) 作为结束动作。")
+    else:
+        lines.append("When the task is complete, you must output finish(message=\"completion note\") instead of do(action=\"Note\", ...).")
     for index, spec in enumerate(action_specs, start=1):
         prompt = spec.prompt
         if prompt is None:

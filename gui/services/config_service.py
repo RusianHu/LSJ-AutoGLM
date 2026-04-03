@@ -105,44 +105,44 @@ class ConfigService(QObject):
 
     # 字段元数据，供 SettingsPage 渲染表单行
     FIELD_META: Dict[str, dict] = {
-        "OPEN_AUTOGLM_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_API_KEY": {"label": "API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_BACKUP_API_KEY": {"label": "备用 API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_MODELSCOPE_API_KEY": {"label": "ModelScope Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": {"label": "ModelScope 备用 Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_ZHIPU_API_KEY": {"label": "智谱 API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_API_KEY": {"label": "API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_NEWAPI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": {"label": "Base URL", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": {"label": "模型名称", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": {"label": "API Key (可选)", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_MODE": {"label": "启用专家模式", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_EXPERT_STRICT_MODE": {"label": "严格模式", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_EXPERT_BASE_URL": {"label": "专家 Base URL", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_MODEL": {"label": "专家模型", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_API_KEY": {"label": "专家 API Key", "sensitive": True, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_PROMPT": {"label": "专家提示词", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_AUTO_INIT": {"label": "初始化咨询", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE": {"label": "自动救援", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION": {"label": "允许 Ask_AI 动作", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD": {"label": "页面不变阈值", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": {"label": "连续失败阈值", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": {"label": "最大救援次数", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_DEVICE_TYPE": {"label": "设备平台", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_LANG": {"label": "语言", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_MAX_STEPS": {"label": "最大步数", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出 (think/answer 标签)", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_ACTION_POLICY_VERSION": {"label": "动作策略版本", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": {"label": "启用平台默认动作回退", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_ENABLED_ACTIONS": {"label": "运行时启用动作集合", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": {"label": "AI 可见动作集合", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_THEME": {"label": "界面主题", "sensitive": False, "editable": False},
-        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": {"label": "镜像新窗口模式", "sensitive": False, "editable": False, "boolean": True},
+        "OPEN_AUTOGLM_BASE_URL": {"label": "Base URL", "label_i18n_key": "page.settings.field.base_url", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_MODEL": {"label": "模型名称", "label_i18n_key": "page.settings.field.model", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_API_KEY": {"label": "API Key", "label_i18n_key": "page.settings.field.api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_BACKUP_API_KEY": {"label": "备用 API Key", "label_i18n_key": "page.settings.field.backup_api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_MODELSCOPE_API_KEY": {"label": "ModelScope Key", "label_i18n_key": "page.settings.field.modelscope_api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY": {"label": "ModelScope 备用 Key", "label_i18n_key": "page.settings.field.modelscope_backup_api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_ZHIPU_API_KEY": {"label": "智谱 API Key", "label_i18n_key": "page.settings.field.zhipu_api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_API_KEY": {"label": "API Key", "label_i18n_key": "page.settings.field.api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_BASE_URL": {"label": "Base URL", "label_i18n_key": "page.settings.field.base_url", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_NEWAPI_MODEL": {"label": "模型名称", "label_i18n_key": "page.settings.field.model", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL": {"label": "Base URL", "label_i18n_key": "page.settings.field.base_url", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL": {"label": "模型名称", "label_i18n_key": "page.settings.field.model", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY": {"label": "API Key (可选)", "label_i18n_key": "page.settings.field.api_key_optional", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MODE": {"label": "启用专家模式", "label_i18n_key": "page.settings.field.expert_mode", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_STRICT_MODE": {"label": "严格模式", "label_i18n_key": "page.settings.field.expert_strict_mode", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_BASE_URL": {"label": "专家 Base URL", "label_i18n_key": "page.settings.field.expert_base_url", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MODEL": {"label": "专家模型", "label_i18n_key": "page.settings.field.expert_model", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_API_KEY": {"label": "专家 API Key", "label_i18n_key": "page.settings.field.expert_api_key", "sensitive": True, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_PROMPT": {"label": "专家提示词", "label_i18n_key": "page.settings.field.expert_prompt", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_AUTO_INIT": {"label": "初始化咨询", "label_i18n_key": "page.settings.field.expert_auto_init", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_AUTO_RESCUE": {"label": "自动救援", "label_i18n_key": "page.settings.field.expert_auto_rescue", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_MANUAL_ACTION": {"label": "允许 Ask_AI 动作", "label_i18n_key": "page.settings.field.expert_manual_action", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD": {"label": "页面不变阈值", "label_i18n_key": "page.settings.field.expert_screen_unchanged_threshold", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": {"label": "连续失败阈值", "label_i18n_key": "page.settings.field.expert_consecutive_failure_threshold", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": {"label": "最大救援次数", "label_i18n_key": "page.settings.field.expert_max_rescues", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_DEVICE_TYPE": {"label": "设备平台", "label_i18n_key": "page.settings.field.device_type", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "label_i18n_key": "page.settings.field.device_id", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_LANG": {"label": "语言", "label_i18n_key": "page.settings.field.lang", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_MAX_STEPS": {"label": "最大步数", "label_i18n_key": "page.settings.field.max_steps", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "label_i18n_key": "page.settings.field.use_thirdparty_prompt", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出 (think/answer 标签)", "label_i18n_key": "page.settings.field.thirdparty_thinking", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "label_i18n_key": "page.settings.field.compress_image", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_ACTION_POLICY_VERSION": {"label": "动作策略版本", "label_i18n_key": "page.settings.field.action_policy_version", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": {"label": "启用平台默认动作回退", "label_i18n_key": "page.settings.field.use_platform_default_actions", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_ENABLED_ACTIONS": {"label": "运行时启用动作集合", "label_i18n_key": "page.settings.field.enabled_actions", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": {"label": "AI 可见动作集合", "label_i18n_key": "page.settings.field.ai_visible_actions", "sensitive": False, "editable": True},
+        "OPEN_AUTOGLM_THEME": {"label": "界面主题", "label_i18n_key": "page.settings.field.theme", "sensitive": False, "editable": False},
+        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": {"label": "镜像新窗口模式", "label_i18n_key": "page.settings.field.gui_mirror_new_window", "sensitive": False, "editable": False, "boolean": True},
     }
 
     # 兼容第一轮 GUI 中已写入/读取过的旧键名
@@ -182,7 +182,7 @@ class ConfigService(QObject):
         },
         {
             "id": "newapi",
-            "name": "自建中转站",
+            "name": "第三方模型",
             "url_field": "OPEN_AUTOGLM_NEWAPI_BASE_URL",
             "model_field": "OPEN_AUTOGLM_NEWAPI_MODEL",
             "default_url": "https://ai.yanshanlaosiji.top/v1",
@@ -320,6 +320,47 @@ class ConfigService(QObject):
         yield key
         for alias in cls.KEY_ALIASES.get(key, ()):
             yield alias
+
+    @staticmethod
+    def _normalize_lang(lang: str) -> str:
+        normalized = (lang or "cn").strip().lower()
+        return "cn" if normalized in {"zh", "zh-cn", "zh_cn"} else normalized
+
+    @classmethod
+    def _get_locale_dict(cls, lang: str = "cn") -> Dict[str, str]:
+        normalized = cls._normalize_lang(lang)
+        if normalized == "en":
+            from gui.i18n.locales.en import EN
+            return EN
+        from gui.i18n.locales.cn import CN
+        return CN
+
+    @classmethod
+    def get_field_label_static(cls, key: str, lang: str = "cn") -> str:
+        info = cls.FIELD_META.get(key, {})
+        fallback = info.get("label", key)
+        label_i18n_key = info.get("label_i18n_key", "")
+        if not label_i18n_key:
+            return fallback
+        locale = cls._get_locale_dict(lang)
+        return locale.get(label_i18n_key, fallback)
+
+    def get_field_label(self, key: str, lang: str = "cn") -> str:
+        return self.get_field_label_static(key, lang)
+
+    def render_validation_error(self, detail: Dict[str, Any], lang: str = "cn") -> str:
+        locale = self._get_locale_dict(lang)
+        message_key = str(detail.get("message_key") or "")
+        fallback = str(detail.get("fallback") or message_key or "")
+        template = locale.get(message_key, fallback)
+        params = dict(detail.get("params") or {})
+        field_key = str(params.pop("field_key", "") or "")
+        if field_key:
+            params["field"] = self.get_field_label(field_key, lang)
+        try:
+            return template.format(**params) if params else template
+        except (KeyError, IndexError, ValueError):
+            return fallback or template
 
     @staticmethod
     def _is_truthy(value: str) -> bool:
@@ -559,82 +600,153 @@ class ConfigService(QObject):
 
     # ---------- 校验（不污染缓存） ----------
 
-    def validate(self, updates: Optional[Dict[str, str]] = None) -> List[Tuple[str, str]]:
+    def validate_details(self, updates: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         """
-        校验配置项（不修改缓存）。
+        校验配置项（不修改缓存），返回可国际化的结构化错误明细。
         updates: 临时覆盖值用于校验；为 None 则校验当前缓存。
-        返回：[(key, error_message), ...]
+        返回：[{
+            "key": str,
+            "message_key": str,
+            "params": dict,
+            "fallback": str,
+        }, ...]
         """
         values = dict(self._cache)
         if updates:
             values.update(updates)  # 只在本地副本上操作，不污染缓存
 
-        errors = []
+        errors: List[Dict[str, Any]] = []
+
+        def _error(key: str, message_key: str, fallback: str, **params: Any) -> None:
+            errors.append(
+                {
+                    "key": key,
+                    "message_key": message_key,
+                    "params": params,
+                    "fallback": fallback,
+                }
+            )
 
         base_url = values.get("OPEN_AUTOGLM_BASE_URL", "")
-        if base_url and not (base_url.startswith("http://") or
-                             base_url.startswith("https://")):
-            errors.append(("OPEN_AUTOGLM_BASE_URL", "Base URL 必须以 http:// 或 https:// 开头"))
+        if base_url and not (base_url.startswith("http://") or base_url.startswith("https://")):
+            _error(
+                "OPEN_AUTOGLM_BASE_URL",
+                "page.settings.validation.base_url.invalid_scheme",
+                "Base URL 必须以 http:// 或 https:// 开头",
+            )
 
         model = values.get("OPEN_AUTOGLM_MODEL", "")
         if not model:
-            errors.append(("OPEN_AUTOGLM_MODEL", "模型名称不能为空"))
+            _error(
+                "OPEN_AUTOGLM_MODEL",
+                "page.settings.validation.model.required",
+                "模型名称不能为空",
+            )
 
         max_steps = values.get("OPEN_AUTOGLM_MAX_STEPS", "100")
         try:
             s = int(max_steps)
             if s < 1 or s > 1000:
-                errors.append(("OPEN_AUTOGLM_MAX_STEPS",
-                               "最大步数应在 1-1000 之间"))
+                _error(
+                    "OPEN_AUTOGLM_MAX_STEPS",
+                    "page.settings.validation.max_steps.range",
+                    "最大步数应在 1-1000 之间",
+                )
         except ValueError:
-            errors.append(("OPEN_AUTOGLM_MAX_STEPS", "最大步数必须是整数"))
+            _error(
+                "OPEN_AUTOGLM_MAX_STEPS",
+                "page.settings.validation.max_steps.integer",
+                "最大步数必须是整数",
+            )
 
         device_type = (values.get("OPEN_AUTOGLM_DEVICE_TYPE") or "adb").strip().lower()
         if device_type not in ("adb", "hdc", "ios"):
-            errors.append(("OPEN_AUTOGLM_DEVICE_TYPE", "设备平台仅支持 adb / hdc / ios"))
+            _error(
+                "OPEN_AUTOGLM_DEVICE_TYPE",
+                "page.settings.validation.device_type.invalid",
+                "设备平台仅支持 adb / hdc / ios",
+            )
 
         expert_mode = self._is_truthy(values.get("OPEN_AUTOGLM_EXPERT_MODE", "false"))
         expert_strict_mode = self._is_truthy(values.get("OPEN_AUTOGLM_EXPERT_STRICT_MODE", "false"))
         expert_base_url = (values.get("OPEN_AUTOGLM_EXPERT_BASE_URL") or "").strip()
         expert_model = (values.get("OPEN_AUTOGLM_EXPERT_MODEL") or "").strip()
         if expert_strict_mode and not expert_mode:
-            errors.append(("OPEN_AUTOGLM_EXPERT_STRICT_MODE", "启用严格模式前，必须先启用专家模式"))
+            _error(
+                "OPEN_AUTOGLM_EXPERT_STRICT_MODE",
+                "page.settings.validation.expert_strict_requires_mode",
+                "启用严格模式前，必须先启用专家模式",
+            )
         if expert_mode:
             if not expert_base_url:
-                errors.append(("OPEN_AUTOGLM_EXPERT_BASE_URL", "启用专家模式时，专家 Base URL 不能为空"))
+                _error(
+                    "OPEN_AUTOGLM_EXPERT_BASE_URL",
+                    "page.settings.validation.expert_base_url.required",
+                    "启用专家模式时，专家 Base URL 不能为空",
+                )
             elif not (expert_base_url.startswith("http://") or expert_base_url.startswith("https://")):
-                errors.append(("OPEN_AUTOGLM_EXPERT_BASE_URL", "专家 Base URL 必须以 http:// 或 https:// 开头"))
+                _error(
+                    "OPEN_AUTOGLM_EXPERT_BASE_URL",
+                    "page.settings.validation.expert_base_url.invalid_scheme",
+                    "专家 Base URL 必须以 http:// 或 https:// 开头",
+                )
             if not expert_model:
-                errors.append(("OPEN_AUTOGLM_EXPERT_MODEL", "启用专家模式时，专家模型不能为空"))
+                _error(
+                    "OPEN_AUTOGLM_EXPERT_MODEL",
+                    "page.settings.validation.expert_model.required",
+                    "启用专家模式时，专家模型不能为空",
+                )
 
-        for key, label in (
-            ("OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD", "页面不变阈值"),
-            ("OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD", "连续失败阈值"),
-            ("OPEN_AUTOGLM_EXPERT_MAX_RESCUES", "最大救援次数"),
+        for key in (
+            "OPEN_AUTOGLM_EXPERT_SCREEN_UNCHANGED_THRESHOLD",
+            "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD",
+            "OPEN_AUTOGLM_EXPERT_MAX_RESCUES",
         ):
             raw_value = (values.get(key) or "").strip()
             try:
                 parsed_value = int(raw_value)
                 if parsed_value < 1:
-                    errors.append((key, f"{label}必须是大于等于 1 的整数"))
+                    _error(
+                        key,
+                        "page.settings.validation.integer_min",
+                        f"{self.get_field_label(key, 'cn')}必须是大于等于 1 的整数",
+                        field_key=key,
+                        min=1,
+                    )
             except ValueError:
-                errors.append((key, f"{label}必须是整数"))
+                _error(
+                    key,
+                    "page.settings.validation.integer_required",
+                    f"{self.get_field_label(key, 'cn')}必须是整数",
+                    field_key=key,
+                )
 
-        lang = (values.get("OPEN_AUTOGLM_LANG") or
-                values.get("OPEN_AUTOGLM_LANGUAGE") or "cn").strip().lower()
+        lang = (values.get("OPEN_AUTOGLM_LANG") or values.get("OPEN_AUTOGLM_LANGUAGE") or "cn").strip().lower()
         if lang not in ("cn", "en", "zh"):
-            errors.append(("OPEN_AUTOGLM_LANG", "语言仅支持 cn / en / zh"))
+            _error(
+                "OPEN_AUTOGLM_LANG",
+                "page.settings.validation.lang.invalid",
+                "语言仅支持 cn / en / zh",
+            )
 
         policy_version = (values.get("OPEN_AUTOGLM_ACTION_POLICY_VERSION") or str(ACTION_POLICY_VERSION)).strip()
         normalized_policy_version = ACTION_POLICY_VERSION
         try:
             version = int(policy_version)
             if version < 1:
-                errors.append(("OPEN_AUTOGLM_ACTION_POLICY_VERSION", "动作策略版本必须是大于等于 1 的整数"))
+                _error(
+                    "OPEN_AUTOGLM_ACTION_POLICY_VERSION",
+                    "page.settings.validation.action_policy_version.range",
+                    "动作策略版本必须是大于等于 1 的整数",
+                )
             else:
                 normalized_policy_version = version
         except ValueError:
-            errors.append(("OPEN_AUTOGLM_ACTION_POLICY_VERSION", "动作策略版本必须是整数"))
+            _error(
+                "OPEN_AUTOGLM_ACTION_POLICY_VERSION",
+                "page.settings.validation.action_policy_version.integer",
+                "动作策略版本必须是整数",
+            )
 
         normalized_action_values: Dict[str, tuple[str, ...] | None] = {}
         for action_key in ("OPEN_AUTOGLM_ENABLED_ACTIONS", "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS"):
@@ -645,7 +757,12 @@ class ConfigService(QObject):
             try:
                 normalized_action_values[action_key] = parse_action_name_collection(raw_value)
             except ValueError as exc:
-                errors.append((action_key, f"动作集合格式无效: {exc}"))
+                _error(
+                    action_key,
+                    "page.settings.validation.actions.invalid_format",
+                    f"动作集合格式无效: {exc}",
+                    error=str(exc),
+                )
 
         use_platform_defaults = self._is_truthy(
             values.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
@@ -655,9 +772,17 @@ class ConfigService(QObject):
 
         if not use_platform_defaults:
             if runtime_actions is None:
-                errors.append(("OPEN_AUTOGLM_ENABLED_ACTIONS", "禁用平台默认动作回退时，必须显式提供运行时动作集合（允许使用 [] 表示全部禁用）"))
+                _error(
+                    "OPEN_AUTOGLM_ENABLED_ACTIONS",
+                    "page.settings.validation.actions.runtime_required_when_defaults_disabled",
+                    "禁用平台默认动作回退时，必须显式提供运行时动作集合（允许使用 [] 表示全部禁用）",
+                )
             if ai_visible_actions is None:
-                errors.append(("OPEN_AUTOGLM_AI_VISIBLE_ACTIONS", "禁用平台默认动作回退时，必须显式提供 AI 可见动作集合（允许使用 [] 表示全部隐藏）"))
+                _error(
+                    "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
+                    "page.settings.validation.actions.ai_visible_required_when_defaults_disabled",
+                    "禁用平台默认动作回退时，必须显式提供 AI 可见动作集合（允许使用 [] 表示全部隐藏）",
+                )
 
         if errors:
             return errors
@@ -674,18 +799,25 @@ class ConfigService(QObject):
 
         if resolved_policy.unknown_actions:
             unknown_text = ", ".join(resolved_policy.unknown_actions)
-            errors.append(("OPEN_AUTOGLM_ENABLED_ACTIONS", f"存在未知动作名：{unknown_text}"))
+            _error(
+                "OPEN_AUTOGLM_ENABLED_ACTIONS",
+                "page.settings.validation.actions.unknown",
+                f"存在未知动作名：{unknown_text}",
+                actions=unknown_text,
+            )
 
         if runtime_actions:
             unsupported_runtime = [
                 name for name in runtime_actions if name not in resolved_policy.supported_actions
             ]
             if unsupported_runtime:
-                errors.append(
-                    (
-                        "OPEN_AUTOGLM_ENABLED_ACTIONS",
-                        f"当前平台 {device_type} 不支持这些运行时动作：{', '.join(unsupported_runtime)}",
-                    )
+                unsupported_text = ", ".join(unsupported_runtime)
+                _error(
+                    "OPEN_AUTOGLM_ENABLED_ACTIONS",
+                    "page.settings.validation.actions.runtime_unsupported",
+                    f"当前平台 {device_type} 不支持这些运行时动作：{unsupported_text}",
+                    platform=device_type,
+                    actions=unsupported_text,
                 )
 
         if ai_visible_actions:
@@ -693,11 +825,13 @@ class ConfigService(QObject):
                 name for name in ai_visible_actions if name not in resolved_policy.supported_actions
             ]
             if unsupported_ai:
-                errors.append(
-                    (
-                        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
-                        f"当前平台 {device_type} 不支持这些 AI 可见动作：{', '.join(unsupported_ai)}",
-                    )
+                unsupported_text = ", ".join(unsupported_ai)
+                _error(
+                    "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
+                    "page.settings.validation.actions.ai_unsupported",
+                    f"当前平台 {device_type} 不支持这些 AI 可见动作：{unsupported_text}",
+                    platform=device_type,
+                    actions=unsupported_text,
                 )
 
             runtime_enabled_set = set(resolved_policy.runtime_enabled_actions)
@@ -708,15 +842,26 @@ class ConfigService(QObject):
                 and name not in runtime_enabled_set
             ]
             if not_enabled_for_runtime:
-                errors.append(
-                    (
-                        "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
-                        "以下 AI 可见动作未包含在运行时启用集合中："
-                        + ", ".join(not_enabled_for_runtime),
-                    )
+                not_enabled_text = ", ".join(not_enabled_for_runtime)
+                _error(
+                    "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS",
+                    "page.settings.validation.actions.ai_not_in_runtime",
+                    "以下 AI 可见动作未包含在运行时启用集合中：" + not_enabled_text,
+                    actions=not_enabled_text,
                 )
 
         return errors
+
+    def validate(self, updates: Optional[Dict[str, str]] = None) -> List[Tuple[str, str]]:
+        """
+        兼容旧接口：返回 [(key, error_message), ...]。
+        默认按中文渲染，便于旧调用方和既有测试继续工作。
+        """
+        details = self.validate_details(updates)
+        return [
+            (str(detail.get("key") or ""), self.render_validation_error(detail, lang="cn"))
+            for detail in details
+        ]
 
     # ---------- 渠道预设 ----------
 

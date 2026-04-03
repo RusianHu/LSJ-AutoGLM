@@ -198,7 +198,18 @@ class _PresetCard(QFrame):
         self._translator = translator
         self._refresh_texts()
 
+    def _channel_name(self) -> str:
+        channel_id = (self._preset.get("id") or "").strip()
+        fallback = self._preset.get("name") or channel_id
+        if not channel_id:
+            return fallback
+        key = f"page.dashboard.channel.preset.{channel_id}"
+        translated = self._t(key)
+        return fallback if translated == f"[[{key}]]" else translated
+
     def _refresh_texts(self) -> None:
+        if hasattr(self, "_name_lbl"):
+            self._name_lbl.setText(self._channel_name())
         if hasattr(self, "_tag_lbl"):
             tag_key = (
                 "page.settings.preset.tag.thirdparty"
@@ -237,7 +248,7 @@ class _PresetCard(QFrame):
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setSpacing(2)
 
-        self._name_lbl = QLabel(self._preset.get("name", ""))
+        self._name_lbl = QLabel(self._channel_name())
         self._name_lbl.setObjectName("presetCardName")
 
         model_display = self._resolved_model or self._preset.get("default_model", "") or self._t("page.settings.field.custom")
@@ -399,6 +410,7 @@ class SettingsPage(QWidget):
         self._config = services.get("config")
         self._i18n = services.get("i18n")  # I18nManager（可能启动时还未注入）
         self._field_widgets: dict = {}   # key -> QLineEdit
+        self._field_labels: dict = {}    # key -> QLabel
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
@@ -435,6 +447,45 @@ class SettingsPage(QWidget):
             return tmpl.format(**params) if params else tmpl
         except Exception:
             return f"[[{key}]]"
+
+    def _field_label_text(self, key: str) -> str:
+        meta = getattr(self._config, "FIELD_META", {}) if self._config else {}
+        info = meta.get(key, {})
+        fallback = info.get("label", key)
+        label_i18n_key = info.get("label_i18n_key", "")
+        if not label_i18n_key:
+            return fallback
+        translated = self._t(label_i18n_key)
+        return fallback if translated == f"[[{label_i18n_key}]]" else translated
+
+    def _format_validation_messages(self, updates: dict[str, str]) -> str:
+        if not self._config:
+            return ""
+        if hasattr(self._config, "validate_details") and hasattr(self._config, "render_validation_error"):
+            lang = "cn"
+            if self._i18n and hasattr(self._i18n, "get_language"):
+                try:
+                    lang = self._i18n.get_language() or "cn"
+                except Exception:
+                    lang = "cn"
+            details = self._config.validate_details(updates)
+            return "\n".join(
+                f"• {self._config.render_validation_error(detail, lang=lang)}"
+                for detail in details
+            )
+        errors = self._config.validate(updates)
+        return "\n".join(f"• {k}: {v}" for k, v in errors)
+
+    def _channel_name(self, preset: dict | None) -> str:
+        if not preset:
+            return ""
+        channel_id = (preset.get("id") or "").strip()
+        fallback = preset.get("name") or channel_id
+        if not channel_id:
+            return fallback
+        key = f"page.dashboard.channel.preset.{channel_id}"
+        translated = self._t(key)
+        return fallback if translated == f"[[{key}]]" else translated
 
     # ================================================================
     # 信号连接
@@ -516,7 +567,7 @@ class SettingsPage(QWidget):
         scroll_layout.addWidget(self._model_group)
 
         # ---- 专家模式 ----
-        self._expert_group = QGroupBox("专家模式")
+        self._expert_group = QGroupBox(self._t("page.settings.section.expert"))
         expert_form = QFormLayout(self._expert_group)
         expert_form.setLabelAlignment(Qt.AlignRight)
         expert_form.setSpacing(10)
@@ -535,10 +586,11 @@ class SettingsPage(QWidget):
             "OPEN_AUTOGLM_EXPERT_MAX_RESCUES",
         ]
         self._add_fields(expert_form, expert_fields)
-        self._expert_hint_lbl = QLabel("专家提示词留空时，将使用内置默认预设；默认会附带任务、截图、页面状态、动作协议摘要与最近上下文。严格模式启用后，每一步主模型决策前都会先请求一次专家，这会显著增加时延与调用成本。")
+        self._expert_hint_lbl = QLabel(self._t("page.settings.expert.hint"))
         self._expert_hint_lbl.setProperty("role", "subtle")
         self._expert_hint_lbl.setWordWrap(True)
-        expert_form.addRow(QLabel("说明:"), self._expert_hint_lbl)
+        self._expert_note_lbl = QLabel(self._t("page.settings.expert.note_label"))
+        expert_form.addRow(self._expert_note_lbl, self._expert_hint_lbl)
         scroll_layout.addWidget(self._expert_group)
 
         # ---- 渠道配置（动态，随活跃预设变化）----
@@ -793,7 +845,7 @@ class SettingsPage(QWidget):
                 "",
                 ok=True,
                 i18n_key="page.settings.banner.switch_ok",
-                i18n_params={"name": preset.get("name", channel_id)},
+                i18n_params={"name": self._channel_name(preset)},
             )
         else:
             self._show_banner(
@@ -827,7 +879,7 @@ class SettingsPage(QWidget):
                 self._active_preset_lbl.setText(
                     self._t(
                         "page.settings.active.channel",
-                        name=active.get("name", active_id),
+                        name=self._channel_name(active),
                         model=model,
                     )
                 )
@@ -990,12 +1042,13 @@ class SettingsPage(QWidget):
         if container is None or vbox is None:
             return
 
-        # 1. 从 _field_widgets 中移除所有渠道专属字段
+        # 1. 从 _field_widgets / _field_labels 中移除所有渠道专属字段
         all_channel_keys: set = set()
         for keys in _CHANNEL_FIELDS.values():
             all_channel_keys.update(keys)
         for k in list(all_channel_keys):
             self._field_widgets.pop(k, None)
+            self._field_labels.pop(k, None)
 
         # 2. 清空容器内的所有子 widget
         while vbox.count():
@@ -1050,13 +1103,14 @@ class SettingsPage(QWidget):
         meta = self._config.FIELD_META
         for key in keys:
             info = meta.get(key, {})
-            label_text = info.get("label", key)
+            label_text = self._field_label_text(key)
             sensitive = info.get("sensitive", False)
             editable = info.get("editable", True)
             is_boolean = info.get("boolean", False)
 
             lbl = QLabel(f"{label_text}:")
             lbl.setProperty("role", "statusMeta")
+            self._field_labels[key] = lbl
 
             if is_boolean:
                 # 布尔字段使用 Toggle 开关
@@ -1621,7 +1675,7 @@ class SettingsPage(QWidget):
         # 先做校验（不污染缓存）
         errors = self._config.validate(updates)
         if errors:
-            msgs = "\n".join(f"• {k}: {v}" for k, v in errors)
+            msgs = self._format_validation_messages(updates)
             QMessageBox.warning(self, self._t("page.settings.dialog.validate_fail"), msgs)
             return
         try:
@@ -1665,7 +1719,7 @@ class SettingsPage(QWidget):
                 i18n_key="page.settings.banner.validate_ok",
             )
         else:
-            msgs = "\n".join(f"• {k}: {v}" for k, v in errors)
+            msgs = self._format_validation_messages(temp_values)
             self._show_banner(
                 "",
                 ok=False,
@@ -1887,6 +1941,8 @@ class SettingsPage(QWidget):
             self._channel_group.setTitle(_t("page.settings.section.channel"))
         if hasattr(self, "_run_group"):
             self._run_group.setTitle(_t("page.settings.section.run_params"))
+        if hasattr(self, "_expert_group"):
+            self._expert_group.setTitle(_t("page.settings.section.expert"))
         if hasattr(self, "_action_policy_group"):
             self._action_policy_group.setTitle(_t("page.settings.section.action_policy"))
         if hasattr(self, "_appearance_group"):
@@ -1914,6 +1970,10 @@ class SettingsPage(QWidget):
             self._btn_action_clear_all.setText(_t("page.settings.actions.btn.clear_all"))
         if hasattr(self, "_build_hint_lbl"):
             self._build_hint_lbl.setText(_t("page.settings.build.hint"))
+        if hasattr(self, "_expert_note_lbl"):
+            self._expert_note_lbl.setText(_t("page.settings.expert.note_label"))
+        if hasattr(self, "_expert_hint_lbl"):
+            self._expert_hint_lbl.setText(_t("page.settings.expert.hint"))
         if hasattr(self, "_device_type_label"):
             self._device_type_label.setText(_t("page.settings.device_type.label"))
         if hasattr(self, "_lang_label"):
@@ -1924,6 +1984,8 @@ class SettingsPage(QWidget):
             self._theme_effect_label.setText(_t("page.settings.theme.effect_label"))
         if hasattr(self, "_env_path_lbl") and self._config:
             self._env_path_lbl.setText(_t("page.settings.env_path_label", path=self._config.env_path))
+        for key, lbl in self._field_labels.items():
+            lbl.setText(f"{self._field_label_text(key)}:")
         # 语言下拉文字
         if hasattr(self, "_lang_combo"):
             self._lang_combo.setItemText(0, _t("page.settings.lang.cn"))

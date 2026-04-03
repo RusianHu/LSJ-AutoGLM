@@ -2,6 +2,7 @@
 
 from phone_agent.actions.handler import ActionHandler
 from phone_agent.actions.handler_ios import IOSActionHandler
+from phone_agent.actions.handler import finish
 from phone_agent.actions.registry import (
     ACTION_DISABLED_ERROR,
     ACTION_PLATFORM_UNSUPPORTED_ERROR,
@@ -12,6 +13,7 @@ from phone_agent.actions.registry import (
     parse_action_name_collection,
     resolve_action_policy,
 )
+from phone_agent.agent import PhoneAgent
 from phone_agent.config import get_system_prompt
 from phone_agent.prompts import build_system_prompt
 
@@ -145,6 +147,59 @@ class TestPromptBuilderCompatibility:
         assert from_config == from_builder
         assert "当前提示词可见动作：Launch" in from_config
         assert "当前运行时允许动作：Launch，Wait" in from_config
+
+    def test_standard_prompt_explicitly_requires_finish_instead_of_note(self):
+        text = build_system_prompt(
+            lang="cn",
+            platform="adb",
+            include_examples=False,
+            include_rules=True,
+        )
+
+        assert '任务完成时，必须输出 finish(message="完成说明")' in text
+        assert '不要使用 do(action="Note", ...) 作为结束动作' in text
+
+    def test_thirdparty_prompt_explicitly_requires_finish_instead_of_note(self):
+        text = build_system_prompt(
+            lang="cn",
+            platform="adb",
+            thirdparty=True,
+            include_examples=False,
+            include_rules=True,
+        )
+
+        assert '任务完成时，必须输出 finish(message="完成说明")' in text
+        assert '不要使用 do(action="Note", ...) 作为结束动作' in text
+
+
+class TestThirdpartyCompletionFallback:
+    def test_normalize_thirdparty_terminal_note_promotes_completion_note_to_finish(self):
+        action = {
+            "_metadata": "do",
+            "action": "Note",
+            "message": "已查看最新历史记录：标题为《九龙冰室》相关视频。",
+        }
+
+        normalized = PhoneAgent._normalize_thirdparty_terminal_note(
+            action,
+            use_thirdparty_prompt=True,
+        )
+
+        assert normalized == finish(message="已查看最新历史记录：标题为《九龙冰室》相关视频。")
+
+    def test_normalize_thirdparty_terminal_note_keeps_intermediate_note_unchanged(self):
+        action = {
+            "_metadata": "do",
+            "action": "Note",
+            "message": "已打开我的页面，准备点击历史记录。",
+        }
+
+        normalized = PhoneAgent._normalize_thirdparty_terminal_note(
+            action,
+            use_thirdparty_prompt=True,
+        )
+
+        assert normalized is action
 
 
 class TestRuntimePolicyRejections:

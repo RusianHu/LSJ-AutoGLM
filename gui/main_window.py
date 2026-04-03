@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 from PySide6.QtWidgets import QMessageBox
                 msg = QMessageBox(self)
-                msg.setWindowTitle("保存失败")
+                msg.setWindowTitle(self._i18n_manager.t("dialog.save_fail.title"))
                 msg.setText(str(e))
                 msg.setIcon(QMessageBox.Warning)
                 msg.setStyleSheet(self._dialog_style())

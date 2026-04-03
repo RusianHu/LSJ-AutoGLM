@@ -233,6 +233,51 @@ class PhoneAgent:
 
         return False
 
+    @staticmethod
+    def _looks_like_terminal_note_message(message: str | None) -> bool:
+        normalized = (message or "").strip().lower()
+        if not normalized:
+            return False
+
+        terminal_markers = (
+            "任务完成",
+            "已完成",
+            "已经完成",
+            "完成任务",
+            "已查看",
+            "可以看到",
+            "当前页面已经是",
+            "当前屏幕显示的是",
+            "最新记录",
+            "最新历史记录",
+            "最终结果",
+            "结果为",
+            "结果是",
+            "task completed",
+            "already complete",
+            "already completed",
+            "final result",
+            "result is",
+            "latest record",
+            "latest history",
+        )
+        return any(marker in normalized for marker in terminal_markers)
+
+    @staticmethod
+    def _normalize_thirdparty_terminal_note(
+        action: dict[str, Any], *, use_thirdparty_prompt: bool
+    ) -> dict[str, Any]:
+        if not use_thirdparty_prompt:
+            return action
+        if action.get("_metadata") != "do" or action.get("action") != "Note":
+            return action
+
+        message = (action.get("message") or "").strip()
+        if not PhoneAgent._looks_like_terminal_note_message(message):
+            return action
+
+        return finish(message=message)
+
     def run(self, task: str) -> str:
         """
         Run the agent to complete a task.
@@ -643,6 +688,17 @@ class PhoneAgent:
                     json.dumps(recommended_action, ensure_ascii=False),
                 )
             action = recommended_action or action
+
+        normalized_action = self._normalize_thirdparty_terminal_note(
+            action,
+            use_thirdparty_prompt=self.agent_config.use_thirdparty_prompt,
+        )
+        if self.agent_config.verbose and normalized_action is not action:
+            print(
+                "🧩 Normalizing thirdparty completion note to finish:",
+                json.dumps(normalized_action, ensure_ascii=False),
+            )
+        action = normalized_action
 
         # Track recent actions for loop detection & better thirdparty guidance.
         self._recent_action_signatures.append(self._action_signature(action))
