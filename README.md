@@ -2,6 +2,8 @@
 
 这是 Open-AutoGLM 的老司机启动器版本，构建的GUI，可以一键启动，执行任务。
 
+> 2026-04-05 推荐 `qwen3.6-plus` 模型，非常精准好用👍
+
 <img width="1442" height="932" alt="image" src="https://github.com/user-attachments/assets/73050520-ae9a-42be-aaf5-c21f265c4059" />
 
 ## 官方文档链接

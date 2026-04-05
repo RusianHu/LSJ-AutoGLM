@@ -17,7 +17,8 @@ from main import _build_action_policy_from_args, handle_device_commands
 
 
 class _FakeConnection:
-    pass
+    def connect(self, address):
+        return True, f"connected to {address}"
 
 
 class _FakeFactory:
@@ -80,6 +81,37 @@ class TestMainDeviceAppCli:
         assert handled is True
         output = capsys.readouterr().out
         assert "only supported for Android ADB devices" in output
+
+    def test_handle_connect_success_returns_handled_and_updates_device_id(self, capsys):
+        args = self._make_args(connect="192.168.1.2:5555")
+
+        with patch("main.get_device_factory", return_value=_FakeFactory()):
+            handled = handle_device_commands(args)
+
+        assert handled is True
+        assert args.device_id == "192.168.1.2:5555"
+        output = capsys.readouterr().out
+        assert "Connecting to 192.168.1.2:5555..." in output
+        assert "connected to 192.168.1.2:5555" in output
+
+    def test_handle_connect_failure_still_returns_handled(self, capsys):
+        class _FailingConnection:
+            def connect(self, address):
+                return False, f"failed to connect to {address}"
+
+        class _FailingFactory(_FakeFactory):
+            def get_connection_class(self):
+                return _FailingConnection
+
+        args = self._make_args(connect="192.168.1.2:5555")
+
+        with patch("main.get_device_factory", return_value=_FailingFactory()):
+            handled = handle_device_commands(args)
+
+        assert handled is True
+        assert args.device_id is None
+        output = capsys.readouterr().out
+        assert "failed to connect to 192.168.1.2:5555" in output
 
 
 class TestMainActionPolicyCli:

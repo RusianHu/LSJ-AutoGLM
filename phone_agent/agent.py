@@ -3,9 +3,7 @@
 import json
 import re
 import traceback
-from collections import deque
 from dataclasses import dataclass
-from hashlib import sha1
 from typing import Any, Callable
 
 from phone_agent.actions import ActionHandler
@@ -21,6 +19,8 @@ from phone_agent.device_factory import get_device_factory
 from phone_agent.model import ExpertConfig, ModelClient, ModelConfig
 from phone_agent.model.client import MessageBuilder
 from phone_agent.prompts.prompt_sections import render_action_protocol_section
+from phone_agent.runtime.instruction_inbox import RuntimeInstructionInbox
+from phone_agent.runtime.step_tracker import AgentStepTracker
 
 
 @dataclass
@@ -136,27 +136,20 @@ class PhoneAgent:
 
         self._context: list[dict[str, Any]] = []
         self._step_count = 0
-        self._last_screen_hash: str | None = None
-        self._screen_unchanged_steps = 0
-        self._recent_action_signatures: deque[str] = deque(maxlen=12)
-        self._recent_failures: deque[str] = deque(maxlen=5)
-        self._stuck_warnings = 0
+        self._step_tracker = AgentStepTracker()
         self._task_text = ""
-        self._consecutive_failures = 0
         self._expert_guidance_count = 0
         self._expert_rescue_count = 0
         self._last_expert_trigger_step = 0
 
         # 运行时用户指令收件箱（GUI 桥接）
-        self._runtime_inbox_path: str | None = (
-            getattr(self.agent_config, "runtime_inbox_path", None) or None
+        self._instruction_inbox = RuntimeInstructionInbox(
+            path=getattr(self.agent_config, "runtime_inbox_path", None) or None
         )
-        self._consumed_instruction_ids: set[str] = set()   # 已消费指令 ID 去重集合
-        self._inbox_file_position: int = 0                  # 文件读取游标（字节偏移）
 
     @staticmethod
     def _screen_hash(base64_data: str) -> str:
-        return sha1(base64_data.encode("utf-8")).hexdigest()
+        return AgentStepTracker.screen_hash(base64_data)
 
     @staticmethod
     def _action_signature(action: dict[str, Any]) -> str:
@@ -179,13 +172,7 @@ class PhoneAgent:
 
     @staticmethod
     def _looks_like_loop(signatures: list[str]) -> bool:
-        if len(signatures) < 6:
-            return False
-        last6 = signatures[-6:]
-        a, b = last6[0], last6[1]
-        if a == b:
-            return all(x == a for x in last6)
-        return last6 == [a, b, a, b, a, b]
+        return AgentStepTracker.looks_like_loop(signatures)
 
     @staticmethod
     def _message_text(message: dict[str, Any]) -> str:
@@ -338,13 +325,9 @@ class PhoneAgent:
         """Reset the agent state for a new task."""
         self._context = []
         self._step_count = 0
-        self._last_screen_hash = None
-        self._screen_unchanged_steps = 0
-        self._recent_action_signatures.clear()
-        self._recent_failures.clear()
-        self._stuck_warnings = 0
+        self._step_tracker.reset()
+        self._instruction_inbox.reset()
         self._task_text = ""
-        self._consecutive_failures = 0
         self._expert_guidance_count = 0
         self._expert_rescue_count = 0
         self._last_expert_trigger_step = 0
@@ -439,9 +422,9 @@ class PhoneAgent:
         screen_info = MessageBuilder.build_screen_info(
             current_app,
             step=self._step_count,
-            screen_unchanged_steps=self._screen_unchanged_steps,
-            recent_actions=list(self._recent_action_signatures),
-            recent_failures=list(self._recent_failures),
+            screen_unchanged_steps=self._step_tracker.screen_unchanged_steps,
+            recent_actions=list(self._step_tracker.recent_action_signatures),
+            recent_failures=list(self._step_tracker.recent_failures),
             trigger_reason=reason,
             ai_visible_actions=list(action_policy.ai_visible_actions) if action_policy else [],
             runtime_enabled_actions=list(action_policy.runtime_enabled_actions) if action_policy else [],
@@ -505,11 +488,11 @@ class PhoneAgent:
             return None
         if self._step_count - self._last_expert_trigger_step <= 1:
             return None
-        if self._screen_unchanged_steps >= expert_config.screen_unchanged_threshold:
+        if self._step_tracker.screen_unchanged_steps >= expert_config.screen_unchanged_threshold:
             return "screen_unchanged"
-        if self._consecutive_failures >= expert_config.consecutive_failure_threshold:
+        if self._step_tracker.consecutive_failures >= expert_config.consecutive_failure_threshold:
             return "consecutive_failures"
-        if self._looks_like_loop(list(self._recent_action_signatures)):
+        if self._step_tracker.is_action_loop():
             return "action_loop"
         return None
 
@@ -528,79 +511,29 @@ class PhoneAgent:
     # ---------- 运行时用户指令收件箱（GUI 桥接） ----------
 
     def _drain_runtime_user_instructions(self):
-        """
-        从 JSONL inbox 文件读取并消费 GUI 追加的用户指令。
-
-        每次调用时从上次读取位置（游标）开始，将新指令以 user message
-        形式追加到 self._context 中。消费后打印日志供 GUI 日志区可见。
-
-        设计要点：
-        - 使用文件偏移量游标（非全量重读），避免大文件性能问题
-        - 基于 instruction id 去重，防止重复注入
-        - IO 异常时静默跳过，不影响主任务循环
-        """
-        if not self._runtime_inbox_path:
-            return
-        import os as _os
-
-        inbox_path = self._runtime_inbox_path
-        if not _os.path.isfile(inbox_path):
-            return
-
-        new_instructions: list[dict] = []
+        """从运行时 inbox 读取并消费 GUI 追加的用户指令。"""
         try:
-            with open(inbox_path, "r", encoding="utf-8") as f:
-                # 从上次游标位置开始 seek
-                f.seek(self._inbox_file_position)
-                for raw_line in f:
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        if isinstance(entry, dict) and entry.get("id") and entry.get("text"):
-                            new_instructions.append(entry)
-                    except (json.JSONDecodeError, TypeError):
-                        # 跳过损坏行，不中断流程
-                        pass
-                # 更新游标到文件末尾
-                self._inbox_file_position = f.tell()
+            instruction_texts = self._instruction_inbox.consume_texts()
         except Exception as exc:
             if self.agent_config.verbose:
                 print(f"[WARN] 读取运行时指令 inbox 失败: {exc}")
             return
 
-        if not new_instructions:
+        if not instruction_texts:
             return
 
-        injected_count = 0
-        for entry in new_instructions:
-            instr_id = entry["id"]
-            if instr_id in self._consumed_instruction_ids:
-                continue
-            self._consumed_instruction_ids.add(instr_id)
+        for text in instruction_texts:
+            wrapped_text = self._instruction_inbox.wrap_user_instruction(text)
+            self._context.append(MessageBuilder.create_user_message(text=wrapped_text))
 
-            text = entry["text"]
-            # 将用户追加指令包装为一条 user message 注入上下文
-            wrapper_text = (
-                "[用户在任务执行中追加了新指令]\n"
-                f"{text}\n"
-                "请在后续步骤中优先遵循此指示（除非与原任务目标存在根本冲突）。"
-            )
-            self._context.append(
-                MessageBuilder.create_user_message(text=wrapper_text)
-            )
-            injected_count += 1
-
-        if injected_count > 0:
-            preview_texts = [e["text"][:40] for e in new_instructions[:injected_count]]
-            print(
-                f"\n{'=' * 50}\n"
-                f"[RUNTIME INSTRUCTION] 已接收 {injected_count} 条运行中用户指令并注入主模型上下文\n"
-                f"  预览: {'; '.join(preview_texts)}\n"
-                f"{'=' * 50}\n",
-                flush=True,
-            )
+        preview_texts = self._instruction_inbox.build_preview_texts(instruction_texts)
+        print(
+            f"\n{'=' * 50}\n"
+            f"[RUNTIME INSTRUCTION] 已接收 {len(instruction_texts)} 条运行中用户指令并注入主模型上下文\n"
+            f"  预览: {'; '.join(preview_texts)}\n"
+            f"{'=' * 50}\n",
+            flush=True,
+        )
 
     def _handle_expert_action(self, action: dict[str, Any]) -> str | None:
         expert_config = self.agent_config.expert_config
@@ -638,12 +571,7 @@ class PhoneAgent:
         device_factory = get_device_factory()
         screenshot = device_factory.get_screenshot(self.agent_config.device_id)
         current_app = device_factory.get_current_app(self.agent_config.device_id)
-        current_hash = self._screen_hash(screenshot.base64_data)
-        if self._last_screen_hash == current_hash:
-            self._screen_unchanged_steps += 1
-        else:
-            self._screen_unchanged_steps = 0
-        self._last_screen_hash = current_hash
+        self._step_tracker.update_screen(screenshot.base64_data)
 
         # --- 消费运行时用户指令（GUI 追加指令 inbox） ---
         self._drain_runtime_user_instructions()
@@ -789,7 +717,7 @@ class PhoneAgent:
         action = normalized_action
 
         # Track recent actions for loop detection & better thirdparty guidance.
-        self._recent_action_signatures.append(self._action_signature(action))
+        self._step_tracker.record_action(self._action_signature(action))
 
         if self.agent_config.verbose:
             # Print thinking process
@@ -818,12 +746,7 @@ class PhoneAgent:
                 )
             )
 
-        if result.success:
-            self._consecutive_failures = 0
-        else:
-            self._consecutive_failures += 1
-            if result.message:
-                self._recent_failures.append(result.message)
+        self._step_tracker.record_result(result.success, result.message)
 
         if self.agent_config.verbose and (not result.success) and result.message:
             print(f"⚠️ Action failed: {result.message}")

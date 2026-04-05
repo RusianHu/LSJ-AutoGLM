@@ -182,6 +182,8 @@ class IOSPhoneAgent:
         """Reset the agent state for a new task."""
         self._context = []
         self._step_count = 0
+        self._consumed_instruction_ids.clear()
+        self._inbox_file_position = 0
 
     # ---------- 运行时用户指令收件箱（GUI 桥接） ----------
 

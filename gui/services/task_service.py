@@ -14,7 +14,6 @@
 - 窗口关闭时提供 shutdown() 阻塞等待接口
 """
 
-import json
 import os
 import signal
 import subprocess
@@ -33,6 +32,8 @@ except ImportError:  # psutil 未安装时优雅降级（进程挂起不可用�
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from gui.services.task_event_parser import TaskLogEventParser
+from gui.services.task_runtime_inbox import TaskRuntimeInboxWriter
 from gui.utils.runtime import app_root
 
 
@@ -168,7 +169,8 @@ class TaskService(QObject):
         # 运行时用户指令收件箱（inbox）管理
         self._runtime_dir: Optional[Path] = None
         self._inbox_path: Optional[Path] = None
-        self._instruction_seq: int = 0   # 当前任务内指令序号，用于去重
+        self._runtime_inbox = TaskRuntimeInboxWriter()
+        self._log_event_parser = TaskLogEventParser()
 
         # 卡住检测定时器
         self._stuck_timer = QTimer(self)
@@ -224,9 +226,9 @@ class TaskService(QObject):
         self._runtime_dir = runtime_base / f"{ts}_{task_id}"
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         self._inbox_path = self._runtime_dir / "inbox.jsonl"
-        self._instruction_seq = 0
         # 创建空 inbox 文件（确保 Agent 端能检测到存在性）
         self._inbox_path.write_text("", encoding="utf-8")
+        self._runtime_inbox.bind(self._inbox_path)
 
         args = self._config.build_command_args(task_text, device_id_override=effective_device_id)
 
@@ -380,16 +382,7 @@ class TaskService(QObject):
             return False
 
         try:
-            self._instruction_seq += 1
-            entry = {
-                "id": f"ui-{self._instruction_seq:04d}",
-                "text": text,
-                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "source": "gui_dashboard",
-            }
-            line = json.dumps(entry, ensure_ascii=False) + "\n"
-            with open(self._inbox_path, "a", encoding="utf-8") as f:
-                f.write(line)
+            entry = self._runtime_inbox.write(text, source="gui_dashboard")
 
             self._add_event(
                 "user_instruction_queued",
@@ -399,7 +392,7 @@ class TaskService(QObject):
             )
             self.instruction_submitted.emit(text)
             self.log_line.emit(
-                f"[INFO] 用户追加指令已排队 (#{self._instruction_seq})，将在 AI 下一轮决策时注入上下文\n"
+                f"[INFO] 用户追加指令已排队 (#{entry['id']})，将在 AI 下一轮决策时注入上下文\n"
             )
             return True
         except Exception as exc:
@@ -442,74 +435,41 @@ class TaskService(QObject):
         except Exception:
             return f"[[{key}]]"
 
+    def _get_log_event_parser(self) -> TaskLogEventParser:
+        """延迟获取日志事件解析器，兼容绕过 __init__ 的测试构造。"""
+        parser = getattr(self, "_log_event_parser", None)
+        if parser is None:
+            parser = TaskLogEventParser()
+            self._log_event_parser = parser
+        return parser
+
     def _infer_events_from_log(self, line: str):
         """从日志内容推断高层事件（基于关键字匹配）。"""
-        stripped = line.strip()
-        lower = stripped.lower()
+        parsed = self._get_log_event_parser().parse(line)
+        if parsed is None or parsed.ignore:
+            return
 
-        if stripped.startswith("[EXPERT]"):
-            payload = stripped[len("[EXPERT]"):].strip()
-            if "失败" in payload:
-                if self._current_record:
-                    self._current_record.error_summary = payload[:200]
-                self._add_event("expert_failure", payload)
-                return
-            if "发起专家请求" in payload:
-                self._add_event("expert_request", payload)
-                return
-            if "请求成功" in payload:
-                self._add_event("expert_success", payload)
-                return
-            if "触发严格模式专家咨询" in payload:
-                self._add_event("expert_strict_trigger", payload)
-                return
-            if "自动专家救援" in payload:
-                self._add_event("expert_auto_rescue", payload)
-                return
-            if "跳过严格模式专家咨询" in payload:
-                self._add_event("expert_strict_skip", payload)
-                return
-            if "Ask_AI 请求专家协助" in payload:
-                self._add_event("expert_manual_request", payload)
-                return
-            if "已注入主模型上下文" in payload:
-                self._add_event("expert_context_injected", payload)
-                return
-            if payload.startswith("专家建议（") or payload.startswith("  "):
-                self._add_event("expert_guidance", payload)
-                return
+        if parsed.error_summary and self._current_record:
+            self._current_record.error_summary = parsed.error_summary
 
-        triggers = (
-            {"keywords": ("设备检查", "checking system"), "event_type": "device_check", "message_key": "event.device_check"},
-            {"keywords": ("device connected", "设备已连接"), "event_type": "device_connected", "message_key": "event.device_connected"},
-            {"keywords": ("api",), "event_type": "api_check", "message_key": "event.api_check"},
-            {"keywords": ("agent start",), "event_type": "agent_start", "message_key": "event.agent_start"},
-            {"keywords": ("step ",), "ignore": True},
-            {"keywords": ("task completed", "任务完成"), "ignore": True},
-            {"keywords": ("error", "错误", "traceback"), "event_type": "error", "raw": True},
-            {"keywords": ("takeover", "接管"), "event_type": "takeover", "reason_key": "event.takeover_detected"},
-        )
-        for trigger in triggers:
-            if not any(keyword in lower for keyword in trigger["keywords"]):
-                continue
-            if trigger.get("ignore"):
-                return
-            if trigger.get("raw"):
-                if self._current_record:
-                    self._current_record.error_summary = stripped[:200]
-                self._add_event("error", stripped[:200])
-                return
-            if trigger["event_type"] == "takeover":
-                self.request_takeover(self._translate_text(trigger["reason_key"]))
-                return
-            message_key = trigger["message_key"]
+        if parsed.needs_takeover and parsed.message_key:
+            self.request_takeover(self._translate_text(parsed.message_key))
+            return
+
+        if parsed.raw_error:
+            self._add_event(parsed.event_type, parsed.payload or "")
+            return
+
+        if parsed.message_key:
             self._add_event(
-                trigger["event_type"],
-                self._translate_text(message_key),
-                message_key=message_key,
-                message_params={},
+                parsed.event_type,
+                self._translate_text(parsed.message_key, **parsed.message_params),
+                message_key=parsed.message_key,
+                message_params=parsed.message_params,
             )
             return
+
+        self._add_event(parsed.event_type, parsed.payload or "")
 
     def _on_reader_finished(self):
         """日志读取线程结束时触发进程收尾"""
@@ -810,4 +770,4 @@ class TaskService(QObject):
                 pass
         self._runtime_dir = None
         self._inbox_path = None
-        self._instruction_seq = 0
+        self._runtime_inbox.reset()
