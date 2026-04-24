@@ -15,6 +15,7 @@
 """
 
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -149,6 +150,7 @@ class TaskService(QObject):
     takeover_requested = Signal(str)    # reason
     stuck_detected = Signal()
     instruction_submitted = Signal(str)  # instruction text
+    tokens_stats_changed = Signal(dict)  # {"prompt": int, "completion": int, "total": int, "cached": int, "ttft": float, "throughput": float}
 
     # 无输出超时判定（秒）
     STUCK_TIMEOUT_S = 120
@@ -181,6 +183,15 @@ class TaskService(QObject):
         # 进程结束轮询（200ms）
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_process)
+
+        # Token 累计统计（按任务）
+        self._acc_prompt_tokens: int = 0
+        self._acc_completion_tokens: int = 0
+        self._acc_total_tokens: int = 0
+        self._acc_cached_tokens: int = 0
+        self._last_ttft: float = 0.0
+        self._last_throughput: float = 0.0
+        self._step_count_tokens: int = 0
 
     # ---------- 状态 ----------
 
@@ -256,6 +267,18 @@ class TaskService(QObject):
         )
         self._current_record = record
         self._finishing = False
+        # Reset token accumulators for new task
+        self._acc_prompt_tokens = 0
+        self._acc_completion_tokens = 0
+        self._acc_total_tokens = 0
+        self._acc_cached_tokens = 0
+        self._last_ttft = 0.0
+        self._last_throughput = 0.0
+        self._step_count_tokens = 0
+        self.tokens_stats_changed.emit({
+            "prompt": 0, "completion": 0, "total": 0, "cached": 0,
+            "ttft": 0.0, "throughput": 0.0, "steps": 0,
+        })
         self._set_state(TaskState.STARTING)
         self._add_event("task_start", f"任务启动: {task_text}",
                         message_key="event.task_start",
@@ -460,6 +483,11 @@ class TaskService(QObject):
             self._add_event(parsed.event_type, parsed.payload or "")
             return
 
+        # tokens_stats 不是普通事件，直接解析并更新累计值
+        if parsed.event_type == "tokens_stats":
+            self._parse_and_emit_tokens_stats(parsed.payload or "")
+            return
+
         if parsed.message_key:
             self._add_event(
                 parsed.event_type,
@@ -470,6 +498,65 @@ class TaskService(QObject):
             return
 
         self._add_event(parsed.event_type, parsed.payload or "")
+
+    @staticmethod
+    def _parse_numeric_token_value(value: object) -> int | float | None:
+        """从 token 统计字段中宽容提取数值，兼容 `1.23s` / `42tps` 等旧日志。"""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, (int, float)):
+            return value
+        match = re.match(r"^\s*([+-]?\d+(?:\.\d+)?)", str(value))
+        if not match:
+            return None
+        number = match.group(1)
+        try:
+            return float(number) if "." in number else int(number)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _parse_tokens_stats_payload(cls, payload: str) -> dict[str, int | float]:
+        """解析 [TOKENS] payload；坏字段会被忽略，避免日志解析打断任务收尾。"""
+        data: dict[str, int | float] = {}
+        for part in (payload or "").split():
+            if "=" not in part:
+                continue
+            key, val = part.split("=", 1)
+            parsed = cls._parse_numeric_token_value(val)
+            if parsed is not None:
+                data[key.strip()] = parsed
+        return data
+
+    def _parse_and_emit_tokens_stats(self, payload: str):
+        """解析 [TOKENS] 行并累加统计，发出 tokens_stats_changed 信号。"""
+        data = self._parse_tokens_stats_payload(payload)
+        if not data:
+            return
+        if "prompt" in data:
+            self._acc_prompt_tokens += int(data.get("prompt", 0))
+        if "completion" in data:
+            self._acc_completion_tokens += int(data.get("completion", 0))
+        if "total" in data:
+            self._acc_total_tokens += int(data.get("total", 0))
+        if "cached" in data:
+            self._acc_cached_tokens += int(data.get("cached", 0))
+        if "ttft" in data:
+            self._last_ttft = float(data["ttft"])
+        if "throughput" in data:
+            self._last_throughput = float(data["throughput"])
+        self._step_count_tokens += 1
+        self.tokens_stats_changed.emit({
+            "prompt": self._acc_prompt_tokens,
+            "completion": self._acc_completion_tokens,
+            "total": self._acc_total_tokens,
+            "cached": self._acc_cached_tokens,
+            "ttft": self._last_ttft,
+            "throughput": self._last_throughput,
+            "steps": self._step_count_tokens,
+        })
 
     def _on_reader_finished(self):
         """日志读取线程结束时触发进程收尾"""

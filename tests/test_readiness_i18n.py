@@ -14,6 +14,9 @@
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from gui.pages.dashboard_page import DashboardPage
+from gui.services.task_event_parser import TaskLogEventParser
+
 from gui.services.readiness_service import (
     ReadinessCheckResult,
     ReadinessSummary,
@@ -278,6 +281,97 @@ class TestTaskServiceInferEvents:
 
         svc.request_takeover.assert_called_once_with("Takeover requested")
         svc._add_event.assert_not_called()
+
+
+    def test_infer_events_accumulates_tokens_stats_with_numeric_payload(self):
+        svc = self._make_service()
+        svc._acc_prompt_tokens = 0
+        svc._acc_completion_tokens = 0
+        svc._acc_total_tokens = 0
+        svc._acc_cached_tokens = 0
+        svc._last_ttft = 0.0
+        svc._last_throughput = 0.0
+        svc._step_count_tokens = 0
+        svc.tokens_stats_changed = MagicMock()
+
+        svc._infer_events_from_log(
+            "[TOKENS] prompt=10 completion=42 total=52 cached=3 ttft=1.235 throughput=21.0"
+        )
+
+        svc._add_event.assert_not_called()
+        svc.tokens_stats_changed.emit.assert_called_once_with(
+            {
+                "prompt": 10,
+                "completion": 42,
+                "total": 52,
+                "cached": 3,
+                "ttft": 1.235,
+                "throughput": 21.0,
+                "steps": 1,
+            }
+        )
+
+    def test_parse_tokens_stats_accepts_legacy_units_and_ignores_bad_fields(self):
+        payload = "prompt=10 completion=42 total=52 cached=bad ttft=1.235s throughput=21.0tps note=n/a"
+
+        data = TaskService._parse_tokens_stats_payload(payload)
+
+        assert data == {
+            "prompt": 10,
+            "completion": 42,
+            "total": 52,
+            "ttft": 1.235,
+            "throughput": 21.0,
+        }
+
+    def test_parse_tokens_event_returns_payload_without_creating_regular_event(self):
+        event = TaskLogEventParser().parse(
+            "[TOKENS] prompt=1 completion=2 total=3 cached=0 ttft=0.100 throughput=20.0"
+        )
+
+        assert event is not None
+        assert event.event_type == "tokens_stats"
+        assert event.payload == "prompt=1 completion=2 total=3 cached=0 ttft=0.100 throughput=20.0"
+
+
+class TestDashboardTokenStats:
+    """验证 Dashboard token 统计横条格式化。"""
+
+    def test_format_tokens_stats_uses_current_i18n(self):
+        dashboard = DashboardPage.__new__(DashboardPage)
+        translations = {
+            "page.dashboard.tokens.total": "Total",
+            "page.dashboard.tokens.prompt": "Prompt",
+            "page.dashboard.tokens.completion": "Completion",
+            "page.dashboard.tokens.cached": "Cached",
+            "page.dashboard.tokens.ttft": "TTFT",
+            "page.dashboard.tokens.throughput": "Throughput",
+            "page.dashboard.tokens.steps": "Steps",
+        }
+        dashboard._t = lambda key, **params: translations[key].format(**params)
+
+        text = dashboard._format_tokens_stats(
+            {
+                "prompt": 10,
+                "completion": 42,
+                "total": 52,
+                "cached": 3,
+                "ttft": 1.235,
+                "throughput": 21.0,
+                "steps": 1,
+            }
+        )
+
+        assert text == (
+            "Total: 52 tokens  |  Prompt: 10  |  Completion: 42  |  "
+            "Cached: 3  |  TTFT: 1.24s  |  Throughput: 21.0 tps  |  Steps: 1"
+        )
+
+    def test_format_tokens_stats_ignores_invalid_values(self):
+        dashboard = DashboardPage.__new__(DashboardPage)
+        dashboard._t = lambda key, **params: key
+
+        assert dashboard._format_tokens_stats({"total": "bad", "ttft": None}) == ""
 
 
 class TestReadinessEnvFile:

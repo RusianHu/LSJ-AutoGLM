@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from phone_agent.config.i18n import get_message
 
@@ -36,6 +36,11 @@ class ModelResponse:
     time_to_first_token: float | None = None  # Time to first token (seconds)
     time_to_thinking_end: float | None = None  # Time to thinking end (seconds)
     total_time: float | None = None  # Total inference time (seconds)
+    # Token usage (may be None for streaming or unsupported endpoints)
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    cached_tokens: int | None = None
 
 
 @dataclass
@@ -101,27 +106,59 @@ class ModelClient:
         time_to_first_token = None
         time_to_thinking_end = None
 
-        stream = self.client.chat.completions.create(
-            messages=messages,
-            model=self.config.model_name,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            frequency_penalty=self.config.frequency_penalty,
-            extra_body=self.config.extra_body,
-            stream=True,
-        )
+        request_kwargs = {
+            "messages": messages,
+            "model": self.config.model_name,
+            "max_tokens": self.config.max_tokens,
+            "temperature": self.config.temperature,
+            "top_p": self.config.top_p,
+            "frequency_penalty": self.config.frequency_penalty,
+            "extra_body": self.config.extra_body,
+            "stream": True,
+        }
+        try:
+            stream = self.client.chat.completions.create(
+                **request_kwargs,
+                stream_options={"include_usage": True},
+            )
+        except TypeError:
+            # 兼容旧版 OpenAI SDK 或不接受 stream_options 的测试替身。
+            stream = self.client.chat.completions.create(**request_kwargs)
+        except BadRequestError as exc:
+            # 部分 OpenAI-compatible 端点尚未实现 stream_options；降级为普通流式请求，
+            # 保留推理功能，只是 token usage 可能不可用。
+            message = str(exc).lower()
+            if "stream_options" not in message and "include_usage" not in message:
+                raise
+            stream = self.client.chat.completions.create(**request_kwargs)
 
         raw_content = ""
         buffer = ""  # Buffer to hold content that might be part of a marker
         action_markers = ["finish(message=", "do(action="]
         in_action_phase = False  # Track if we've entered the action phase
         first_token_received = False
+        usage_prompt_tokens: int | None = None
+        usage_completion_tokens: int | None = None
+        usage_total_tokens: int | None = None
+        usage_cached_tokens: int | None = None
+
+        def _get_field(obj: Any, name: str) -> Any:
+            if isinstance(obj, dict):
+                return obj.get(name)
+            return getattr(obj, name, None)
+
+        def _coerce_usage_int(value: Any) -> int | None:
+            if value is None:
+                return None
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return None
 
         def _extract_stream_text(delta: Any) -> str:
             """Collect text from OpenAI-compatible streaming delta payloads."""
-            reasoning = getattr(delta, "reasoning_content", None)
-            content = getattr(delta, "content", None)
+            reasoning = _get_field(delta, "reasoning_content")
+            content = _get_field(delta, "content")
 
             if reasoning and content and reasoning == content:
                 return content
@@ -134,10 +171,31 @@ class ModelClient:
             return "".join(parts)
 
         for chunk in stream:
-            if len(chunk.choices) == 0:
+            # Collect usage from final chunk. Some compatible endpoints may attach
+            # usage to an otherwise normal chunk, so do not skip choices after reading it.
+            usage = _get_field(chunk, "usage")
+            if usage is not None:
+                prompt_tokens = _coerce_usage_int(_get_field(usage, "prompt_tokens"))
+                completion_tokens = _coerce_usage_int(_get_field(usage, "completion_tokens"))
+                total_tokens = _coerce_usage_int(_get_field(usage, "total_tokens"))
+                if prompt_tokens is not None:
+                    usage_prompt_tokens = prompt_tokens
+                if completion_tokens is not None:
+                    usage_completion_tokens = completion_tokens
+                if total_tokens is not None:
+                    usage_total_tokens = total_tokens
+                # OpenAI-style prompt_tokens_details.cached_tokens
+                prompt_details = _get_field(usage, "prompt_tokens_details")
+                if prompt_details is not None:
+                    cached_tokens = _coerce_usage_int(_get_field(prompt_details, "cached_tokens"))
+                    if cached_tokens is not None:
+                        usage_cached_tokens = cached_tokens
+
+            choices = _get_field(chunk, "choices") or []
+            if len(choices) == 0:
                 continue
 
-            delta = chunk.choices[0].delta
+            delta = _get_field(choices[0], "delta")
             content = _extract_stream_text(delta)
             if not content:
                 continue
@@ -215,6 +273,31 @@ class ModelClient:
         print(
             f"{get_message('total_inference_time', lang)}:          {total_time:.3f}s"
         )
+        # Print token usage if available
+        if usage_total_tokens is None and (
+            usage_prompt_tokens is not None or usage_completion_tokens is not None
+        ):
+            usage_total_tokens = (usage_prompt_tokens or 0) + (usage_completion_tokens or 0)
+        if usage_total_tokens is not None:
+            print("-" * 50)
+            print(f"  Tokens:  prompt={usage_prompt_tokens or '-'}  completion={usage_completion_tokens or '-'}  total={usage_total_tokens or '-'}", end="")
+            if usage_cached_tokens is not None:
+                print(f"  cached={usage_cached_tokens}", end="")
+            print()
+            # Emit a machine-readable line for GUI parser. Keep values numeric and unit-free;
+            # human-facing units belong to the formatted metrics above.
+            prompt_tokens = usage_prompt_tokens or 0
+            completion_tokens = usage_completion_tokens or 0
+            total_tokens = usage_total_tokens or 0
+            cached_tokens = usage_cached_tokens or 0
+            ttft_seconds = time_to_first_token or 0.0
+            throughput_tps = completion_tokens / total_time if completion_tokens and total_time > 0 else 0.0
+            token_line = (
+                f"[TOKENS] prompt={prompt_tokens} completion={completion_tokens} "
+                f"total={total_tokens} cached={cached_tokens} "
+                f"ttft={ttft_seconds:.3f} throughput={throughput_tps:.1f}"
+            )
+            print(token_line)
         print("=" * 50)
 
         return ModelResponse(
@@ -224,6 +307,10 @@ class ModelClient:
             time_to_first_token=time_to_first_token,
             time_to_thinking_end=time_to_thinking_end,
             total_time=total_time,
+            prompt_tokens=usage_prompt_tokens,
+            completion_tokens=usage_completion_tokens,
+            total_tokens=usage_total_tokens,
+            cached_tokens=usage_cached_tokens,
         )
 
     def request_text(self, messages: list[dict[str, Any]]) -> ExpertResponse:

@@ -103,7 +103,15 @@ EN: dict[str, str] = {
     "page.dashboard.log.tab.events": "Events",
     "page.dashboard.log.tab.result": "Result",
     "page.dashboard.log.empty_events": "No events yet",
-    "page.dashboard.log.empty_result": "Result summary will appear here after the task completes",
+    "page.dashboard.log.empty_result": "Run summary will appear here after the task completes",
+    "page.dashboard.tokens.stats": "Token Stats",
+    "page.dashboard.tokens.prompt": "Prompt",
+    "page.dashboard.tokens.completion": "Completion",
+    "page.dashboard.tokens.total": "Total",
+    "page.dashboard.tokens.cached": "Cached",
+    "page.dashboard.tokens.ttft": "TTFT",
+    "page.dashboard.tokens.throughput": "Throughput",
+    "page.dashboard.tokens.steps": "Steps",
     "page.dashboard.log.result.success": "Task Completed",
     "page.dashboard.log.result.failed": "Task Failed",
     "page.dashboard.log.result.duration": "Duration: {duration}",
@@ -569,7 +577,7 @@ EN: dict[str, str] = {
     "event.device_connected": "Device connected",
     "event.api_check": "API check",
     "event.agent_start": "Agent execution started",
-    "event.result_summary": "Result summary",
+    "event.result_summary": "Run Summary",
 
     # ============================================================
     # Readiness checks (ReadinessService)

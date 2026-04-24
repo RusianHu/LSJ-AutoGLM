@@ -955,6 +955,12 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(8, 16, 8, 8)
         layout.setSpacing(0)
 
+        # Token 统计横条（位于 tabs 上方）
+        self._tokens_stats_lbl = QLabel("")
+        self._tokens_stats_lbl.setObjectName("DashboardTokensStats")
+        self._tokens_stats_lbl.setStyleSheet("font-size:11px; padding:2px 4px;")
+        layout.addWidget(self._tokens_stats_lbl)
+
         self._log_tabs = QTabWidget()
         tabs = self._log_tabs
         tabs.setDocumentMode(True)
@@ -1010,6 +1016,51 @@ class DashboardPage(QWidget):
             self._instruction_status_chip.setText(
                 self._t("page.dashboard.instruction.status.ready")
             )
+
+    def _on_tokens_stats_changed(self, stats: dict):
+        """更新 Token 统计横条显示。"""
+        if not hasattr(self, "_tokens_stats_lbl"):
+            return
+        self._tokens_stats_lbl.setText(self._format_tokens_stats(stats))
+
+    @staticmethod
+    def _safe_int_stat(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _safe_float_stat(value: object) -> float:
+        try:
+            return float(value or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _format_tokens_stats(self, stats: dict) -> str:
+        prompt = self._safe_int_stat(stats.get("prompt", 0))
+        completion = self._safe_int_stat(stats.get("completion", 0))
+        total = self._safe_int_stat(stats.get("total", 0))
+        cached = self._safe_int_stat(stats.get("cached", 0))
+        ttft = self._safe_float_stat(stats.get("ttft", 0.0))
+        throughput = self._safe_float_stat(stats.get("throughput", 0.0))
+        steps = self._safe_int_stat(stats.get("steps", 0))
+        parts: list[str] = []
+        if total > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.total')}: {total} tokens")
+        if prompt > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.prompt')}: {prompt}")
+        if completion > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.completion')}: {completion}")
+        if cached > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.cached')}: {cached}")
+        if ttft > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.ttft')}: {ttft:.2f}s")
+        if throughput > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.throughput')}: {throughput:.1f} tps")
+        if steps > 0:
+            parts.append(f"{self._t('page.dashboard.tokens.steps')}: {steps}")
+        return "  |  ".join(parts) if parts else ""
 
     def _update_instruction_card_state(self):
         """更新指令栏状态（启用/禁用、状态文字、主题样式）。"""
@@ -1353,6 +1404,10 @@ class DashboardPage(QWidget):
             self._result_lbl.setStyleSheet(
                 self._summary_style(self._last_result_color or v.get("text_secondary", "#526273"))
             )
+        if hasattr(self, "_tokens_stats_lbl"):
+            self._tokens_stats_lbl.setStyleSheet(
+                f"color:{v.get('text_secondary', '#8b949e')}; font-size:11px; padding:2px 4px;"
+            )
 
         self._set_task_status(*self._last_task_status)
         self._set_device_status(*self._last_device_status)
@@ -1391,6 +1446,9 @@ class DashboardPage(QWidget):
             instruction_submitted = getattr(self._task, "instruction_submitted", None)
             if instruction_submitted is not None:
                 instruction_submitted.connect(self._on_instruction_submitted)
+            tokens_stats = getattr(self._task, "tokens_stats_changed", None)
+            if tokens_stats is not None:
+                tokens_stats.connect(self._on_tokens_stats_changed)
 
         if self._device:
             self._device.devices_changed.connect(self._on_devices_changed)

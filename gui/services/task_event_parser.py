@@ -66,6 +66,10 @@ class TaskLogEventParser:
         if not stripped:
             return None
 
+        tokens_event = self._parse_tokens_event(stripped)
+        if tokens_event is not None:
+            return tokens_event
+
         expert_event = self._parse_expert_event(stripped)
         if expert_event is not None:
             return expert_event
@@ -121,3 +125,14 @@ class TaskLogEventParser:
         if payload.startswith("专家建议（") or payload.startswith("  "):
             return ParsedLogEvent(event_type="expert_guidance", payload=payload)
         return None
+
+    @staticmethod
+    def _parse_tokens_event(stripped: str) -> ParsedLogEvent | None:
+        """Parse the machine-readable [TOKENS] line emitted by ModelClient."""
+        if not stripped.startswith("[TOKENS]"):
+            return None
+        payload = stripped[len("[TOKENS]") :].strip()
+        return ParsedLogEvent(
+            event_type="tokens_stats",
+            payload=payload,
+        )

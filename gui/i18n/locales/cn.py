@@ -103,7 +103,15 @@ CN: dict[str, str] = {
     "page.dashboard.log.tab.events": "事件",
     "page.dashboard.log.tab.result": "任务结果",
     "page.dashboard.log.empty_events": "暂无事件",
-    "page.dashboard.log.empty_result": "任务完成后将显示结果摘要",
+    "page.dashboard.log.empty_result": "任务完成后将显示运行摘要",
+    "page.dashboard.tokens.stats": "Token统计",
+    "page.dashboard.tokens.prompt": "输入",
+    "page.dashboard.tokens.completion": "输出",
+    "page.dashboard.tokens.total": "累计",
+    "page.dashboard.tokens.cached": "缓存",
+    "page.dashboard.tokens.ttft": "首token",
+    "page.dashboard.tokens.throughput": "吞吐",
+    "page.dashboard.tokens.steps": "步数",
     "page.dashboard.log.result.success": "任务完成",
     "page.dashboard.log.result.failed": "任务失败",
     "page.dashboard.log.result.duration": "耗时: {duration}",
@@ -569,7 +577,7 @@ CN: dict[str, str] = {
     "event.device_connected": "设备已连接",
     "event.api_check": "API 检查",
     "event.agent_start": "Agent 开始执行",
-    "event.result_summary": "结果摘要",
+    "event.result_summary": "运行摘要",
 
     # ============================================================
     # 环境检查项（ReadinessService）

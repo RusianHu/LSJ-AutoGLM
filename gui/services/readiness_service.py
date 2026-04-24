@@ -1054,7 +1054,8 @@ def run_readiness_checks(
         ("scrcpy", lambda: check_scrcpy(should_stop=should_stop)),
         ("api_base_url", lambda: check_api_base_url(config_service)),
         ("api_key", lambda: check_api_key(config_service)),
-        ("api_reachability", lambda: check_api_reachability(config_service, should_stop=should_stop)),
+        # api_reachability 已安全取消：诊断不再通过实际网络请求检查 API 连通性，
+        # 以避免因网络波动、代理或服务端限流导致误报。
     ]
 
     results: list[ReadinessCheckResult] = []
