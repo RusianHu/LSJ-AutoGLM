@@ -3,11 +3,6 @@
 
 import html
 import io
-import random
-import secrets
-import socket
-import string
-
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -27,7 +22,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.services.device_service import DeviceStatus
+from gui.services.adb_client import (
+    AdbClient,
+    AdbError,
+    build_pairing_qr_payload,
+    generate_qr_credentials,
+    is_mdns_transport_serial,
+    normalize_endpoint,
+)
+from gui.services.device_service import AdbTransport, DeviceStatus
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.contracts import ThemeAwareDialog
@@ -50,128 +53,53 @@ class _PairWatcher(QThread):
     """
     后台线程：轮询 mDNS 配对服务与 adb devices。
     当发现目标二维码对应的 pairing service 时，自动执行 adb pair；
-    配对成功后继续等待新设备出现并发出 device_found。
+    配对成功后等待 TLS transport 上线并返回其设备标识。
     """
-    device_found = Signal(str)   # 新设备 device_id
+    status_changed = Signal(str)
+    pairing_finished = Signal(bool, str, str)  # success, message, connected endpoint
     timed_out = Signal()
 
     def __init__(
         self,
-        known_ids: set,
         service_name: str,
         password: str,
-        device_service=None,
-        known_pair_services: set[str] | None = None,
+        adb_client: AdbClient | None = None,
         timeout_sec: int = 90,
         parent=None,
     ):
         super().__init__(parent)
-        self._known_ids = known_ids
         self._service_name = service_name
         self._password = password
-        self._device_service = device_service
-        self._known_pair_services = known_pair_services or set()
+        self._adb_client = adb_client or AdbClient()
         self._timeout_sec = timeout_sec
         self._stop = False
-        self._paired = False
 
     def stop(self):
         self._stop = True
 
-    @staticmethod
-    def _list_pair_services() -> list[tuple[str, str]]:
-        import subprocess
-        services: list[tuple[str, str]] = []
-        try:
-            r = subprocess.run(
-                ["adb", "mdns", "services"],
-                capture_output=True, text=True, timeout=5
-            )
-            output = (r.stdout or "")
-            for raw_line in output.splitlines():
-                line = raw_line.strip()
-                if not line or line.startswith("List of discovered"):
-                    continue
-                parts = line.split()
-                if len(parts) < 3:
-                    continue
-                instance_name, service_type, endpoint = parts[0], parts[1], parts[2]
-                if service_type == "_adb-tls-pairing._tcp" and ":" in endpoint:
-                    services.append((instance_name, endpoint))
-        except Exception:
-            pass
-        return services
-
-    def _find_pair_service_addr(self) -> str:
-        services = self._list_pair_services()
-        for instance_name, endpoint in services:
-            if instance_name == self._service_name:
-                return endpoint
-
-        fresh_services = [
-            endpoint
-            for instance_name, endpoint in services
-            if f"{instance_name}|{endpoint}" not in self._known_pair_services
-        ]
-        if len(fresh_services) == 1:
-            return fresh_services[0]
-        for instance_name, endpoint in services:
-            if (
-                instance_name.startswith("studio-")
-                and f"{instance_name}|{endpoint}" not in self._known_pair_services
-            ):
-                return endpoint
-        return ""
-
-    def _try_pair(self) -> bool:
-        import subprocess
-        if self._paired:
-            return True
-        addr = self._find_pair_service_addr()
-        if not addr:
-            return False
-        try:
-            if self._device_service is not None:
-                ok, _msg = self._device_service.pair_device(addr, self._password)
-                self._paired = ok
-                return self._paired
-            r = subprocess.run(
-                ["adb", "pair", addr, self._password],
-                capture_output=True, text=True, timeout=30
-            )
-            output = ((r.stdout or "") + (r.stderr or "")).lower()
-            self._paired = "successfully paired" in output or "already paired" in output
-            return self._paired
-        except Exception:
-            return False
-
     def run(self):
-        import subprocess, time
-        elapsed = 0
-        interval = 2
-        while not self._stop and elapsed < self._timeout_sec:
-            time.sleep(interval)
-            elapsed += interval
-            self._try_pair()
-            try:
-                r = subprocess.run(
-                    ["adb", "devices"],
-                    capture_output=True, text=True, timeout=5
-                )
-                for line in r.stdout.splitlines()[1:]:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1] == "device":
-                        dev_id = parts[0]
-                        if dev_id not in self._known_ids:
-                            self.device_found.emit(dev_id)
-                            return
-            except Exception:
-                pass
-        if not self._stop:
-            self.timed_out.emit()
+        try:
+            result = self._adb_client.pair_via_qr(
+                self._service_name,
+                self._password,
+                timeout=self._timeout_sec,
+                should_stop=lambda: self._stop,
+                on_service_found=lambda endpoint: self.status_changed.emit(
+                    f"已发现手机配对服务：{endpoint}，正在安全配对..."
+                ),
+            )
+            if self._stop:
+                return
+            if result.paired:
+                self.pairing_finished.emit(True, result.message, result.connected_endpoint)
+            elif "超时" in result.message:
+                self.status_changed.emit(result.message)
+                self.timed_out.emit()
+            else:
+                self.pairing_finished.emit(False, result.message, "")
+        except (AdbError, ValueError) as exc:
+            if not self._stop:
+                self.pairing_finished.emit(False, str(exc), "")
 
 
 class QrCodeScanDialog(ThemeAwareDialog):
@@ -197,11 +125,11 @@ class QrCodeScanDialog(ThemeAwareDialog):
         translator=None,
     ):
         super().__init__(parent)
-        self._known_ids = known_device_ids
         self._device_service = device_service
         self._watcher: _PairWatcher | None = None
-        self._service_name = self._rand_name()
-        self._password = self._rand_password()
+        self._service_name, self._password = generate_qr_credentials()
+        self._pair_succeeded = False
+        self._pair_message = ""
         self._theme_mode = theme
         self._translator = translator
         self._status_text = self._t("page.device.qr_scan.waiting")
@@ -232,19 +160,6 @@ class QrCodeScanDialog(ThemeAwareDialog):
             return template.format(**params) if params else template
         except Exception:
             return template
-
-    # ------------------------------------------------------------------
-    # 随机凭据生成
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _rand_name(length: int = 10) -> str:
-        alphabet = string.ascii_letters + string.digits + "@<>/"
-        return "studio-" + "".join(secrets.choice(alphabet) for _ in range(length))
-
-    @staticmethod
-    def _rand_password(length: int = 12) -> str:
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
-        return "".join(secrets.choice(alphabet) for _ in range(length))
 
     # ------------------------------------------------------------------
     # ThemeAware 协议
@@ -362,15 +277,12 @@ class QrCodeScanDialog(ThemeAwareDialog):
     def _generate_qr(self):
         try:
             import qrcode
-            qr_data = (
-                f"WIFI:T:ADB;S:{self._service_name};"
-                f"P:{self._password};;"
-            )
+            qr_data = build_pairing_qr_payload(self._service_name, self._password)
             qr = qrcode.QRCode(
                 version=None,
-                error_correction=qrcode.constants.ERROR_CORRECT_M,
-                box_size=8,
-                border=2,
+                error_correction=qrcode.constants.ERROR_CORRECT_Q,
+                box_size=10,
+                border=4,
             )
             qr.add_data(qr_data)
             qr.make(fit=True)
@@ -382,7 +294,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
             pixmap = QPixmap.fromImage(qimage).scaled(
                 244, 244,
                 Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                Qt.TransformationMode.FastTransformation,
             )
             self._qr_label.setPixmap(pixmap)
         except Exception as e:
@@ -394,32 +306,39 @@ class QrCodeScanDialog(ThemeAwareDialog):
     # 后台监听新设备
     # ------------------------------------------------------------------
     def _start_watcher(self):
-        known_pair_services = {
-            f"{instance}|{endpoint}"
-            for instance, endpoint in _PairWatcher._list_pair_services()
-        }
+        adb_client = getattr(self._device_service, "adb_client", None)
         self._watcher = _PairWatcher(
-            set(self._known_ids),
             self._service_name,
             self._password,
-            device_service=self._device_service,
-            known_pair_services=known_pair_services,
+            adb_client=adb_client,
             timeout_sec=90,
             parent=None,
         )
-        self._watcher.device_found.connect(self._on_device_found)
+        self._watcher.status_changed.connect(self._on_pairing_status)
+        self._watcher.pairing_finished.connect(self._on_pairing_finished)
         self._watcher.timed_out.connect(self._on_timed_out)
         self._watcher.start()
 
-    def _on_device_found(self, device_id: str):
+    def _on_pairing_status(self, message: str):
+        self._status_text = message
+        self._status_level = "muted"
+        self._render_status()
+
+    def _on_pairing_finished(self, success: bool, message: str, device_id: str):
         self._timer.stop()
-        self._status_text = self._t("page.device.qr_scan.success", device_id=device_id)
-        self._status_level = "success"
+        self._pair_succeeded = success
+        self._pair_message = message
+        if success:
+            display_id = device_id or self._t("page.device.qr_scan.paired_waiting")
+            self._status_text = self._t("page.device.qr_scan.success", device_id=display_id)
+            self._status_level = "success"
+            self._paired_device_id = device_id
+        else:
+            self._status_text = self._t("page.device.qr_scan.failed", error=message)
+            self._status_level = "danger"
         self._render_status()
         self._countdown_lbl.setText("")
         self._close_btn.setText(self._t("page.device.qr_scan.btn.done"))
-        # 记录成功的设备 ID 供外部读取
-        self._paired_device_id = device_id
 
     def _on_timed_out(self):
         self._timer.stop()
@@ -471,10 +390,15 @@ class QrCodeScanDialog(ThemeAwareDialog):
 
     @property
     def qr_data(self) -> str:
-        return (
-            f"WIFI:T:ADB;S:{self._service_name};"
-            f"P:{self._password};;"
-        )
+        return build_pairing_qr_payload(self._service_name, self._password)
+
+    @property
+    def pair_succeeded(self) -> bool:
+        return self._pair_succeeded
+
+    @property
+    def pair_message(self) -> str:
+        return self._pair_message
 
 
 # ---------------------------------------------------------------------------
@@ -483,14 +407,13 @@ class QrCodeScanDialog(ThemeAwareDialog):
 
 class QrPairDialog(ThemeAwareDialog):
     """
-    Android 11+ 无线调试二维码配对对话框（配对码手动输入方式）。
+    Android 11+ 无线调试配对码对话框。
 
     使用步骤（手机端）：
-      1. 手机 设置 -> 开发者选项 -> 无线调试 -> 使用二维码配对设备
-      2. 手机屏幕会显示一个二维码，同时弹出配对码和配对端口
+      1. 手机 设置 -> 开发者选项 -> 无线调试 -> 使用配对码配对设备
+      2. 手机屏幕会显示配对码和专用配对端口
       3. 在本对话框填写「配对端口」（形如 192.168.x.x:3xxxx）和「配对码」（6位数字）
-      4. 点击「配对」按钮，等待配对成功
-      5. 配对成功后，再用 TCP/IP 连接区的「连接」按钮连接常规端口（通常显示在无线调试页）
+      4. 点击「配对」按钮；程序会配对并自动等待 TLS 连接上线
     """
 
     def __init__(self, parent=None, theme: str = "dark", theme_manager=None, translator=None):
@@ -659,11 +582,16 @@ class QrPairDialog(ThemeAwareDialog):
         if not addr:
             self._set_status(self._t("page.device.qr_pair.status.addr_required"), error=True)
             return
-        if ":" not in addr:
+        try:
+            normalize_endpoint(addr)
+        except ValueError:
             self._set_status(self._t("page.device.qr_pair.status.addr_invalid"), error=True)
             return
         if not code:
             self._set_status(self._t("page.device.qr_pair.status.code_required"), error=True)
+            return
+        if len(code) != 6 or not code.isdigit():
+            self._set_status(self._t("page.device.qr_pair.status.code_invalid"), error=True)
             return
         self.accept()
 
@@ -778,6 +706,7 @@ class DevicePage(QWidget):
         btn_row.addWidget(self._btn_select)
 
         self._btn_disconnect = QPushButton(self._t("page.device.btn.disconnect"))
+        self._btn_disconnect.setToolTip(self._t("page.device.btn.disconnect.tooltip"))
         self._btn_disconnect.setProperty("variant", "danger")
         self._btn_disconnect.clicked.connect(self._on_disconnect)
         btn_row.addWidget(self._btn_disconnect)
@@ -795,6 +724,27 @@ class DevicePage(QWidget):
         wifi_group = self._wifi_group
         wifi_outer = QVBoxLayout(wifi_group)
         wifi_outer.setSpacing(10)
+
+        # QtScrcpy 式 USB -> TCP/IP 快速切换
+        usb_wifi_row = QHBoxLayout()
+        usb_wifi_row.setSpacing(8)
+        self._usb_wifi_hint_lbl = QLabel(self._t("page.device.wifi.usb_hint"))
+        self._usb_wifi_hint_lbl.setProperty("role", "muted")
+        self._usb_wifi_hint_lbl.setStyleSheet("font-size:12px;")
+        usb_wifi_row.addWidget(self._usb_wifi_hint_lbl)
+
+        self._btn_usb_to_wifi = QPushButton(self._t("page.device.btn.usb_to_wifi"))
+        self._btn_usb_to_wifi.setProperty("variant", "primary")
+        self._btn_usb_to_wifi.clicked.connect(self._on_usb_to_wifi)
+        usb_wifi_row.addWidget(self._btn_usb_to_wifi)
+
+        self._btn_use_usb = QPushButton(self._t("page.device.btn.use_usb"))
+        self._btn_use_usb.setToolTip(self._t("page.device.btn.use_usb.tooltip"))
+        self._btn_use_usb.setProperty("variant", "subtle")
+        self._btn_use_usb.clicked.connect(self._on_use_usb)
+        usb_wifi_row.addWidget(self._btn_use_usb)
+        usb_wifi_row.addStretch()
+        wifi_outer.addLayout(usb_wifi_row)
 
         # 第一行：IP 地址连接
         wifi_row = QHBoxLayout()
@@ -906,6 +856,8 @@ class DevicePage(QWidget):
             (getattr(self, "_btn_disconnect", None), btn_danger(self._theme_tokens)),
             (getattr(self, "_btn_refresh", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_wifi_connect", None), btn_primary(self._theme_tokens)),
+            (getattr(self, "_btn_usb_to_wifi", None), btn_primary(self._theme_tokens)),
+            (getattr(self, "_btn_use_usb", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_qr_scan", None), btn_success(self._theme_tokens)),
             (getattr(self, "_btn_qr_pair", None), btn_subtle(self._theme_tokens)),
             (getattr(self, "_btn_check_kbd", None), btn_subtle(self._theme_tokens)),
@@ -929,7 +881,41 @@ class DevicePage(QWidget):
         if hasattr(self, "_btn_disconnect"):
             self._btn_disconnect.setEnabled(bool(selected_device_id))
         if hasattr(self, "_btn_wifi_connect"):
-            self._btn_wifi_connect.setEnabled(bool(self._wifi_input.text().strip()))
+            connect_text = self._wifi_input.text().strip()
+            self._btn_wifi_connect.setEnabled(
+                bool(connect_text)
+                and not is_mdns_transport_serial(connect_text)
+                and not self._operation_running()
+            )
+        selected_info = None
+        if selected_device_id and self._device:
+            selected_info = next((d for d in self._device.devices if d.device_id == selected_device_id), None)
+        if hasattr(self, "_btn_usb_to_wifi"):
+            self._btn_usb_to_wifi.setEnabled(
+                bool(selected_info and selected_info.connection_type == "usb" and selected_info.status == DeviceStatus.CONNECTED)
+                and not self._operation_running()
+            )
+        if hasattr(self, "_btn_use_usb"):
+            self._btn_use_usb.setEnabled(
+                bool(
+                    selected_info
+                    and selected_info.transport_type == AdbTransport.TCPIP
+                    and selected_info.status == DeviceStatus.CONNECTED
+                )
+                and not self._operation_running()
+            )
+        if hasattr(self, "_btn_qr_pair"):
+            self._btn_qr_pair.setEnabled(not self._operation_running())
+        if hasattr(self, "_btn_qr_scan"):
+            self._btn_qr_scan.setEnabled(not self._operation_running())
+        if hasattr(self, "_btn_disconnect"):
+            self._btn_disconnect.setEnabled(
+                bool(
+                    selected_info
+                    and selected_info.transport_type in {AdbTransport.TCPIP, AdbTransport.TLS_MDNS}
+                )
+                and not self._operation_running()
+            )
         if hasattr(self, "_btn_check_kbd"):
             self._btn_check_kbd.setEnabled(bool(active_device_id))
         if hasattr(self, "_btn_install_kbd"):
@@ -974,6 +960,8 @@ class DevicePage(QWidget):
             self._device.device_selected.connect(lambda *_: self._update_action_button_states())
             self._device.adb_status_changed.connect(self._on_adb_status)
             self._device.error_occurred.connect(self._on_device_error)
+            self._device.operation_started.connect(self._on_operation_started)
+            self._device.operation_finished.connect(self._on_operation_finished)
             # 初始刷新
             self._refresh_device_list(self._device.devices)
             self._update_action_button_states()
@@ -1001,12 +989,41 @@ class DevicePage(QWidget):
     def _on_device_error(self, msg: str):
         self._log(self._t("page.device.log.service", msg=msg))
 
+    def _operation_running(self) -> bool:
+        return bool(self._device and getattr(self._device, "operation_running", False))
+
+    def _on_operation_started(self, operation: str):
+        self._log(self._t("page.device.log.operation_started", operation=operation))
+        self._update_action_button_states()
+
+    def _on_operation_finished(self, operation: str, success: bool, message: str, payload: str):
+        result = self._t("page.device.result.success") if success else self._t("page.device.result.failed")
+        self._log(
+            self._t(
+                "page.device.log.operation_finished",
+                operation=operation,
+                result=result,
+                msg=message,
+            )
+        )
+        if success and payload and operation in {"connect", "tcpip"}:
+            self._wifi_input.setText(payload)
+        self._update_action_button_states()
+
     def _refresh_device_list(self, devices):
+        previous_id = ""
+        previous_item = self._device_list.currentItem()
+        if previous_item:
+            previous_id = str(previous_item.data(Qt.UserRole) or "")
         self._device_list.clear()
         if not devices:
             self._device_list.addItem(self._t("page.device.empty.list"))
             self._update_action_button_states()
             return
+        preferred_id = previous_id
+        if not preferred_id and self._device and self._device.selected_device:
+            preferred_id = self._device.selected_device.device_id or ""
+        preferred_row = -1
         for d in devices:
             color = "#3fb950" if d.status == DeviceStatus.CONNECTED else "#e3b341"
             text = f"[{d.status.value.upper()}]  {d.display_name}"
@@ -1015,6 +1032,12 @@ class DevicePage(QWidget):
             item.setForeground(QColor(color))
             item.setData(Qt.UserRole, d.device_id)
             self._device_list.addItem(item)
+            if d.device_id == preferred_id:
+                preferred_row = self._device_list.count() - 1
+        if preferred_row >= 0:
+            self._device_list.setCurrentRow(preferred_row)
+        elif len(devices) == 1:
+            self._device_list.setCurrentRow(0)
         self._update_action_button_states()
 
     def _on_device_selected(self, row):
@@ -1056,19 +1079,17 @@ class DevicePage(QWidget):
             self._log(self._t("page.device.disconnect.no_device_id"))
             return
 
-        if isinstance(device_id, str) and "_adb-tls-connect._tcp" in device_id:
+        selected_info = None
+        if self._device:
+            selected_info = next(
+                (d for d in self._device.devices if d.device_id == device_id),
+                None,
+            )
+        if selected_info and selected_info.transport_type == AdbTransport.TLS_MDNS:
             self._log(self._t("page.device.disconnect.mdns_hint"))
 
         if self._device:
-            ok, msg = self._device.disconnect_device(device_id)
-            self._log(
-                self._t(
-                    "page.device.log.disconnect_result",
-                    device_id=device_id,
-                    result=self._t("page.device.result.success") if ok else self._t("page.device.result.failed"),
-                    msg=msg,
-                )
-            )
+            self._device.disconnect_device_async(device_id)
 
     def _on_refresh(self):
         if self._device:
@@ -1080,24 +1101,37 @@ class DevicePage(QWidget):
         if not addr:
             return
         if self._device:
-            ok, msg = self._device.connect_device(addr)
-            self._log(
-                self._t(
-                    "page.device.log.connect_result",
-                    addr=addr,
-                    result=self._t("page.device.result.success") if ok else self._t("page.device.result.failed"),
-                    msg=msg,
-                )
-            )
+            self._device.connect_device_async(addr)
+
+    def _selected_list_device_id(self) -> str:
+        item = self._device_list.currentItem()
+        return str(item.data(Qt.UserRole) or "") if item else ""
+
+    def _on_usb_to_wifi(self):
+        device_id = self._selected_list_device_id()
+        if not device_id:
+            self._log(self._t("page.device.usb.select_required"))
+            return
+        if self._device:
+            self._device.enable_tcpip_device_async(device_id)
+
+    def _on_use_usb(self):
+        device_id = self._selected_list_device_id()
+        if not device_id:
+            self._log(self._t("page.device.usb.select_required"))
+            return
+        if self._device:
+            self._device.use_usb_device_async(device_id)
 
     def _on_qr_scan_pair(self):
         """
         打开「生成配对二维码」对话框。
         PC 端生成标准 ADB 配对二维码（WIFI:T:ADB;S:...;P:...;;），
         手机「无线调试」→「使用二维码配对设备」扫描后自动配对。
-        配对成功后刷新设备列表并将新设备 IP 填入连接框。
+        配对成功后刷新设备列表；仅当 ADB 返回真实 IP:port 时才填入连接框。
         """
-        # 获取当前已知设备 ID 集合，用于检测新增设备
+        # 保留该参数以兼容现有对话框构造接口；配对结果按二维码中唯一的
+        # mDNS 实例精确匹配，不再用“新增设备”这种易误判方式推断。
         known_ids: set = set()
         if self._device:
             known_ids = {d.device_id for d in self._device.devices}
@@ -1114,12 +1148,15 @@ class DevicePage(QWidget):
         dlg.exec()
 
         paired_id = dlg.paired_device_id
-        if paired_id:
-            self._log(self._t("page.device.log.qr_pair_success", device_id=paired_id))
+        if dlg.pair_succeeded:
+            display_id = paired_id or self._t("page.device.qr_scan.paired_waiting")
+            self._log(self._t("page.device.log.qr_pair_success", device_id=display_id))
+            if dlg.pair_message:
+                self._log(dlg.pair_message)
             if self._device:
                 self._device.refresh()
                 # 若为 WiFi 设备（含 :），提取 IP 填入连接框
-                if ":" in paired_id:
+                if ":" in paired_id and not is_mdns_transport_serial(paired_id):
                     self._wifi_input.setText(paired_id)
                     self._log(self._t("page.device.log.addr_filled", addr=paired_id))
         else:
@@ -1134,17 +1171,7 @@ class DevicePage(QWidget):
         code = dlg.pair_code
         self._log(self._t("page.device.log.pairing", addr=addr))
         if self._device:
-            ok, msg = self._device.pair_device(addr, code)
-            if ok:
-                self._log(self._t("page.device.log.pair_success", msg=msg))
-                ip = addr.split(":")[0]
-                if ":5555" in msg:
-                    self._wifi_input.setText(ip)
-                else:
-                    self._wifi_input.setText(ip)
-                    self._log(self._t("page.device.log.port_hint", ip=ip))
-            else:
-                self._log(self._t("page.device.log.pair_failed", msg=msg))
+            self._device.pair_device_async(addr, code)
         else:
             self._log(self._t("page.device.service_unavailable"))
 
@@ -1226,6 +1253,10 @@ class DevicePage(QWidget):
         # 输入框 placeholder
         self._wifi_addr_lbl.setText(i18n_manager.t("page.device.wifi.addr_label"))
         self._qr_hint_lbl.setText(i18n_manager.t("page.device.wifi.qr_hint"))
+        self._usb_wifi_hint_lbl.setText(i18n_manager.t("page.device.wifi.usb_hint"))
+        self._btn_usb_to_wifi.setText(i18n_manager.t("page.device.btn.usb_to_wifi"))
+        self._btn_use_usb.setText(i18n_manager.t("page.device.btn.use_usb"))
+        self._btn_use_usb.setToolTip(i18n_manager.t("page.device.btn.use_usb.tooltip"))
         self._wifi_input.setPlaceholderText(i18n_manager.t("page.device.hint.wifi"))
         self._adb_status_lbl.setText(i18n_manager.t("page.device.adb.checking"))
 

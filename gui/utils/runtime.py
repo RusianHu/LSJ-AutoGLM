@@ -62,8 +62,8 @@ def find_adb_executable() -> Path | None:
 
     优先级：
     1. OPEN_AUTOGLM_ADB_PATH / OPEN_AUTOGLM_ADB
-    2. 打包内置资源 / 运行根目录附近的常见相对路径
-    3. 当前 PATH 中的 adb
+    2. 当前 PATH 中的 adb（优先使用用户已更新的 Platform-Tools）
+    3. 打包内置资源 / 运行根目录附近的常见相对路径
     """
     env_override = (os.environ.get("OPEN_AUTOGLM_ADB_PATH") or os.environ.get("OPEN_AUTOGLM_ADB") or "").strip()
     if env_override:
@@ -72,6 +72,10 @@ def find_adb_executable() -> Path | None:
             candidate = app_root() / candidate
         if candidate.exists():
             return candidate.resolve()
+
+    which_path = shutil.which("adb")
+    if which_path:
+        return Path(which_path).resolve()
 
     adb_name = "adb.exe" if sys.platform == "win32" else "adb"
     candidates: list[Path] = []
@@ -88,9 +92,6 @@ def find_adb_executable() -> Path | None:
         if candidate.exists():
             return candidate.resolve()
 
-    which_path = shutil.which("adb")
-    if which_path:
-        return Path(which_path).resolve()
     return None
 
 
@@ -115,14 +116,25 @@ def ensure_runtime_path() -> None:
         path_entries.insert(0, resolved)
         normalized.add(key)
 
+    # 在注入项目内置工具目录前确定 ADB，避免 scrcpy 自带的旧 adb.exe
+    # 意外覆盖用户 PATH 中更高版本的 Android SDK Platform-Tools。
     adb_path = find_adb_executable()
-    if adb_path is not None:
-        _prepend(adb_path.parent)
 
     for root in _iter_search_roots():
-        _prepend(root)
-        _prepend(root / "platform-tools")
-        _prepend(root / "scrcpy")
+        for candidate in (root, root / "platform-tools", root / "scrcpy"):
+            if candidate.is_dir():
+                _prepend(candidate)
+
+    # 最后置顶已经选定的 ADB 目录；scrcpy.exe 仍可从后续 PATH 项找到。
+    if adb_path is not None:
+        adb_key = str(adb_path.parent.resolve())
+        compare = adb_key.lower() if sys.platform == "win32" else adb_key
+        path_entries = [
+            entry
+            for entry in path_entries
+            if (entry.lower() if sys.platform == "win32" else entry) != compare
+        ]
+        path_entries.insert(0, adb_key)
 
     os.environ["PATH"] = os.pathsep.join(path_entries)
 

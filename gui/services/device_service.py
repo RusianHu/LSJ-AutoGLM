@@ -8,7 +8,7 @@
 - _enrich_device_info 改为在 worker 线程中执行
 """
 
-import shutil
+import re
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -17,7 +17,16 @@ from typing import Callable, List, Optional, Tuple
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-from gui.utils.runtime import find_adb_keyboard_apk
+from gui.services.adb_client import (
+    ADB_TLS_CONNECT_SERVICE,
+    AdbClient,
+    AdbError,
+    DEFAULT_ADB_TCP_PORT,
+    MdnsService,
+    is_mdns_transport_serial,
+    normalize_endpoint,
+)
+from gui.utils.runtime import find_adb_executable, find_adb_keyboard_apk
 
 
 class DeviceStatus(Enum):
@@ -29,12 +38,23 @@ class DeviceStatus(Enum):
     DISCONNECTED = "disconnected"
 
 
+class AdbTransport(Enum):
+    """ADB transport 类型；用于约束允许的连接/断开操作。"""
+
+    USB = "usb"
+    TCPIP = "tcpip"
+    TLS_MDNS = "tls_mdns"
+    EMULATOR = "emulator"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class DeviceInfo:
     """设备信息"""
     device_id: str
     status: DeviceStatus
     connection_type: str = "unknown"   # usb / wifi / unknown
+    transport_type: AdbTransport = AdbTransport.UNKNOWN
     model: str = ""
     android_version: str = ""
     adb_keyboard_installed: bool = False
@@ -69,63 +89,38 @@ def _terminate_process(proc: subprocess.Popen) -> None:
 
 
 
-def _infer_connection_type(device_id: str) -> str:
-    """根据 adb 设备 ID 推断连接方式。"""
+def _classify_transport(device_id: str) -> AdbTransport:
+    """根据 ADB serial 区分 USB、传统 TCP/IP、TLS/mDNS 与模拟器。"""
     normalized = (device_id or "").strip().lower()
     if not normalized:
-        return "unknown"
-    if ":" in normalized:
-        return "wifi"
-    if (
-        "._adb-tls-connect._tcp" in normalized
-        or "._adb-tls-pairing._tcp" in normalized
-    ):
-        return "wifi"
-    return "usb"
-
-
-def _list_mdns_services() -> List[Tuple[str, str, str]]:
-    """返回 [(instance_name, service_type, endpoint)]。"""
+        return AdbTransport.UNKNOWN
+    if is_mdns_transport_serial(normalized):
+        return AdbTransport.TLS_MDNS
+    if re.fullmatch(r"emulator-\d+", normalized):
+        return AdbTransport.EMULATOR
     try:
-        r = subprocess.run(
-            ["adb", "mdns", "services"],
-            capture_output=True, text=True, timeout=5
-        )
-        services: List[Tuple[str, str, str]] = []
-        for raw_line in (r.stdout or "").splitlines():
-            line = raw_line.strip()
-            if not line or line.startswith("List of discovered"):
-                continue
-            parts = line.split()
-            if len(parts) < 3:
-                continue
-            services.append((parts[0], parts[1], parts[2]))
-        return services
-    except Exception:
-        return []
+        normalize_endpoint(normalized)
+        return AdbTransport.TCPIP
+    except ValueError:
+        return AdbTransport.USB
 
 
-def _find_connect_endpoints(ip: str = "") -> List[str]:
-    endpoints: List[str] = []
-    for _instance_name, service_type, endpoint in _list_mdns_services():
-        if service_type != "_adb-tls-connect._tcp":
-            continue
-        if ":" not in endpoint:
-            continue
-        if ip and not endpoint.startswith(f"{ip}:"):
-            continue
-        if endpoint not in endpoints:
-            endpoints.append(endpoint)
-    return endpoints
+def _infer_connection_type(device_id: str) -> str:
+    transport = _classify_transport(device_id)
+    if transport == AdbTransport.USB:
+        return "usb"
+    if transport in {AdbTransport.TCPIP, AdbTransport.TLS_MDNS}:
+        return "wifi"
+    if transport == AdbTransport.EMULATOR:
+        return "emulator"
+    return "unknown"
 
 
 def _normalize_connect_address(address: str) -> str:
-    normalized = (address or "").strip()
-    if not normalized:
-        return ""
-    if ":" not in normalized:
-        return f"{normalized}:5555"
-    return normalized
+    try:
+        return normalize_endpoint(address, DEFAULT_ADB_TCP_PORT)
+    except ValueError:
+        return (address or "").strip()
 
 
 
@@ -145,19 +140,32 @@ def _is_reconnectable_wifi_address(address: str) -> bool:
 
 
 def _run_adb_connect(address: str, timeout: int = 15) -> Tuple[bool, str]:
-    normalized = _normalize_connect_address(address)
-    if not normalized:
-        return False, "设备地址不能为空"
-    result = subprocess.run(
-        ["adb", "connect", normalized],
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-    )
-    output = (result.stdout or "").strip() or (result.stderr or "").strip()
-    lowered = output.lower()
-    success = result.returncode == 0 and "connected" in lowered
-    return success, output or "无输出"
+    del timeout  # AdbClient 统一管理连接超时和输出判断
+    return AdbClient().connect(address)
+
+
+def _deduplicate_tls_devices(devices: List[DeviceInfo], services: List[MdnsService]) -> List[DeviceInfo]:
+    """用 mDNS 标记 TLS 端点，并合并同一 transport 的别名与显式地址。"""
+    ids = {device.device_id for device in devices}
+    tls_endpoints: dict[str, str] = {}
+    for service in services:
+        if service.service_type != ADB_TLS_CONNECT_SERVICE:
+            continue
+        alias = f"{service.instance_name}.{service.service_type}"
+        tls_endpoints[service.endpoint] = alias
+
+    result: List[DeviceInfo] = []
+    for device in devices:
+        alias = tls_endpoints.get(device.device_id)
+        if alias:
+            # adb connect <TLS endpoint> 只会在 devices 中显示 IP:port；结合
+            # mDNS 服务才能与传统明文 adb tcpip transport 正确区分。
+            device.transport_type = AdbTransport.TLS_MDNS
+            device.connection_type = "wifi"
+            if alias in ids:
+                continue
+        result.append(device)
+    return result
 
 
 
@@ -279,6 +287,7 @@ class _RefreshWorker(QThread):
                 self.adb_error.emit(f"adb devices 失败: {result.stderr}")
                 return
             devices = self._parse(result.stdout)
+            devices = self._deduplicate_tls_transports(devices)
             if self._should_stop():
                 return
 
@@ -293,6 +302,7 @@ class _RefreshWorker(QThread):
                     self.adb_error.emit(f"adb devices 失败: {result.stderr}")
                     return
                 devices = self._parse(result.stdout)
+                devices = self._deduplicate_tls_transports(devices)
                 if self._should_stop():
                     return
 
@@ -314,6 +324,14 @@ class _RefreshWorker(QThread):
             d.device_id == normalized and d.status == DeviceStatus.CONNECTED
             for d in devices
         )
+
+    @staticmethod
+    def _deduplicate_tls_transports(devices: List[DeviceInfo]) -> List[DeviceInfo]:
+        try:
+            services = AdbClient().mdns_services()
+        except (AdbError, ValueError):
+            return devices
+        return _deduplicate_tls_devices(devices, services)
 
     def _try_reconnect(self, address: str) -> None:
         try:
@@ -363,6 +381,7 @@ class _RefreshWorker(QThread):
             }
             status = status_map.get(status_str, DeviceStatus.UNKNOWN)
             conn_type = _infer_connection_type(device_id)
+            transport_type = _classify_transport(device_id)
 
             model = ""
             for part in parts[2:]:
@@ -374,6 +393,7 @@ class _RefreshWorker(QThread):
                 device_id=device_id,
                 status=status,
                 connection_type=conn_type,
+                transport_type=transport_type,
                 model=model,
             )
             if status == DeviceStatus.CONNECTED:
@@ -430,6 +450,34 @@ class _RefreshWorker(QThread):
             pass
 
 
+class _AdbOperationWorker(QThread):
+    """串行执行一次可能耗时的 ADB 连接操作。"""
+
+    result_ready = Signal(str, bool, str, str)
+
+    def __init__(self, operation: str, callback, parent=None):
+        super().__init__(parent)
+        self.operation = operation
+        self._callback = callback
+        self._stop_requested = False
+
+    def request_stop(self):
+        self._stop_requested = True
+
+    def should_stop(self) -> bool:
+        return self._stop_requested
+
+    def run(self):
+        try:
+            success, message, payload = self._callback(self.should_stop)
+        except (AdbError, ValueError) as exc:
+            success, message, payload = False, str(exc), ""
+        except Exception as exc:
+            success, message, payload = False, f"ADB 操作异常：{exc}", ""
+        if not self._stop_requested:
+            self.result_ready.emit(self.operation, bool(success), str(message), str(payload or ""))
+
+
 class DeviceService(QObject):
     """
     设备服务 - 负责：
@@ -445,6 +493,8 @@ class DeviceService(QObject):
     device_selected = Signal(object)        # DeviceInfo | None
     adb_status_changed = Signal(bool, str)  # (available, message)
     error_occurred = Signal(str)
+    operation_started = Signal(str)
+    operation_finished = Signal(str, bool, str, str)  # operation, success, message, payload
 
     POLL_INTERVAL_MS = 5000
     AUTO_RECONNECT_COOLDOWN_SEC = 15.0
@@ -453,10 +503,13 @@ class DeviceService(QObject):
         super().__init__(parent)
         self._config = config_service
         self._adb_path: str = "adb"
+        self._adb_client = AdbClient(self._adb_path)
         self._devices: List[DeviceInfo] = []
         self._selected_device: Optional[DeviceInfo] = None
         self._adb_available: bool = False
         self._worker: Optional[_RefreshWorker] = None
+        self._operation_worker: Optional[_AdbOperationWorker] = None
+        self._operation_in_progress: bool = False
         self._stopping: bool = False
         self._last_auto_reconnect_address: str = ""
         self._last_auto_reconnect_at: float = 0.0
@@ -481,8 +534,8 @@ class DeviceService(QObject):
 
     def check_adb(self) -> Tuple[bool, str]:
         """检查 ADB 是否可用（同步，仅运行 adb version，通常极快）"""
-        path = shutil.which("adb")
-        if path is None:
+        adb_executable = find_adb_executable()
+        if adb_executable is None:
             self._adb_available = False
             msg = "ADB 未找到，请确认 ADB 已安装并加入 PATH"
             self.adb_status_changed.emit(False, msg)
@@ -490,15 +543,18 @@ class DeviceService(QObject):
 
         try:
             result = subprocess.run(
-                ["adb", "version"],
+                [str(adb_executable), "version"],
                 capture_output=True, text=True, timeout=5
             )
             if result.returncode == 0:
-                version_line = result.stdout.splitlines()[0] if result.stdout else "ADB"
+                version_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                version_text = " | ".join(version_lines[:2]) if version_lines else "ADB"
+                version_text = f"{version_text} | {adb_executable}"
                 self._adb_available = True
-                self._adb_path = path
-                self.adb_status_changed.emit(True, version_line)
-                return True, version_line
+                self._adb_path = str(adb_executable)
+                self._adb_client = AdbClient(self._adb_path)
+                self.adb_status_changed.emit(True, version_text)
+                return True, version_text
             else:
                 self._adb_available = False
                 msg = f"ADB 运行异常: {result.stderr}"
@@ -514,6 +570,10 @@ class DeviceService(QObject):
     def adb_available(self) -> bool:
         return self._adb_available
 
+    @property
+    def adb_client(self) -> AdbClient:
+        return self._adb_client
+
     def _remember_connected_address(self, address: str):
         normalized = _normalize_connect_address(address)
         if not self._config or not _is_reconnectable_wifi_address(normalized):
@@ -527,11 +587,18 @@ class DeviceService(QObject):
             self.error_occurred.emit(f"保存设备记忆失败: {e}")
 
     def _clear_remembered_address(self, address: str):
-        normalized = _normalize_connect_address(address)
-        if not self._config or not _is_reconnectable_wifi_address(normalized):
+        if not self._config:
             return
+        raw = (address or "").strip()
+        normalized = _normalize_connect_address(raw)
         current = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
-        if current != normalized:
+        # TLS mDNS 名称与历史 IP:port 可能代表同一台手机。用户主动断开
+        # mDNS transport 时必须同时停用旧的自动重连地址，否则轮询线程会
+        # 很快把刚断开的手机重新连上，看起来就像“断开无效”。
+        disconnecting_tls = is_mdns_transport_serial(raw)
+        if current not in {raw, normalized} and not (
+            disconnecting_tls and _is_reconnectable_wifi_address(current)
+        ):
             return
         try:
             self._config.set("OPEN_AUTOGLM_DEVICE_ID", "")
@@ -565,6 +632,10 @@ class DeviceService(QObject):
     def refresh(self):
         """异步刷新设备列表（不阻塞 UI 线程）"""
         if self._stopping:
+            return
+        # 配对/连接/断开期间由操作线程独占连接状态；完成信号会主动刷新。
+        # 避免定时轮询携带旧配置并发执行 adb connect，产生重复 transport。
+        if self.operation_running:
             return
         if not self._adb_available:
             self.check_adb()
@@ -618,73 +689,164 @@ class DeviceService(QObject):
         address 格式：ip:port（配对端口，与连接端口不同）
         pairing_code：6位数字配对码
         """
-        if ":" not in address:
-            return False, "地址格式错误，需包含配对端口，例如：192.168.x.x:37890"
         try:
-            r = subprocess.run(
-                ["adb", "pair", address, pairing_code],
-                capture_output=True, text=True, timeout=30
-            )
-            output = (r.stdout + r.stderr).strip()
-            lowered = output.lower()
-            success = "successfully paired" in lowered or "already paired" in lowered
-            if success:
-                host = address.split(":", 1)[0].strip()
-                connect_msgs = []
-                connect_ok = False
-                attempted: List[str] = []
-                deadline = time.monotonic() + 12
-                while time.monotonic() < deadline and not connect_ok:
-                    endpoints = _find_connect_endpoints(host)
-                    for endpoint in endpoints:
-                        if endpoint in attempted:
-                            continue
-                        attempted.append(endpoint)
-                        c_ok, c_msg = self.connect_device(endpoint)
-                        connect_msgs.append(c_msg)
-                        if c_ok:
-                            connect_ok = True
-                            break
-                    if not connect_ok:
-                        time.sleep(1)
-                self.refresh()
-                if connect_msgs:
-                    output = f"{output} | 自动连接：{'；'.join(msg for msg in connect_msgs if msg)}"
-                if not connect_ok:
-                    output = f"{output} | 未发现可自动连接的无线调试端口，请在手机无线调试页确认后手动连接"
-            return success, output or "无输出"
-        except FileNotFoundError:
-            return False, "ADB 未找到，请确认已安装并加入 PATH"
-        except Exception as e:
-            return False, str(e)
+            result = self._adb_client.pair_and_connect(address, pairing_code, connect_timeout=15)
+            if result.connected_endpoint:
+                self._remember_connected_address(result.connected_endpoint)
+            self.refresh()
+            return result.paired, result.message
+        except (AdbError, ValueError) as exc:
+            return False, str(exc)
 
     def connect_device(self, address: str) -> Tuple[bool, str]:
         """无线连接设备"""
-        normalized = _normalize_connect_address(address)
         try:
-            success, msg = _run_adb_connect(normalized, timeout=15)
+            normalized = normalize_endpoint(address, DEFAULT_ADB_TCP_PORT)
+            success, msg = self._adb_client.connect(normalized)
             if success:
                 self._remember_connected_address(normalized)
                 self.refresh()
             return success, msg
-        except Exception as e:
-            return False, str(e)
+        except (AdbError, ValueError) as exc:
+            return False, str(exc)
 
     def disconnect_device(self, device_id: str) -> Tuple[bool, str]:
         """断开指定设备"""
+        transport = _classify_transport(device_id)
+        if transport not in {AdbTransport.TCPIP, AdbTransport.TLS_MDNS}:
+            return False, "仅无线 ADB transport 支持主动断开；USB 设备请拔出数据线"
         target = _normalize_connect_address(device_id) if _is_reconnectable_wifi_address(device_id) else device_id
         try:
-            r = subprocess.run(
-                ["adb", "disconnect", target],
-                capture_output=True, text=True, timeout=10
-            )
-            msg = r.stdout.strip() or r.stderr.strip()
-            if r.returncode == 0:
+            success, msg = self._adb_client.disconnect(target)
+            if success:
                 self._clear_remembered_address(target)
             self.refresh()
-            return r.returncode == 0, msg
-        except Exception as e:
-            return False, str(e)
+            return success, msg
+        except (AdbError, ValueError) as exc:
+            return False, str(exc)
+
+    def enable_tcpip_device(self, device_id: str, port: int = DEFAULT_ADB_TCP_PORT) -> Tuple[bool, str, str]:
+        """按 QtScrcpy 链路将 USB 设备切换为传统 ADB TCP/IP。"""
+        device = next((item for item in self._devices if item.device_id == device_id), None)
+        transport = device.transport_type if device is not None else _classify_transport(device_id)
+        if transport != AdbTransport.USB:
+            return False, "该操作需要先选择 USB 连接的设备", ""
+        try:
+            result = self._adb_client.enable_tcpip(device_id, port=port)
+            if result.success and result.endpoint:
+                self._remember_connected_address(result.endpoint)
+                self.refresh()
+            return result.success, result.message, result.endpoint
+        except (AdbError, ValueError) as exc:
+            return False, str(exc), ""
+
+    def use_usb_device(self, device_id: str) -> Tuple[bool, str]:
+        """要求目标 adbd 恢复 USB 传输模式。"""
+        device = next((item for item in self._devices if item.device_id == device_id), None)
+        transport = device.transport_type if device is not None else _classify_transport(device_id)
+        if transport != AdbTransport.TCPIP:
+            return False, "恢复 USB 模式仅适用于 adb tcpip 建立的传统无线连接"
+        try:
+            success, message = self._adb_client.use_usb(device_id)
+            self.refresh()
+            return success, message
+        except (AdbError, ValueError) as exc:
+            return False, str(exc)
+
+    @property
+    def operation_running(self) -> bool:
+        return self._operation_in_progress
+
+    def _start_operation(self, operation: str, callback) -> bool:
+        if self.operation_running:
+            self.error_occurred.emit("已有 ADB 连接操作正在执行，请稍候")
+            return False
+        worker = _AdbOperationWorker(operation, callback)
+        worker.result_ready.connect(self._on_operation_done)
+        worker.finished.connect(self._cleanup_operation_worker)
+        self._operation_worker = worker
+        self._operation_in_progress = True
+        self.operation_started.emit(operation)
+        worker.start()
+        return True
+
+    def connect_device_async(self, address: str) -> bool:
+        def callback(should_stop):
+            normalized = normalize_endpoint(address, DEFAULT_ADB_TCP_PORT)
+            success, message = self._adb_client.connect(normalized, should_stop=should_stop)
+            if success:
+                self._remember_connected_address(normalized)
+            return success, message, normalized
+
+        return self._start_operation("connect", callback)
+
+    def disconnect_device_async(self, device_id: str) -> bool:
+        def callback(should_stop):
+            transport = _classify_transport(device_id)
+            if transport not in {AdbTransport.TCPIP, AdbTransport.TLS_MDNS}:
+                return False, "仅无线 ADB transport 支持主动断开；USB 设备请拔出数据线", device_id
+            target = _normalize_connect_address(device_id) if _is_reconnectable_wifi_address(device_id) else device_id
+            success, message = self._adb_client.disconnect(target, should_stop=should_stop)
+            if success:
+                self._clear_remembered_address(target)
+            return success, message, target
+
+        return self._start_operation("disconnect", callback)
+
+    def pair_device_async(self, address: str, pairing_code: str) -> bool:
+        def callback(should_stop):
+            result = self._adb_client.pair_and_connect(
+                address,
+                pairing_code,
+                connect_timeout=15,
+                should_stop=should_stop,
+            )
+            if result.connected_endpoint:
+                self._remember_connected_address(result.connected_endpoint)
+            return result.paired, result.message, result.connected_endpoint
+
+        return self._start_operation("pair", callback)
+
+    def enable_tcpip_device_async(self, device_id: str, port: int = DEFAULT_ADB_TCP_PORT) -> bool:
+        def callback(should_stop):
+            device = next((item for item in self._devices if item.device_id == device_id), None)
+            transport = device.transport_type if device is not None else _classify_transport(device_id)
+            if transport != AdbTransport.USB:
+                return False, "该操作需要先选择 USB 连接的设备", ""
+            result = self._adb_client.enable_tcpip(
+                device_id,
+                port=port,
+                should_stop=should_stop,
+            )
+            if result.success and result.endpoint:
+                self._remember_connected_address(result.endpoint)
+            return result.success, result.message, result.endpoint
+
+        return self._start_operation("tcpip", callback)
+
+    def use_usb_device_async(self, device_id: str) -> bool:
+        def callback(should_stop):
+            device = next((item for item in self._devices if item.device_id == device_id), None)
+            transport = device.transport_type if device is not None else _classify_transport(device_id)
+            if transport != AdbTransport.TCPIP:
+                return False, "恢复 USB 模式仅适用于 adb tcpip 建立的传统无线连接", device_id
+            success, message = self._adb_client.use_usb(device_id, should_stop=should_stop)
+            return success, message, device_id
+
+        return self._start_operation("usb", callback)
+
+    def _on_operation_done(self, operation: str, success: bool, message: str, payload: str):
+        self._operation_in_progress = False
+        self.operation_finished.emit(operation, success, message, payload)
+        self.refresh()
+
+    def _cleanup_operation_worker(self, *_args):
+        worker = self.sender()
+        if worker and worker is self._operation_worker:
+            self._operation_worker = None
+            self._operation_in_progress = False
+        if worker:
+            worker.deleteLater()
 
     def select_device(self, device_id: Optional[str]):
         """选中设备"""
@@ -776,3 +938,11 @@ class DeviceService(QObject):
             if self._worker and not self._worker.isRunning():
                 self._worker.deleteLater()
             self._worker = None
+        if self._operation_worker:
+            if self._operation_worker.isRunning():
+                self._operation_worker.request_stop()
+                self._operation_worker.wait(3000)
+            if not self._operation_worker.isRunning():
+                self._operation_worker.deleteLater()
+            self._operation_worker = None
+            self._operation_in_progress = False
