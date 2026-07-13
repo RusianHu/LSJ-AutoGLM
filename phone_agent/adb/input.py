@@ -28,6 +28,11 @@ def type_text(text: str, device_id: str | None = None) -> None:
         Requires ADB Keyboard to be installed on the device.
         See: https://github.com/nicnocquee/AdbKeyboard
     """
+    # 空字符串会被 Windows adb 命令行丢弃，导致 Android 把 --es msg 解析为
+    # 缺少参数，并且可能在输入法已经切换后抛错、无法恢复原输入法。
+    if not text:
+        return
+
     adb_prefix = _get_adb_prefix(device_id)
     encoded_text = base64.b64encode(text.encode("utf-8")).decode("utf-8")
 
@@ -119,9 +124,6 @@ def detect_and_set_adb_keyboard(device_id: str | None = None) -> str:
         current_after = (verify_result.stdout + verify_result.stderr).strip()
         if ADB_KEYBOARD_IME not in current_after:
             raise RuntimeError(f"ADBKeyboard 未生效，当前输入法为: {current_after or 'empty'}")
-
-    # Warm up the keyboard
-    type_text("", device_id)
 
     return current_ime
 

@@ -3,8 +3,8 @@
 镜像服务 - 管理 scrcpy 实时镜像进程的生命周期。
 
 策略：
-- 首选：内嵌 scrcpy 进程，通过窗口句柄嵌入 Qt 容器（Windows）
-- 降级：外部独立 scrcpy 窗口（可视化但不嵌入）
+- 首选：外部独立 scrcpy 窗口，完整保留原生键盘与双向剪贴板控制通道
+- 可选：内嵌 scrcpy 进程，通过窗口句柄嵌入 Qt 容器（Windows）
 - 兜底：ADB 截图轮询预览模式
 
 修复记录：
@@ -375,6 +375,56 @@ class _ExternalWindowThread(QThread):
             self.window_failed.emit(f"独立窗口前置失败: {e}")
 
 
+class _ScrcpyShortcutWorker(QThread):
+    """把 Qt 工具栏动作转发为 scrcpy 原生快捷键。"""
+
+    succeeded = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, hwnd: int, key: str):
+        super().__init__()
+        self._hwnd = int(hwnd or 0)
+        self._key = (key or "").strip().upper()
+
+    def run(self):
+        if sys.platform != "win32":
+            self.failed.emit("当前平台暂不支持从 GUI 转发 scrcpy 快捷键")
+            return
+        if not self._hwnd or len(self._key) != 1:
+            self.failed.emit("scrcpy 控制窗口尚未就绪")
+            return
+
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            if not user32.IsWindow(self._hwnd):
+                self.failed.emit("scrcpy 控制窗口已失效")
+                return
+
+            SW_RESTORE = 9
+            VK_CONTROL = 0x11
+            KEYEVENTF_KEYUP = 0x0002
+            vk = ord(self._key)
+
+            user32.ShowWindow(self._hwnd, SW_RESTORE)
+            user32.BringWindowToTop(self._hwnd)
+            user32.SetForegroundWindow(self._hwnd)
+            user32.SetFocus(self._hwnd)
+            time.sleep(0.15)
+
+            # scrcpy 启动时把左右 Ctrl 配置为 MOD；Ctrl+V 因而走其原生
+            # SET_CLIPBOARD + PASTE 控制消息，支持 Unicode，不经过 ADBKeyboard。
+            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.04)
+            user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            self.succeeded.emit(self._key)
+        except Exception as exc:
+            self.failed.emit(f"scrcpy 快捷键转发失败: {exc}")
+
+
 class MirrorService(QObject):
     """
     镜像服务。
@@ -392,6 +442,8 @@ class MirrorService(QObject):
     frame_ready = Signal(object)      # QPixmap
     error_occurred = Signal(str)
     window_created = Signal(int)      # HWND
+    control_ready_changed = Signal(bool)
+    control_action_succeeded = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -402,6 +454,7 @@ class MirrorService(QObject):
         self._screenshot_poller: Optional[_ScreenshotPoller] = None
         self._embed_thread: Optional[_EmbedWindowThread] = None
         self._external_window_thread: Optional[_ExternalWindowThread] = None
+        self._shortcut_worker: Optional[_ScrcpyShortcutWorker] = None
         self._window_hwnd: Optional[int] = None
         self._device_screen_size: Optional[tuple[int, int]] = None
         self._last_resize_request: Optional[tuple[int, int, int, int]] = None
@@ -426,6 +479,14 @@ class MirrorService(QObject):
     @property
     def is_running(self) -> bool:
         return self._state == MirrorState.RUNNING
+
+    @property
+    def control_ready(self) -> bool:
+        return bool(
+            self._window_hwnd
+            and self._mode in {MirrorMode.SCRCPY_EMBEDDED, MirrorMode.SCRCPY_EXTERNAL}
+            and self._state == MirrorState.RUNNING
+        )
 
     def _set_state(self, state: MirrorState):
         self._state = state
@@ -521,6 +582,7 @@ class MirrorService(QObject):
 
     def _on_external_window_ready(self, hwnd: int):
         self._window_hwnd = hwnd
+        self.control_ready_changed.emit(True)
         self._emit_debug(f"scrcpy 独立窗口已就绪并前置: hwnd={hwnd}")
         if self._external_window_thread:
             self._external_window_thread.deleteLater()
@@ -632,6 +694,12 @@ class MirrorService(QObject):
             "--serial", device_id,
             "--window-title", window_title,
             "--stay-awake",
+            # 与 QtScrcpy 的控制体验保持一致：Ctrl 作为快捷键修饰键，
+            # 普通文本使用 Android SDK 注入，剪贴板交给 scrcpy 控制通道。
+            "--keyboard=sdk",
+            "--mouse=sdk",
+            "--prefer-text",
+            "--shortcut-mod", "lctrl,rctrl",
         ]
         if embedded_requested:
             args += ["--window-borderless"]
@@ -643,16 +711,10 @@ class MirrorService(QObject):
                 ]
         elif sys.platform == "win32":
             # Windows 独立窗口模式：显式放在可见区域，并尽量与 GUI 进程解耦。
-            # 同时增强文本输入与剪贴板体验：
-            # - --prefer-text：优先文本注入，减少部分输入法/应用场景下按键转发失效
-            # - --legacy-paste：兼容部分设备上的剪贴板粘贴问题
-            # - --shortcut-mod=lctrl,rctrl：允许直接用 Ctrl 触发 scrcpy 快捷键，便于 Ctrl+V 粘贴
+            # 外部窗口保留 scrcpy 自己的 SDL 输入焦点和控制通道。
             args += [
                 "--window-x", "120",
                 "--window-y", "120",
-                "--prefer-text",
-                "--legacy-paste",
-                "--shortcut-mod", "lctrl,rctrl",
             ]
 
         creationflags = 0
@@ -718,6 +780,7 @@ class MirrorService(QObject):
 
     def _on_embed_done(self, hwnd: int):
         self._window_hwnd = hwnd
+        self.control_ready_changed.emit(True)
         self.window_created.emit(hwnd)
         if self._embed_thread:
             self._embed_thread.deleteLater()
@@ -734,6 +797,8 @@ class MirrorService(QObject):
 
     def _start_adb_screenshot(self, device_id: str):
         """降级：启动 ADB 截图轮询"""
+        self._window_hwnd = None
+        self.control_ready_changed.emit(False)
         self._mode = MirrorMode.ADB_SCREENSHOT
         self.mode_changed.emit(MirrorMode.ADB_SCREENSHOT)
 
@@ -756,9 +821,39 @@ class MirrorService(QObject):
 
     # ---------- 停止镜像 ----------
 
+    def paste_host_clipboard(self) -> tuple[bool, str]:
+        """通过 scrcpy 原生 Ctrl+V 同步电脑剪贴板并在设备端粘贴。"""
+        if not self.control_ready:
+            return False, "scrcpy 控制窗口尚未就绪"
+        if self._shortcut_worker and self._shortcut_worker.isRunning():
+            return False, "上一条 scrcpy 控制操作尚未完成"
+
+        worker = _ScrcpyShortcutWorker(self._window_hwnd, "V")
+        worker.failed.connect(self.error_occurred.emit)
+        worker.succeeded.connect(self._on_shortcut_succeeded)
+        worker.finished.connect(self._on_shortcut_finished)
+        self._shortcut_worker = worker
+        worker.start()
+        return True, "已请求 scrcpy 同步电脑剪贴板并粘贴"
+
+    def _on_shortcut_succeeded(self, key: str):
+        self.control_action_succeeded.emit(key)
+
+    def _on_shortcut_finished(self):
+        worker = self._shortcut_worker
+        self._shortcut_worker = None
+        if worker:
+            worker.deleteLater()
+
     def stop(self):
         """停止镜像（三阶段清理）"""
         self._monitor_timer.stop()
+
+        if self._shortcut_worker:
+            if self._shortcut_worker.isRunning():
+                self._shortcut_worker.wait(2000)
+            self._shortcut_worker.deleteLater()
+            self._shortcut_worker = None
 
         # 停止截图线程
         if self._screenshot_poller:
@@ -787,6 +882,7 @@ class MirrorService(QObject):
         self._kill_scrcpy()
 
         self._window_hwnd = None
+        self.control_ready_changed.emit(False)
         self._mode = MirrorMode.NONE
         self.mode_changed.emit(MirrorMode.NONE)
         self._set_state(MirrorState.STOPPED)
@@ -835,6 +931,7 @@ class MirrorService(QObject):
                 # 这属于正常停止，不应误判为错误并自动降级到 ADB 截图模式。
                 if last_mode == MirrorMode.SCRCPY_EXTERNAL and ret == 0:
                     self._window_hwnd = None
+                    self.control_ready_changed.emit(False)
                     self._mode = MirrorMode.NONE
                     self.mode_changed.emit(MirrorMode.NONE)
                     self._set_state(MirrorState.STOPPED)

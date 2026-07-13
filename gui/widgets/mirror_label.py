@@ -10,8 +10,9 @@ MirrorLabel - 设备镜像显示控件。
 
 import subprocess
 import sys
+from queue import Empty, Queue
 
-from PySide6.QtCore import Qt, QRect, QPoint, QThread, Signal
+from PySide6.QtCore import Qt, QRect, QThread, QTimer, Signal
 from PySide6.QtGui import QPixmap, QCursor, QKeySequence
 from PySide6.QtWidgets import QApplication, QLabel, QSizePolicy
 
@@ -44,44 +45,95 @@ class _AdbTapWorker(QThread):
             self.failed.emit(detail or f"adb tap failed (code={result.returncode})")
 
 
-class _AdbTextWorker(QThread):
+class _AdbInputWorker(QThread):
+    """串行处理截图降级模式下的键盘输入，避免快速输入时丢字符。"""
+
     failed = Signal(str)
 
-    def __init__(self, device_id: str, text: str | None = None, keycode: int | None = None):
+    def __init__(self, device_id: str):
         super().__init__()
         self._device_id = device_id
-        self._text = text
-        self._keycode = keycode
+        self._commands: Queue[tuple[str, object | None]] = Queue()
+        self._running = True
+        self._original_ime = ""
+        self._keyboard_active = False
+
+    def activate(self):
+        self._commands.put(("activate", None))
+
+    def type_text(self, text: str):
+        if text:
+            self._commands.put(("text", text))
+
+    def keyevent(self, keycode: int):
+        self._commands.put(("key", int(keycode)))
+
+    def deactivate(self):
+        self._commands.put(("deactivate", None))
+
+    def stop(self):
+        self._running = False
+        self._commands.put(("stop", None))
+
+    def _activate_keyboard(self):
+        if self._keyboard_active:
+            return
+        from phone_agent.adb.input import detect_and_set_adb_keyboard
+
+        self._original_ime = detect_and_set_adb_keyboard(self._device_id)
+        self._keyboard_active = True
+
+    def _restore_keyboard(self):
+        if not self._keyboard_active:
+            return
+        try:
+            from phone_agent.adb.input import restore_keyboard
+
+            if self._original_ime:
+                restore_keyboard(self._original_ime, self._device_id)
+        finally:
+            self._keyboard_active = False
+            self._original_ime = ""
 
     def run(self):
         try:
-            if self._keycode is not None:
-                result = subprocess.run(
-                    ["adb", "-s", self._device_id, "shell", "input", "keyevent", str(self._keycode)],
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                    timeout=8,
-                )
-                if result.returncode != 0:
-                    detail = (result.stderr or result.stdout or "").strip()
-                    self.failed.emit(detail or f"adb keyevent failed (code={result.returncode})")
-                return
+            while self._running:
+                try:
+                    command, payload = self._commands.get(timeout=0.25)
+                except Empty:
+                    continue
 
-            if not self._text:
-                return
+                if command == "stop":
+                    break
+                try:
+                    if command == "activate":
+                        self._activate_keyboard()
+                    elif command == "deactivate":
+                        self._restore_keyboard()
+                    elif command == "text":
+                        self._activate_keyboard()
+                        from phone_agent.adb.input import type_text
 
-            from phone_agent.adb.input import detect_and_set_adb_keyboard, restore_keyboard, type_text
-
-            original_ime = detect_and_set_adb_keyboard(self._device_id)
+                        type_text(str(payload), self._device_id)
+                    elif command == "key":
+                        result = subprocess.run(
+                            ["adb", "-s", self._device_id, "shell", "input", "keyevent", str(payload)],
+                            capture_output=True,
+                            text=True,
+                            encoding="utf-8",
+                            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                            timeout=8,
+                        )
+                        if result.returncode != 0:
+                            detail = (result.stderr or result.stdout or "").strip()
+                            raise RuntimeError(detail or f"adb keyevent failed (code={result.returncode})")
+                except Exception as exc:
+                    self.failed.emit(str(exc))
+        finally:
             try:
-                type_text(self._text, self._device_id)
-            finally:
-                if original_ime:
-                    restore_keyboard(original_ime, self._device_id)
-        except Exception as e:
-            self.failed.emit(str(e))
+                self._restore_keyboard()
+            except Exception as exc:
+                self.failed.emit(str(exc))
 
 
 class MirrorLabel(QLabel):
@@ -102,7 +154,12 @@ class MirrorLabel(QLabel):
         self._device_id: str = ""
         self._tap_enabled: bool = True
         self._tap_worker: _AdbTapWorker | None = None
-        self._input_worker: _AdbTextWorker | None = None
+        self._input_worker: _AdbInputWorker | None = None
+        self._text_buffer = ""
+        self._text_flush_timer = QTimer(self)
+        self._text_flush_timer.setSingleShot(True)
+        self._text_flush_timer.setInterval(45)
+        self._text_flush_timer.timeout.connect(self._flush_text_buffer)
 
         self.setAlignment(Qt.AlignCenter)
         self.setScaledContents(False)
@@ -110,6 +167,7 @@ class MirrorLabel(QLabel):
         self.setMinimumSize(1, 1)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setAttribute(Qt.WA_InputMethodEnabled, True)
         # 显示手型光标，提示可点击
         self.setCursor(QCursor(Qt.PointingHandCursor))
         self.setToolTip("点击此处控制手机；点击后可直接键盘输入，Ctrl+V 粘贴")
@@ -120,7 +178,11 @@ class MirrorLabel(QLabel):
 
     def set_device_id(self, device_id: str):
         """设置目标 ADB 设备 ID"""
-        self._device_id = device_id or ""
+        resolved = device_id or ""
+        if resolved == self._device_id:
+            return
+        self.shutdown_input()
+        self._device_id = resolved
 
     def set_tap_enabled(self, enabled: bool):
         """是否响应鼠标点击（任务运行中可禁用手动操控）"""
@@ -142,6 +204,17 @@ class MirrorLabel(QLabel):
         """清除当前帧"""
         self._raw_pixmap = None
         self.clear()
+
+    def shutdown_input(self):
+        """停止输入分发线程并恢复进入镜像前的手机输入法。"""
+        self._text_flush_timer.stop()
+        self._text_buffer = ""
+        worker = self._input_worker
+        self._input_worker = None
+        if worker:
+            worker.stop()
+            worker.wait(3000)
+            worker.deleteLater()
 
     # ------------------------------------------------------------------
     # 内部：缩放显示
@@ -234,6 +307,7 @@ class MirrorLabel(QLabel):
             return
 
         if event.matches(QKeySequence.Paste):
+            self._flush_text_buffer()
             clipboard = QApplication.clipboard()
             text = clipboard.text() if clipboard is not None else ""
             if text:
@@ -257,17 +331,41 @@ class MirrorLabel(QLabel):
         }
         keycode = key_map.get(event.key())
         if keycode is not None:
+            self._flush_text_buffer()
             self._adb_keyevent(keycode)
             event.accept()
             return
 
         text = event.text()
-        if text:
-            self._adb_type_text(text)
+        if text and not (event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)):
+            self._queue_text(text)
             event.accept()
             return
 
         super().keyPressEvent(event)
+
+    def inputMethodEvent(self, event):
+        """接收电脑输入法提交的中文等 Unicode 文本。"""
+        commit = event.commitString()
+        if commit:
+            self._queue_text(commit)
+        event.accept()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        worker = self._ensure_input_worker()
+        if worker:
+            worker.activate()
+
+    def focusOutEvent(self, event):
+        self._flush_text_buffer()
+        if self._input_worker:
+            self._input_worker.deactivate()
+        super().focusOutEvent(event)
+
+    def closeEvent(self, event):
+        self.shutdown_input()
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -310,22 +408,38 @@ class MirrorLabel(QLabel):
         self._tap_worker = worker
         worker.start()
 
-    def _adb_type_text(self, text: str):
-        """在后台异步执行 ADB Keyboard 文本输入"""
-        if self._input_worker and self._input_worker.isRunning():
-            return
-        worker = _AdbTextWorker(self._device_id, text=text)
+    def _ensure_input_worker(self) -> _AdbInputWorker | None:
+        if not self._device_id:
+            return None
+        # start() 后的极短时间内 isRunning() 仍可能为 False；只要实例存在，
+        # 就必须复用同一个串行队列，否则快速输入会并发创建多个 QThread。
+        if self._input_worker:
+            return self._input_worker
+        worker = _AdbInputWorker(self._device_id)
         worker.failed.connect(self.tap_failed.emit)
-        worker.finished.connect(worker.deleteLater)
         self._input_worker = worker
         worker.start()
+        return worker
+
+    def _queue_text(self, text: str):
+        self._text_buffer += text
+        self._text_flush_timer.start()
+
+    def _flush_text_buffer(self):
+        text = self._text_buffer
+        self._text_buffer = ""
+        self._text_flush_timer.stop()
+        if text:
+            self._adb_type_text(text)
+
+    def _adb_type_text(self, text: str):
+        """把文本加入串行 ADBKeyboard 输入队列。"""
+        worker = self._ensure_input_worker()
+        if worker:
+            worker.type_text(text)
 
     def _adb_keyevent(self, keycode: int):
-        """在后台异步执行 adb shell input keyevent"""
-        if self._input_worker and self._input_worker.isRunning():
-            return
-        worker = _AdbTextWorker(self._device_id, keycode=keycode)
-        worker.failed.connect(self.tap_failed.emit)
-        worker.finished.connect(worker.deleteLater)
-        self._input_worker = worker
-        worker.start()
+        """把按键加入串行 adb shell input keyevent 队列。"""
+        worker = self._ensure_input_worker()
+        if worker:
+            worker.keyevent(keycode)

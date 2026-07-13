@@ -88,7 +88,7 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_EXPERT_CONSECUTIVE_FAILURE_THRESHOLD": "3",
         "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": "3",
         "OPEN_AUTOGLM_THEME": "system",
-        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": "false",
+        "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": "true",
     }
 
     # 敏感字段（显示时遮罩）

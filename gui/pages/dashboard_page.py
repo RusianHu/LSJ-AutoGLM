@@ -1460,6 +1460,8 @@ class DashboardPage(QWidget):
             self._mirror.frame_ready.connect(self._on_mirror_frame)
             self._mirror.error_occurred.connect(self._on_mirror_error)
             self._mirror.window_created.connect(self._on_mirror_window_created)
+            self._mirror.control_ready_changed.connect(self._on_mirror_control_ready_changed)
+            self._mirror.control_action_succeeded.connect(self._on_mirror_control_action_succeeded)
         if self._mirror_label:
             self._mirror_label.tap_failed.connect(self._on_mirror_error)
 
@@ -1634,16 +1636,16 @@ class DashboardPage(QWidget):
         if self._mirror_open_in_new_window_check is not None:
             return self._mirror_open_in_new_window_check.isChecked()
         if self._config:
-            return self._is_truthy(self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "false"))
-        return False
+            return self._is_truthy(self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "true"))
+        return True
 
     def _sync_mirror_open_mode_preference(self):
         if not self._mirror_open_in_new_window_check:
             return
-        checked = False
+        checked = True
         if self._config:
             checked = self._is_truthy(
-                self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "false")
+                self._config.get("OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW", "true")
             )
         self._mirror_open_in_new_window_check.blockSignals(True)
         self._mirror_open_in_new_window_check.setChecked(checked)
@@ -2090,6 +2092,21 @@ class DashboardPage(QWidget):
     def _on_mirror_error(self, msg: str):
         self._append_log(self._t("page.dashboard.mirror.log.error", msg=msg))
 
+    def _on_mirror_control_ready_changed(self, _ready: bool):
+        self._update_mirror_aux_buttons()
+
+    def _on_mirror_control_action_succeeded(self, action: str):
+        if action == "V":
+            clipboard = QApplication.clipboard()
+            text = clipboard.text() if clipboard is not None else ""
+            self._append_log(
+                self._t(
+                    "page.dashboard.mirror.log.native_clipboard_paste_done",
+                    chars=len(text),
+                )
+            )
+        self._update_mirror_aux_buttons()
+
     def _update_mirror_aux_buttons(self):
         btn = getattr(self, "_btn_mirror_paste_clipboard", None)
         if btn is None:
@@ -2098,11 +2115,15 @@ class DashboardPage(QWidget):
         mirror_mode = self._mirror.mode if self._mirror else MirrorMode.NONE
         mirror_state = self._mirror.state if self._mirror else MirrorState.IDLE
         worker_busy = bool(self._mirror_clipboard_worker and self._mirror_clipboard_worker.isRunning())
+        native_control_ready = bool(self._mirror and self._mirror.control_ready)
         enabled = (
             bool(current_device_id)
-            and mirror_mode == MirrorMode.SCRCPY_EXTERNAL
             and mirror_state == MirrorState.RUNNING
             and not worker_busy
+            and (
+                native_control_ready
+                or mirror_mode == MirrorMode.ADB_SCREENSHOT
+            )
         )
         btn.setEnabled(enabled)
         if worker_busy:
@@ -2148,6 +2169,22 @@ class DashboardPage(QWidget):
         text = clipboard.text() if clipboard is not None else ""
         if not text:
             self._on_mirror_error(self._t("page.dashboard.mirror.log.clipboard_empty_inline"))
+            return
+        if self._mirror and self._mirror.mode in {
+            MirrorMode.SCRCPY_EMBEDDED,
+            MirrorMode.SCRCPY_EXTERNAL,
+        }:
+            ok, message = self._mirror.paste_host_clipboard()
+            if ok:
+                self._append_log(
+                    self._t(
+                        "page.dashboard.mirror.log.native_clipboard_paste_start",
+                        chars=len(text),
+                    )
+                )
+            else:
+                self._on_mirror_error(message)
+            self._update_mirror_aux_buttons()
             return
         self._paste_clipboard_to_device_text(text)
 
@@ -2329,6 +2366,10 @@ class DashboardPage(QWidget):
     def shutdown(self):
         self._shutting_down = True
         self._close_mirror_popup_window(ignore_stop=True)
+        if self._mirror_label:
+            self._mirror_label.shutdown_input()
+        if self._mirror_popup_window:
+            self._mirror_popup_window.label_widget().shutdown_input()
         if hasattr(self, "_readiness_refresh_timer"):
             self._readiness_refresh_timer.stop()
         if self._mirror_clipboard_worker:
