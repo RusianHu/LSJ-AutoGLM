@@ -51,6 +51,16 @@ MESSAGES_EN = {
 }
 
 
+def _normalize_lang(lang: str = "cn") -> str:
+    """统一 Phone Agent 消息层的语言码，和 GUI/Agent 入口保持一致。"""
+    normalized = (lang or "cn").strip().lower().replace("_", "-")
+    if normalized in {"zh", "zh-cn", "chinese", "cn"}:
+        return "cn"
+    if normalized in {"en", "en-us", "en-gb", "english"}:
+        return "en"
+    return "cn"
+
+
 def get_messages(lang: str = "cn") -> dict:
     """
     Get UI messages dictionary by language.
@@ -61,7 +71,7 @@ def get_messages(lang: str = "cn") -> dict:
     Returns:
         Dictionary of UI messages.
     """
-    if lang == "en":
+    if _normalize_lang(lang) == "en":
         return MESSAGES_EN
     return MESSAGES_ZH
 

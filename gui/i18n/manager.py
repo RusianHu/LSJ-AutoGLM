@@ -31,6 +31,10 @@ _LANG_ALIASES: dict[str, str] = {
     "zh_cn": "cn",
     "chinese": "cn",
     "english": "en",
+    "en-us": "en",
+    "en_us": "en",
+    "en-gb": "en",
+    "en_gb": "en",
 }
 
 

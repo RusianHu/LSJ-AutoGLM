@@ -388,10 +388,10 @@ class _ScrcpyShortcutWorker(QThread):
 
     def run(self):
         if sys.platform != "win32":
-            self.failed.emit("当前平台暂不支持从 GUI 转发 scrcpy 快捷键")
+            self.failed.emit("scrcpy_control.platform_unsupported")
             return
         if not self._hwnd or len(self._key) != 1:
-            self.failed.emit("scrcpy 控制窗口尚未就绪")
+            self.failed.emit("scrcpy_control.window_not_ready")
             return
 
         try:
@@ -399,7 +399,7 @@ class _ScrcpyShortcutWorker(QThread):
 
             user32 = ctypes.windll.user32
             if not user32.IsWindow(self._hwnd):
-                self.failed.emit("scrcpy 控制窗口已失效")
+                self.failed.emit("scrcpy_control.window_invalid")
                 return
 
             SW_RESTORE = 9
@@ -422,7 +422,7 @@ class _ScrcpyShortcutWorker(QThread):
             user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
             self.succeeded.emit(self._key)
         except Exception as exc:
-            self.failed.emit(f"scrcpy 快捷键转发失败: {exc}")
+            self.failed.emit(f"scrcpy_control.shortcut_failed:{exc}")
 
 
 class MirrorService(QObject):
@@ -824,9 +824,9 @@ class MirrorService(QObject):
     def paste_host_clipboard(self) -> tuple[bool, str]:
         """通过 scrcpy 原生 Ctrl+V 同步电脑剪贴板并在设备端粘贴。"""
         if not self.control_ready:
-            return False, "scrcpy 控制窗口尚未就绪"
+            return False, "scrcpy_control.window_not_ready"
         if self._shortcut_worker and self._shortcut_worker.isRunning():
-            return False, "上一条 scrcpy 控制操作尚未完成"
+            return False, "scrcpy_control.action_busy"
 
         worker = _ScrcpyShortcutWorker(self._window_hwnd, "V")
         worker.failed.connect(self.error_occurred.emit)
@@ -834,7 +834,7 @@ class MirrorService(QObject):
         worker.finished.connect(self._on_shortcut_finished)
         self._shortcut_worker = worker
         worker.start()
-        return True, "已请求 scrcpy 同步电脑剪贴板并粘贴"
+        return True, ""
 
     def _on_shortcut_succeeded(self, key: str):
         self.control_action_succeeded.emit(key)

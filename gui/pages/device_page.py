@@ -56,6 +56,7 @@ class _PairWatcher(QThread):
     配对成功后等待 TLS transport 上线并返回其设备标识。
     """
     status_changed = Signal(str)
+    service_found = Signal(str)
     pairing_finished = Signal(bool, str, str)  # success, message, connected endpoint
     timed_out = Signal()
 
@@ -84,15 +85,13 @@ class _PairWatcher(QThread):
                 self._password,
                 timeout=self._timeout_sec,
                 should_stop=lambda: self._stop,
-                on_service_found=lambda endpoint: self.status_changed.emit(
-                    f"已发现手机配对服务：{endpoint}，正在安全配对..."
-                ),
+                on_service_found=lambda endpoint: self.service_found.emit(endpoint),
             )
             if self._stop:
                 return
             if result.paired:
                 self.pairing_finished.emit(True, result.message, result.connected_endpoint)
-            elif "超时" in result.message:
+            elif result.timed_out:
                 self.status_changed.emit(result.message)
                 self.timed_out.emit()
             else:
@@ -315,6 +314,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
             parent=None,
         )
         self._watcher.status_changed.connect(self._on_pairing_status)
+        self._watcher.service_found.connect(self._on_pairing_service_found)
         self._watcher.pairing_finished.connect(self._on_pairing_finished)
         self._watcher.timed_out.connect(self._on_timed_out)
         self._watcher.start()
@@ -323,6 +323,16 @@ class QrCodeScanDialog(ThemeAwareDialog):
         self._status_text = message
         self._status_level = "muted"
         self._render_status()
+
+    def _on_pairing_service_found(self, endpoint: str):
+        """将后台发现到的地址转换为当前语言的状态文案。"""
+        if endpoint and ":" in endpoint:
+            self._status_text = self._t(
+                "page.device.qr_scan.service_found",
+                endpoint=endpoint,
+            )
+            self._status_level = "muted"
+            self._render_status()
 
     def _on_pairing_finished(self, success: bool, message: str, device_id: str):
         self._timer.stop()

@@ -58,6 +58,7 @@ class PairResult:
     message: str
     pairing_endpoint: str = ""
     connected_endpoint: str = ""
+    timed_out: bool = False
 
 
 @dataclass(frozen=True)
@@ -523,7 +524,7 @@ class AdbClient:
         message = "等待二维码配对服务超时，请确认手机与电脑在同一局域网并重新扫码"
         if last_error:
             message += f" | 最后错误：{last_error}"
-        return PairResult(False, message)
+        return PairResult(False, message, timed_out=True)
 
     def get_wlan_ipv4(
         self,

@@ -100,10 +100,10 @@ class _MirrorClipboardPasteWorker(QThread):
     def run(self):
         try:
             if not self._device_id:
-                self.failed.emit("当前未绑定设备，无法粘贴")
+                self.failed.emit("device_not_bound")
                 return
             if not self._text:
-                self.failed.emit("剪贴板为空，无法粘贴")
+                self.failed.emit("clipboard_empty")
                 return
 
             from phone_agent.adb.input import detect_and_set_adb_keyboard, restore_keyboard, type_text
@@ -116,7 +116,7 @@ class _MirrorClipboardPasteWorker(QThread):
                     restore_keyboard(original_ime, self._device_id)
             self.succeeded.emit(self._text)
         except Exception as e:
-            self.failed.emit(f"{e}；请先点击设备输入框聚焦后再重试")
+            self.failed.emit(str(e))
 
 
 class _ReadinessWorker(QThread):
@@ -152,7 +152,7 @@ class _MirrorPopupWindow(QWidget):
 
     closing = Signal()
 
-    def __init__(self):
+    def __init__(self, translator=None):
         super().__init__(None)
         self._closing_in_progress = False
         self.setWindowFlags(
@@ -178,7 +178,7 @@ class _MirrorPopupWindow(QWidget):
         self._placeholder.setWordWrap(True)
         self._stack.addWidget(self._placeholder)
 
-        self._label = MirrorLabel()
+        self._label = MirrorLabel(translator=translator)
         self._stack.addWidget(self._label)
 
         self._host = QWidget()
@@ -899,7 +899,7 @@ class DashboardPage(QWidget):
         self._mirror_stack.addWidget(self._mirror_placeholder)
 
         # ADB 截图降级时的图片显示（MirrorLabel 自带自适应缩放和鼠标 tap 控制）
-        self._mirror_label = MirrorLabel()
+        self._mirror_label = MirrorLabel(translator=self._t)
         self._mirror_stack.addWidget(self._mirror_label)
 
         # scrcpy 内嵌专用原生宿主控件，避免直接挂到带 Qt 布局的容器上
@@ -1697,12 +1697,13 @@ class DashboardPage(QWidget):
 
     def _ensure_mirror_popup_window(self):
         if self._mirror_popup_window is None:
-            self._mirror_popup_window = _MirrorPopupWindow()
+            self._mirror_popup_window = _MirrorPopupWindow(translator=self._t)
             self._mirror_popup_window.closing.connect(self._on_mirror_popup_window_closing)
             self._mirror_popup_window.container_widget().installEventFilter(self)
             self._mirror_popup_window.host_widget().installEventFilter(self)
             self._mirror_popup_window.label_widget().tap_failed.connect(self._on_mirror_error)
         self._mirror_popup_window.set_placeholder_text(self._t("page.dashboard.mirror.placeholder"))
+        self._mirror_popup_window.label_widget().set_translator(self._t)
         self._mirror_popup_window.label_widget().set_device_id(self._current_device_id())
         self._update_mirror_popup_title()
         if self._theme_tokens is not None:
@@ -2090,7 +2091,21 @@ class DashboardPage(QWidget):
         self._mirror_label.set_raw_pixmap(pixmap)
 
     def _on_mirror_error(self, msg: str):
-        self._append_log(self._t("page.dashboard.mirror.log.error", msg=msg))
+        error_text = str(msg or "")
+        if error_text == "scrcpy_control.platform_unsupported":
+            error_text = self._t("page.dashboard.mirror.control.error.platform_unsupported")
+        elif error_text == "scrcpy_control.window_not_ready":
+            error_text = self._t("page.dashboard.mirror.control.error.window_not_ready")
+        elif error_text == "scrcpy_control.window_invalid":
+            error_text = self._t("page.dashboard.mirror.control.error.window_invalid")
+        elif error_text == "scrcpy_control.action_busy":
+            error_text = self._t("page.dashboard.mirror.control.error.action_busy")
+        elif error_text.startswith("scrcpy_control.shortcut_failed:"):
+            error_text = self._t(
+                "page.dashboard.mirror.control.error.shortcut_failed",
+                error=error_text.split(":", 1)[1],
+            )
+        self._append_log(self._t("page.dashboard.mirror.log.error", msg=error_text))
 
     def _on_mirror_control_ready_changed(self, _ready: bool):
         self._update_mirror_aux_buttons()
@@ -2139,7 +2154,7 @@ class DashboardPage(QWidget):
         if self._mirror_clipboard_worker and self._mirror_clipboard_worker.isRunning():
             return
         worker = _MirrorClipboardPasteWorker(device_id, text)
-        worker.failed.connect(self._on_mirror_error)
+        worker.failed.connect(self._on_mirror_clipboard_failed)
         worker.succeeded.connect(
             lambda pasted_text: self._append_log(
                 self._t(
@@ -2159,6 +2174,19 @@ class DashboardPage(QWidget):
         )
         self._update_mirror_aux_buttons()
         worker.start()
+
+    def _on_mirror_clipboard_failed(self, error: str):
+        """将剪贴板输入线程的稳定错误码/原始错误包装为当前语言文案。"""
+        if error == "device_not_bound":
+            message = self._t("page.dashboard.mirror.log.clipboard_no_device")
+        elif error == "clipboard_empty":
+            message = self._t("page.dashboard.mirror.log.clipboard_empty_inline")
+        else:
+            message = self._t(
+                "page.dashboard.mirror.log.clipboard_paste_failed",
+                error=error,
+            )
+        self._on_mirror_error(message)
 
     def _on_mirror_clipboard_worker_finished(self):
         self._mirror_clipboard_worker = None
@@ -2518,6 +2546,10 @@ class DashboardPage(QWidget):
             self._mirror_open_in_new_window_check.setText(_t("page.dashboard.mirror.open_in_new_window"))
         if hasattr(self, "_btn_mirror_paste_clipboard"):
             self._btn_mirror_paste_clipboard.setText(_t("page.dashboard.mirror.btn.paste_clipboard"))
+        if hasattr(self, "_mirror_label") and self._mirror_label:
+            self._mirror_label.set_translator(_t)
+        if self._mirror_popup_window:
+            self._mirror_popup_window.label_widget().set_translator(_t)
         if hasattr(self, "_mirror_detached_placeholder"):
             self._mirror_detached_placeholder.setText(_t("page.dashboard.mirror.detached_placeholder"))
         self._update_mirror_popup_title()

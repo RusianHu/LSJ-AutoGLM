@@ -148,8 +148,9 @@ class MirrorLabel(QLabel):
 
     tap_failed = Signal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, translator=None):
         super().__init__(parent)
+        self._translator = translator
         self._raw_pixmap: QPixmap | None = None   # 原始帧（手机分辨率）
         self._device_id: str = ""
         self._tap_enabled: bool = True
@@ -170,11 +171,27 @@ class MirrorLabel(QLabel):
         self.setAttribute(Qt.WA_InputMethodEnabled, True)
         # 显示手型光标，提示可点击
         self.setCursor(QCursor(Qt.PointingHandCursor))
-        self.setToolTip("点击此处控制手机；点击后可直接键盘输入，Ctrl+V 粘贴")
+        self.set_tap_enabled(True)
 
     # ------------------------------------------------------------------
     # 公共接口
     # ------------------------------------------------------------------
+
+    def set_translator(self, translator=None):
+        """设置翻译回调并立即刷新镜像控件 tooltip。"""
+        self._translator = translator
+        if self._tap_enabled:
+            self.setToolTip(self._translate("page.dashboard.mirror.control.tooltip"))
+
+    def _translate(self, key: str) -> str:
+        if callable(self._translator):
+            try:
+                return self._translator(key)
+            except Exception:
+                pass
+        from gui.i18n.locales.cn import CN
+
+        return CN.get(key, f"[[{key}]]")
 
     def set_device_id(self, device_id: str):
         """设置目标 ADB 设备 ID"""
@@ -190,7 +207,9 @@ class MirrorLabel(QLabel):
         self.setCursor(
             QCursor(Qt.PointingHandCursor) if enabled else QCursor(Qt.ArrowCursor)
         )
-        self.setToolTip("点击此处控制手机；点击后可直接键盘输入，Ctrl+V 粘贴" if enabled else "")
+        self.setToolTip(
+            self._translate("page.dashboard.mirror.control.tooltip") if enabled else ""
+        )
 
     def set_raw_pixmap(self, pixmap: QPixmap):
         """
