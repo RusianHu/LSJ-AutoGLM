@@ -28,6 +28,11 @@ set "ADB_DIR="
 set "SCRCPY_EXE="
 set "SCRCPY_DIR="
 
+if exist "%CD%\gui\assets\fontawesome-webfont.ttf" (
+    echo [INFO] Bundling mirror toolbar icon font
+    set "EXTRA_DATA_ARGS=!EXTRA_DATA_ARGS! --add-data ""%CD%\gui\assets;gui\assets"""
+)
+
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 

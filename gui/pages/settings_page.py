@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,6 +38,11 @@ from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
 from gui.theme.styles.buttons import btn_primary, btn_subtle
 from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
+from gui.services.mirror_actions import (
+    MIRROR_TOOLBAR_ACTIONS,
+    normalize_mirror_toolbar_actions,
+    serialize_mirror_toolbar_actions,
+)
 from gui.utils.runtime import (
     app_root,
     gui_build_script_path,
@@ -421,6 +427,8 @@ class SettingsPage(QWidget):
         self._action_runtime_checks: dict[str, QCheckBox] = {}
         self._action_ai_checks: dict[str, QCheckBox] = {}
         self._action_matrix_syncing = False
+        self._mirror_toolbar_checks: dict[str, QCheckBox] = {}
+        self._mirror_toolbar_action_labels: dict[str, QLabel] = {}
         self._build_ui()
         self._theme_combo.currentIndexChanged.connect(self._on_theme_changed)
         self._lang_combo.currentIndexChanged.connect(self._on_lang_changed)
@@ -506,8 +514,77 @@ class SettingsPage(QWidget):
             active = self._config.get_active_channel()
             active_id = active.get("id", "") if active else ""
             self._rebuild_channel_detail(active_id)
-        self._load_values()  # 同步表单字段值
-        self._refresh_action_policy_summary()
+
+    def _build_mirror_toolbar_group(self) -> QGroupBox:
+        """构建设备镜像侧边工具栏的前端配置区。"""
+
+        group = QGroupBox(self._t("page.settings.section.mirror_toolbar"))
+        outer = QVBoxLayout(group)
+        outer.setContentsMargins(14, 18, 14, 14)
+        outer.setSpacing(10)
+
+        self._mirror_toolbar_enabled_check = QCheckBox(
+            self._t("page.settings.mirror_toolbar.enabled")
+        )
+        self._mirror_toolbar_enabled_check.toggled.connect(
+            self._on_mirror_toolbar_master_toggled
+        )
+        outer.addWidget(self._mirror_toolbar_enabled_check)
+
+        self._mirror_toolbar_hint_lbl = QLabel(
+            self._t("page.settings.mirror_toolbar.hint")
+        )
+        self._mirror_toolbar_hint_lbl.setProperty("role", "subtle")
+        self._mirror_toolbar_hint_lbl.setWordWrap(True)
+        outer.addWidget(self._mirror_toolbar_hint_lbl)
+
+        actions_widget = QWidget()
+        actions_layout = QGridLayout(actions_widget)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setHorizontalSpacing(24)
+        actions_layout.setVerticalSpacing(6)
+        for index, spec in enumerate(MIRROR_TOOLBAR_ACTIONS):
+            checkbox = QCheckBox(self._t(spec.label_key))
+            checkbox.setObjectName(f"SettingsMirrorToolbar_{spec.name}")
+            self._mirror_toolbar_checks[spec.name] = checkbox
+            self._mirror_toolbar_action_labels[spec.name] = checkbox
+            row, col = divmod(index, 2)
+            actions_layout.addWidget(checkbox, row, col)
+        outer.addWidget(actions_widget)
+
+        button_row = QHBoxLayout()
+        self._btn_mirror_toolbar_select_all = QPushButton(
+            self._t("page.settings.mirror_toolbar.btn.select_all")
+        )
+        self._btn_mirror_toolbar_select_all.setProperty("variant", "subtle")
+        self._btn_mirror_toolbar_select_all.clicked.connect(
+            lambda: self._set_mirror_toolbar_actions_checked(True)
+        )
+        button_row.addWidget(self._btn_mirror_toolbar_select_all)
+
+        self._btn_mirror_toolbar_clear_all = QPushButton(
+            self._t("page.settings.mirror_toolbar.btn.clear_all")
+        )
+        self._btn_mirror_toolbar_clear_all.setProperty("variant", "subtle")
+        self._btn_mirror_toolbar_clear_all.clicked.connect(
+            lambda: self._set_mirror_toolbar_actions_checked(False)
+        )
+        button_row.addWidget(self._btn_mirror_toolbar_clear_all)
+        button_row.addStretch(1)
+        outer.addLayout(button_row)
+        return group
+
+    def _on_mirror_toolbar_master_toggled(self, checked: bool):
+        for checkbox in self._mirror_toolbar_checks.values():
+            checkbox.setEnabled(bool(checked))
+        if hasattr(self, "_btn_mirror_toolbar_select_all"):
+            self._btn_mirror_toolbar_select_all.setEnabled(bool(checked))
+        if hasattr(self, "_btn_mirror_toolbar_clear_all"):
+            self._btn_mirror_toolbar_clear_all.setEnabled(bool(checked))
+
+    def _set_mirror_toolbar_actions_checked(self, checked: bool):
+        for checkbox in self._mirror_toolbar_checks.values():
+            checkbox.setChecked(bool(checked))
 
     # ================================================================
     # UI 构建
@@ -748,6 +825,10 @@ class SettingsPage(QWidget):
         self._theme_effect_label = QLabel(self._t("page.settings.theme.effect_label"))
         appearance_form.addRow(self._theme_effect_label, self._theme_hint_lbl)
         scroll_layout.addWidget(self._appearance_group)
+
+        # ---- 设备镜像侧边工具栏 ----
+        self._mirror_toolbar_group = self._build_mirror_toolbar_group()
+        scroll_layout.addWidget(self._mirror_toolbar_group)
 
         # ---- 构建与脚本 ----
         build_group = self._build_build_tools_group()
@@ -1567,9 +1648,29 @@ class SettingsPage(QWidget):
             edit.setText(value)
         self._load_lang_combo()
         self._load_device_type_combo()
+        self._load_mirror_toolbar_values()
         self._show_env_status_banner_if_needed()
         self._update_theme_hint()
         self._refresh_build_paths()
+
+    def _load_mirror_toolbar_values(self):
+        if not self._config or not hasattr(self, "_mirror_toolbar_enabled_check"):
+            return
+        getter = getattr(self._config, "get_mirror_toolbar_settings", None)
+        settings = getter() if callable(getter) else {
+            "enabled": True,
+            "actions": list(spec.name for spec in MIRROR_TOOLBAR_ACTIONS),
+        }
+        enabled = bool(settings.get("enabled", True))
+        selected = set(normalize_mirror_toolbar_actions(settings.get("actions", [])))
+        self._mirror_toolbar_enabled_check.blockSignals(True)
+        self._mirror_toolbar_enabled_check.setChecked(enabled)
+        self._mirror_toolbar_enabled_check.blockSignals(False)
+        for name, checkbox in self._mirror_toolbar_checks.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(name in selected)
+            checkbox.blockSignals(False)
+        self._on_mirror_toolbar_master_toggled(enabled)
 
     def _show_env_status_banner_if_needed(self):
         """根据 .env 当前状态显示首次运行提示。"""
@@ -1669,6 +1770,7 @@ class SettingsPage(QWidget):
         if hasattr(self, "_lang_combo"):
             updates["OPEN_AUTOGLM_LANG"] = self._lang_combo.currentData() or "cn"
         updates.update(self._build_action_policy_updates())
+        updates.update(self._build_mirror_toolbar_updates())
 
         updates = self._sync_active_channel_updates(updates)
 
@@ -1694,6 +1796,21 @@ class SettingsPage(QWidget):
                 i18n.set_language(new_lang)
         except Exception as e:
             QMessageBox.warning(self, self._t("page.settings.dialog.save_fail"), str(e))
+
+    def _build_mirror_toolbar_updates(self) -> dict[str, str]:
+        enabled = bool(
+            getattr(self, "_mirror_toolbar_enabled_check", None)
+            and self._mirror_toolbar_enabled_check.isChecked()
+        )
+        selected = [
+            name
+            for name, checkbox in self._mirror_toolbar_checks.items()
+            if checkbox.isChecked()
+        ]
+        return {
+            "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR": "true" if enabled else "false",
+            "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR_ACTIONS": serialize_mirror_toolbar_actions(selected),
+        }
 
     def _on_validate(self):
         """
@@ -1947,6 +2064,8 @@ class SettingsPage(QWidget):
             self._action_policy_group.setTitle(_t("page.settings.section.action_policy"))
         if hasattr(self, "_appearance_group"):
             self._appearance_group.setTitle(_t("page.settings.section.appearance"))
+        if hasattr(self, "_mirror_toolbar_group"):
+            self._mirror_toolbar_group.setTitle(_t("page.settings.section.mirror_toolbar"))
         if hasattr(self, "_build_tools_group"):
             self._build_tools_group.setTitle(_t("page.settings.section.build_tools"))
         if hasattr(self, "_quick_switch_group"):
@@ -1982,6 +2101,18 @@ class SettingsPage(QWidget):
             self._theme_label.setText(_t("page.settings.theme.label"))
         if hasattr(self, "_theme_effect_label"):
             self._theme_effect_label.setText(_t("page.settings.theme.effect_label"))
+        if hasattr(self, "_mirror_toolbar_enabled_check"):
+            self._mirror_toolbar_enabled_check.setText(_t("page.settings.mirror_toolbar.enabled"))
+        if hasattr(self, "_mirror_toolbar_hint_lbl"):
+            self._mirror_toolbar_hint_lbl.setText(_t("page.settings.mirror_toolbar.hint"))
+        for spec in MIRROR_TOOLBAR_ACTIONS:
+            checkbox = self._mirror_toolbar_checks.get(spec.name)
+            if checkbox:
+                checkbox.setText(_t(spec.label_key))
+        if hasattr(self, "_btn_mirror_toolbar_select_all"):
+            self._btn_mirror_toolbar_select_all.setText(_t("page.settings.mirror_toolbar.btn.select_all"))
+        if hasattr(self, "_btn_mirror_toolbar_clear_all"):
+            self._btn_mirror_toolbar_clear_all.setText(_t("page.settings.mirror_toolbar.btn.clear_all"))
         if hasattr(self, "_env_path_lbl") and self._config:
             self._env_path_lbl.setText(_t("page.settings.env_path_label", path=self._config.env_path))
         for key, lbl in self._field_labels.items():

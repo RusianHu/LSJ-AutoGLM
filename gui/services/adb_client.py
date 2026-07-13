@@ -183,6 +183,7 @@ def parse_mdns_services(output: str) -> list[MdnsService]:
 
 def parse_adb_devices(output: str) -> list[AdbDeviceRecord]:
     records: list[AdbDeviceRecord] = []
+    known_states = {"device", "offline", "unauthorized", "no permissions", "bootloader"}
     for raw_line in (output or "").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("List of devices attached") or line.startswith("*"):
@@ -190,12 +191,20 @@ def parse_adb_devices(output: str) -> list[AdbDeviceRecord]:
         parts = line.split()
         if len(parts) < 2:
             continue
+        state_index = next(
+            (index for index, token in enumerate(parts) if token in known_states),
+            1,
+        )
+        if state_index <= 0 or state_index >= len(parts):
+            continue
+        serial = " ".join(parts[:state_index])
+        state = parts[state_index]
         attrs: dict[str, str] = {}
-        for token in parts[2:]:
+        for token in parts[state_index + 1:]:
             if ":" in token:
                 key, value = token.split(":", 1)
                 attrs[key] = value
-        records.append(AdbDeviceRecord(parts[0], parts[1], attrs))
+        records.append(AdbDeviceRecord(serial, state, attrs))
     return records
 
 

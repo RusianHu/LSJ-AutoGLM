@@ -27,6 +27,11 @@ from phone_agent.actions.registry import (
     parse_action_name_collection,
     resolve_action_policy,
 )
+from gui.services.mirror_actions import (
+    MIRROR_TOOLBAR_DEFAULT_ACTIONS,
+    normalize_mirror_toolbar_actions,
+    serialize_mirror_toolbar_actions,
+)
 
 _ENV_FILE = resolve_env_path()
 
@@ -89,6 +94,10 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_EXPERT_MAX_RESCUES": "3",
         "OPEN_AUTOGLM_THEME": "system",
         "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": "true",
+        "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR": "true",
+        "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR_ACTIONS": serialize_mirror_toolbar_actions(
+            MIRROR_TOOLBAR_DEFAULT_ACTIONS
+        ),
     }
 
     # 敏感字段（显示时遮罩）
@@ -143,6 +152,8 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_AI_VISIBLE_ACTIONS": {"label": "AI 可见动作集合", "label_i18n_key": "page.settings.field.ai_visible_actions", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_THEME": {"label": "界面主题", "label_i18n_key": "page.settings.field.theme", "sensitive": False, "editable": False},
         "OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW": {"label": "镜像新窗口模式", "label_i18n_key": "page.settings.field.gui_mirror_new_window", "sensitive": False, "editable": False, "boolean": True},
+        "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR": {"label": "镜像侧边工具栏", "label_i18n_key": "page.settings.field.gui_mirror_toolbar", "sensitive": False, "editable": True, "boolean": True},
+        "OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR_ACTIONS": {"label": "镜像工具栏按钮", "label_i18n_key": "page.settings.field.gui_mirror_toolbar_actions", "sensitive": False, "editable": True},
     }
 
     # 兼容第一轮 GUI 中已写入/读取过的旧键名
@@ -404,6 +415,18 @@ class ConfigService(QObject):
             ),
             "enabled_actions": enabled_actions,
             "ai_visible_actions": ai_visible_actions,
+        }
+
+    def get_mirror_toolbar_settings(self) -> Dict[str, Any]:
+        """读取设备镜像侧边工具栏的总开关与按钮集合。"""
+
+        return {
+            "enabled": self._is_truthy(
+                self.get("OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR", "true")
+            ),
+            "actions": normalize_mirror_toolbar_actions(
+                self.get("OPEN_AUTOGLM_GUI_MIRROR_TOOLBAR_ACTIONS", "")
+            ),
         }
 
     def get_masked(self, key: str) -> str:

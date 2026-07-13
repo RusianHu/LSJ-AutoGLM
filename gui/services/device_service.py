@@ -364,6 +364,7 @@ class _RefreshWorker(QThread):
 
     def _parse(self, output: str) -> List[DeviceInfo]:
         devices = []
+        known_states = {"device", "offline", "unauthorized", "no permissions", "bootloader"}
         for line in output.splitlines()[1:]:
             line = line.strip()
             if not line:
@@ -371,8 +372,14 @@ class _RefreshWorker(QThread):
             parts = line.split()
             if len(parts) < 2:
                 continue
-            device_id = parts[0]
-            status_str = parts[1]
+            state_index = next(
+                (index for index, token in enumerate(parts) if token in known_states),
+                1,
+            )
+            if state_index <= 0 or state_index >= len(parts):
+                continue
+            device_id = " ".join(parts[:state_index])
+            status_str = parts[state_index]
 
             status_map = {
                 "device":       DeviceStatus.CONNECTED,
@@ -384,7 +391,7 @@ class _RefreshWorker(QThread):
             transport_type = _classify_transport(device_id)
 
             model = ""
-            for part in parts[2:]:
+            for part in parts[state_index + 1:]:
                 if part.startswith("model:"):
                     model = part.split(":", 1)[1].replace("_", " ")
                     break

@@ -19,6 +19,8 @@ from PySide6.QtCore import QEvent, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QPixmap, QTextCharFormat, QTextCursor
 from gui.widgets.action_policy_dialog import ActionPolicyDialog, summarize_action_policy
 from gui.widgets.mirror_label import MirrorLabel
+from gui.widgets.mirror_toolbar import MirrorToolbar
+from gui.widgets.mirror_toolbar_window import MirrorToolbarWindow
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -266,6 +268,9 @@ class DashboardPage(QWidget):
         self._mirror_host: QWidget = None        # scrcpy 内嵌专用原生宿主控件
         self._mirror_stack: QStackedLayout = None
         self._mirror_view_stack: QStackedLayout = None
+        self._mirror_toolbar: MirrorToolbar = None
+        self._mirror_toolbar_window: MirrorToolbarWindow = None
+        self._mirror_window_hwnd: int = 0
         self._mirror_open_in_new_window_check: QCheckBox = None
         self._btn_mirror_paste_clipboard: QPushButton = None
         self._mirror_clipboard_worker: _MirrorClipboardPasteWorker | None = None
@@ -286,6 +291,7 @@ class DashboardPage(QWidget):
         self._apply_action_button_styles()
         self._connect_signals()
         self._sync_mirror_open_mode_preference()
+        self._sync_mirror_toolbar_preferences()
         self._update_button_states(TaskState.IDLE)
         self._refresh_status_bar()
         # 初始化时同步已选中设备的 device_id 到镜像控件
@@ -344,7 +350,9 @@ class DashboardPage(QWidget):
         center_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         right_panel = self._build_mirror_panel()
-        right_panel.setMinimumWidth(520)
+        # 允许工具栏在常见 1440px 窗口中与镜像区同时显示；镜像区本身
+        # 会按剩余宽度伸缩，用户仍可通过拖动分隔线放大预览区域。
+        right_panel.setMinimumWidth(360)
         right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -863,7 +871,7 @@ class DashboardPage(QWidget):
     def _build_mirror_panel(self) -> QWidget:
         self._mirror_panel_group = QGroupBox(self._t("page.dashboard.mirror.title"))
         panel = self._mirror_panel_group
-        panel.setMinimumWidth(520)
+        panel.setMinimumWidth(360)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 18, 12, 12)
         layout.setSpacing(10)
@@ -884,7 +892,9 @@ class DashboardPage(QWidget):
         # 镜像显示容器
         self._mirror_container = QWidget()
         self._mirror_container.setStyleSheet("background:#0a0e17; border-radius:6px;")
-        self._mirror_container.setMinimumWidth(360)
+        # 侧边工具栏需要在较窄窗口/分栏状态下保持可见，镜像容器不再占用
+        # 固定的最小宽度；实际镜像仍由 Expanding 策略尽可能填充剩余空间。
+        self._mirror_container.setMinimumWidth(1)
         self._mirror_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._mirror_container.installEventFilter(self)
         self._mirror_stack = QStackedLayout(self._mirror_container)
@@ -917,13 +927,31 @@ class DashboardPage(QWidget):
         self._mirror_detached_placeholder.setWordWrap(True)
 
         mirror_viewport = QWidget()
+        mirror_viewport.setMinimumWidth(1)
+        mirror_viewport.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._mirror_view_stack = QStackedLayout(mirror_viewport)
         self._mirror_view_stack.setContentsMargins(0, 0, 0, 0)
         self._mirror_view_stack.addWidget(self._mirror_container)
         self._mirror_view_stack.addWidget(self._mirror_detached_placeholder)
         self._mirror_view_stack.setCurrentWidget(self._mirror_container)
 
-        layout.addWidget(mirror_viewport, 1)
+        mirror_shell = QWidget()
+        mirror_shell_layout = QHBoxLayout(mirror_shell)
+        mirror_shell_layout.setContentsMargins(0, 0, 0, 0)
+        mirror_shell_layout.setSpacing(8)
+        mirror_shell_layout.addWidget(mirror_viewport, 1)
+
+        self._mirror_toolbar = MirrorToolbar(translator=self._t)
+        self._mirror_toolbar.action_triggered.connect(self._on_mirror_toolbar_action)
+        mirror_shell_layout.addWidget(self._mirror_toolbar, 0)
+
+        # 外部 scrcpy 模式使用独立吸附工具栏；内嵌/ADB 降级模式仍复用
+        # 上面的内部控件，避免把原生 scrcpy 窗口 reparent 到 Qt。
+        self._mirror_toolbar_window = MirrorToolbarWindow(translator=self._t)
+        self._mirror_toolbar_window.action_triggered.connect(self._on_mirror_toolbar_action)
+        self._mirror_toolbar_window.apply_theme(self._theme_vars)
+        self._mirror_toolbar_window.hide()
+        layout.addWidget(mirror_shell, 1)
 
         # 接管提示横幅（隐藏）
         self._takeover_banner = QLabel(self._t("page.dashboard.takeover.banner"))
@@ -1386,6 +1414,10 @@ class DashboardPage(QWidget):
             self._mirror_popup_window.setStyleSheet(
                 f"background:{v.get('bg_main', '#0d1117')};"
             )
+        if getattr(self, "_mirror_toolbar", None):
+            self._mirror_toolbar.apply_theme(v)
+        if getattr(self, "_mirror_toolbar_window", None):
+            self._mirror_toolbar_window.apply_theme(v)
         if hasattr(self, "_readiness_bar"):
             self._readiness_bar.setStyleSheet(self._readiness_bar_style(self._last_readiness_state[1]))
         if hasattr(self, "_takeover_banner"):
@@ -1462,6 +1494,8 @@ class DashboardPage(QWidget):
             self._mirror.window_created.connect(self._on_mirror_window_created)
             self._mirror.control_ready_changed.connect(self._on_mirror_control_ready_changed)
             self._mirror.control_action_succeeded.connect(self._on_mirror_control_action_succeeded)
+            self._mirror.toolbar_action_succeeded.connect(self._on_mirror_toolbar_action_succeeded)
+            self._mirror.toolbar_action_failed.connect(self._on_mirror_toolbar_action_failed)
         if self._mirror_label:
             self._mirror_label.tap_failed.connect(self._on_mirror_error)
 
@@ -1469,6 +1503,7 @@ class DashboardPage(QWidget):
         if self._config:
             self._config.config_changed.connect(self._sync_channel_combo)
             self._config.config_changed.connect(self._sync_mirror_open_mode_preference)
+            self._config.config_changed.connect(self._sync_mirror_toolbar_preferences)
             self._config.config_changed.connect(lambda: self._schedule_readiness_check(300))
 
     # ================================================================
@@ -1650,6 +1685,57 @@ class DashboardPage(QWidget):
         self._mirror_open_in_new_window_check.blockSignals(True)
         self._mirror_open_in_new_window_check.setChecked(checked)
         self._mirror_open_in_new_window_check.blockSignals(False)
+
+    def _sync_mirror_toolbar_preferences(self):
+        """同步工具栏配置，并在外部 scrcpy 模式切换到吸附窗口。"""
+
+        toolbar = getattr(self, "_mirror_toolbar", None)
+        floating = getattr(self, "_mirror_toolbar_window", None)
+        if toolbar is None and floating is None:
+            return
+        settings = {"enabled": True, "actions": None}
+        if self._config:
+            getter = getattr(self._config, "get_mirror_toolbar_settings", None)
+            if callable(getter):
+                settings = getter()
+
+        enabled = bool(settings.get("enabled", True))
+        actions = settings.get("actions")
+        controls_enabled = bool(
+            self._current_device_id() and self._mirror and self._mirror.is_running
+        )
+        external_attached = bool(
+            self._mirror
+            and self._mirror.mode == MirrorMode.SCRCPY_EXTERNAL
+            and self._mirror_window_hwnd
+        )
+
+        if toolbar is not None:
+            toolbar.set_actions(actions)
+            toolbar.setVisible(enabled and not external_attached)
+            toolbar.set_action_enabled(controls_enabled)
+
+        if floating is not None:
+            floating.set_actions(actions)
+            floating.set_action_enabled(controls_enabled)
+            floating.set_target_hwnd(self._mirror_window_hwnd if external_attached else 0)
+            floating.set_toolbar_enabled(enabled and external_attached)
+
+    def _on_mirror_toolbar_action(self, action: str):
+        if not self._mirror:
+            return
+        if not self._current_device_id():
+            self._append_log(self._t("page.dashboard.mirror.toolbar.no_device"))
+            return
+        ok, message = self._mirror.perform_toolbar_action(action)
+        if not ok and message:
+            self._append_log(
+                self._t(
+                    "page.dashboard.mirror.toolbar.failed",
+                    action=self._t(f"mirror.toolbar.action.{action}"),
+                    error=message,
+                )
+            )
 
     def _on_mirror_open_mode_toggled(self, checked: bool):
         if not self._config:
@@ -1991,6 +2077,7 @@ class DashboardPage(QWidget):
             # 清除镜像控件的设备绑定
             if self._mirror_label:
                 self._mirror_label.set_device_id("")
+            self._sync_mirror_toolbar_preferences()
             if readiness_changed:
                 self._schedule_readiness_check(300)
             return
@@ -2020,6 +2107,7 @@ class DashboardPage(QWidget):
             self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
 
         self._update_mirror_aux_buttons()
+        self._sync_mirror_toolbar_preferences()
         if readiness_changed:
             self._schedule_readiness_check(300)
 
@@ -2041,9 +2129,13 @@ class DashboardPage(QWidget):
             self._btn_mirror_toggle.setText(self._t("page.dashboard.mirror.btn.start_mirror"))
             self._btn_mirror_toggle.setProperty("variant", "subtle")
         self._apply_action_button_styles(mirror_running=(state == MirrorState.RUNNING))
+        self._sync_mirror_toolbar_preferences()
 
     def _on_mirror_mode_changed(self, mode: MirrorMode):
         self._mirror_embedded = mode == MirrorMode.SCRCPY_EMBEDDED
+        # 外部窗口句柄只在 window_created 后有效；模式切换时先清掉旧句柄，
+        # 防止新一轮 scrcpy 启动期间工具栏吸附到已经失效的窗口。
+        self._mirror_window_hwnd = 0
         popup = self._mirror_popup_window if self._popup_window_active() else None
         if popup is not None:
             self._set_dashboard_mirror_detached(True)
@@ -2078,6 +2170,7 @@ class DashboardPage(QWidget):
                 self._mirror_stack.setCurrentWidget(self._mirror_host)
             self._sync_embedded_mirror_geometry()
         self._update_mirror_aux_buttons()
+        self._sync_mirror_toolbar_preferences()
 
     def _on_mirror_frame(self, pixmap: QPixmap):
         """ADB 截图降级模式下收到帧"""
@@ -2120,7 +2213,33 @@ class DashboardPage(QWidget):
                     chars=len(text),
                 )
             )
+        elif action in {"F", "C"}:
+            toolbar_action = "fullscreen" if action == "F" else "clipboard"
+            self._append_log(
+                self._t(
+                    "page.dashboard.mirror.toolbar.done",
+                    action=self._t(f"mirror.toolbar.action.{toolbar_action}"),
+                )
+            )
         self._update_mirror_aux_buttons()
+
+    def _on_mirror_toolbar_action_succeeded(self, action: str, detail: str):
+        detail_text = f" ({detail})" if detail else ""
+        self._append_log(
+            self._t(
+                "page.dashboard.mirror.toolbar.done",
+                action=self._t(f"mirror.toolbar.action.{action}"),
+            ) + detail_text + "\n"
+        )
+
+    def _on_mirror_toolbar_action_failed(self, action: str, error: str):
+        self._append_log(
+            self._t(
+                "page.dashboard.mirror.toolbar.failed",
+                action=self._t(f"mirror.toolbar.action.{action}"),
+                error=error,
+            )
+        )
 
     def _update_mirror_aux_buttons(self):
         btn = getattr(self, "_btn_mirror_paste_clipboard", None)
@@ -2217,10 +2336,17 @@ class DashboardPage(QWidget):
         self._paste_clipboard_to_device_text(text)
 
     def _on_mirror_window_created(self, hwnd: int):
+        self._mirror_window_hwnd = int(hwnd or 0)
         self._last_mirror_geometry_debug = None
-        self._append_mirror_debug_log(
-            self._t("page.dashboard.mirror.debug.window_embedded", hwnd=hwnd)
+        debug_key = (
+            "page.dashboard.mirror.debug.window_external"
+            if self._mirror and self._mirror.mode == MirrorMode.SCRCPY_EXTERNAL
+            else "page.dashboard.mirror.debug.window_embedded"
         )
+        self._append_mirror_debug_log(
+            self._t(debug_key, hwnd=hwnd)
+        )
+        self._sync_mirror_toolbar_preferences()
         QTimer.singleShot(0, self._sync_embedded_mirror_geometry)
 
     @staticmethod
@@ -2394,6 +2520,8 @@ class DashboardPage(QWidget):
     def shutdown(self):
         self._shutting_down = True
         self._close_mirror_popup_window(ignore_stop=True)
+        if self._mirror_toolbar_window:
+            self._mirror_toolbar_window.shutdown()
         if self._mirror_label:
             self._mirror_label.shutdown_input()
         if self._mirror_popup_window:
@@ -2548,6 +2676,10 @@ class DashboardPage(QWidget):
             self._btn_mirror_paste_clipboard.setText(_t("page.dashboard.mirror.btn.paste_clipboard"))
         if hasattr(self, "_mirror_label") and self._mirror_label:
             self._mirror_label.set_translator(_t)
+        if hasattr(self, "_mirror_toolbar") and self._mirror_toolbar:
+            self._mirror_toolbar.set_translator(_t)
+        if hasattr(self, "_mirror_toolbar_window") and self._mirror_toolbar_window:
+            self._mirror_toolbar_window.set_translator(_t)
         if self._mirror_popup_window:
             self._mirror_popup_window.label_widget().set_translator(_t)
         if hasattr(self, "_mirror_detached_placeholder"):

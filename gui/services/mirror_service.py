@@ -27,6 +27,8 @@ from typing import Optional
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 
+from gui.services.adb_client import AdbClient
+
 
 class MirrorMode(Enum):
     """镜像模式"""
@@ -413,8 +415,8 @@ class _ScrcpyShortcutWorker(QThread):
             user32.SetFocus(self._hwnd)
             time.sleep(0.15)
 
-            # scrcpy 启动时把左右 Ctrl 配置为 MOD；Ctrl+V 因而走其原生
-            # SET_CLIPBOARD + PASTE 控制消息，支持 Unicode，不经过 ADBKeyboard。
+            # scrcpy 启动时把左右 Ctrl 配置为 MOD；Ctrl+V/C/F 等快捷键因此
+            # 走其原生控制通道，不经过 ADBKeyboard。
             user32.keybd_event(VK_CONTROL, 0, 0, 0)
             user32.keybd_event(vk, 0, 0, 0)
             time.sleep(0.04)
@@ -423,6 +425,75 @@ class _ScrcpyShortcutWorker(QThread):
             self.succeeded.emit(self._key)
         except Exception as exc:
             self.failed.emit(f"scrcpy_control.shortcut_failed:{exc}")
+
+
+class _MirrorToolbarActionWorker(QThread):
+    """在后台执行侧边工具栏的 ADB 动作，避免阻塞 GUI 线程。"""
+
+    succeeded = Signal(str, str)
+    failed = Signal(str, str)
+
+    _KEYEVENTS = {
+        "menu": "KEYCODE_MENU",
+        "home": "KEYCODE_HOME",
+        "back": "KEYCODE_BACK",
+        "app_switch": "KEYCODE_APP_SWITCH",
+        "power": "KEYCODE_POWER",
+        "volume_up": "KEYCODE_VOLUME_UP",
+        "volume_down": "KEYCODE_VOLUME_DOWN",
+        "screen_on": "KEYCODE_WAKEUP",
+        "screen_off": "KEYCODE_SLEEP",
+    }
+
+    def __init__(self, device_id: str, action: str, screenshotter=None, touch_value: str = "1"):
+        super().__init__()
+        self._device_id = device_id
+        self._action = action
+        self._screenshotter = screenshotter
+        self._touch_value = touch_value
+
+    def run(self):
+        try:
+            if self._action == "screenshot":
+                # capture_screenshot 的实现不依赖 Qt 资源，可在线程中安全执行。
+                if not callable(self._screenshotter):
+                    raise RuntimeError("截图服务未初始化")
+                path = self._screenshotter()
+                if not path:
+                    raise RuntimeError("ADB 截图失败")
+                self.succeeded.emit(self._action, path)
+                return
+
+            adb = AdbClient()
+            if self._action == "notifications":
+                result = adb.run(
+                    ["shell", "cmd", "statusbar", "expand-notifications"],
+                    timeout=8,
+                    serial=self._device_id,
+                )
+            elif self._action == "touch":
+                # 与 QtScrcpy 的 showTouch 语义一致：切换系统“显示触摸位置”。
+                # 状态由服务层在调用前传入命令参数，默认值会在第一次点击时打开。
+                result = adb.run(
+                    ["shell", "settings", "put", "system", "show_touches", self._touch_value],
+                    timeout=8,
+                    serial=self._device_id,
+                )
+            else:
+                keycode = self._KEYEVENTS.get(self._action)
+                if not keycode:
+                    raise RuntimeError(f"不支持的镜像动作：{self._action}")
+                result = adb.run(
+                    ["shell", "input", "keyevent", keycode],
+                    timeout=8,
+                    serial=self._device_id,
+                )
+
+            if result.returncode != 0:
+                raise RuntimeError(result.merged_output or f"ADB 动作失败（code={result.returncode}）")
+            self.succeeded.emit(self._action, result.output)
+        except Exception as exc:
+            self.failed.emit(self._action, str(exc))
 
 
 class MirrorService(QObject):
@@ -444,6 +515,8 @@ class MirrorService(QObject):
     window_created = Signal(int)      # HWND
     control_ready_changed = Signal(bool)
     control_action_succeeded = Signal(str)
+    toolbar_action_succeeded = Signal(str, str)
+    toolbar_action_failed = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -455,8 +528,10 @@ class MirrorService(QObject):
         self._embed_thread: Optional[_EmbedWindowThread] = None
         self._external_window_thread: Optional[_ExternalWindowThread] = None
         self._shortcut_worker: Optional[_ScrcpyShortcutWorker] = None
+        self._toolbar_worker: Optional[_MirrorToolbarActionWorker] = None
         self._window_hwnd: Optional[int] = None
         self._device_screen_size: Optional[tuple[int, int]] = None
+        self._show_touch = False
         self._last_resize_request: Optional[tuple[int, int, int, int]] = None
         self._mirror_debug_enabled = self._is_truthy(
             os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
@@ -583,6 +658,8 @@ class MirrorService(QObject):
     def _on_external_window_ready(self, hwnd: int):
         self._window_hwnd = hwnd
         self.control_ready_changed.emit(True)
+        # 外部 scrcpy 窗口也要通知页面，以便创建 QtScrcpy 风格的吸附工具栏。
+        self.window_created.emit(hwnd)
         self._emit_debug(f"scrcpy 独立窗口已就绪并前置: hwnd={hwnd}")
         if self._external_window_thread:
             self._external_window_thread.deleteLater()
@@ -821,20 +898,25 @@ class MirrorService(QObject):
 
     # ---------- 停止镜像 ----------
 
-    def paste_host_clipboard(self) -> tuple[bool, str]:
-        """通过 scrcpy 原生 Ctrl+V 同步电脑剪贴板并在设备端粘贴。"""
+    def send_scrcpy_shortcut(self, key: str) -> tuple[bool, str]:
+        """向原生 scrcpy 窗口发送一个 Ctrl+字母快捷键。"""
         if not self.control_ready:
             return False, "scrcpy_control.window_not_ready"
         if self._shortcut_worker and self._shortcut_worker.isRunning():
             return False, "scrcpy_control.action_busy"
 
-        worker = _ScrcpyShortcutWorker(self._window_hwnd, "V")
+        worker = _ScrcpyShortcutWorker(self._window_hwnd, key)
         worker.failed.connect(self.error_occurred.emit)
         worker.succeeded.connect(self._on_shortcut_succeeded)
         worker.finished.connect(self._on_shortcut_finished)
         self._shortcut_worker = worker
         worker.start()
         return True, ""
+
+    def paste_host_clipboard(self) -> tuple[bool, str]:
+        """通过 scrcpy 原生 Ctrl+V 同步电脑剪贴板并在设备端粘贴。"""
+
+        return self.send_scrcpy_shortcut("V")
 
     def _on_shortcut_succeeded(self, key: str):
         self.control_action_succeeded.emit(key)
@@ -845,9 +927,61 @@ class MirrorService(QObject):
         if worker:
             worker.deleteLater()
 
+    def perform_toolbar_action(self, action: str) -> tuple[bool, str]:
+        """执行一个 QtScrcpy 风格的镜像侧边栏动作。"""
+
+        action = (action or "").strip().lower()
+        if not self._device_id:
+            message = "当前未绑定设备"
+            self.toolbar_action_failed.emit(action, message)
+            return False, message
+
+        if action == "fullscreen":
+            return self.send_scrcpy_shortcut("F")
+        if action == "clipboard":
+            if self.control_ready:
+                return self.send_scrcpy_shortcut("C")
+            message = "剪贴板读取需要 scrcpy 原生控制通道"
+            self.toolbar_action_failed.emit(action, message)
+            return False, message
+
+        if self._toolbar_worker and self._toolbar_worker.isRunning():
+            message = "上一条镜像工具栏动作尚未完成"
+            self.toolbar_action_failed.emit(action, message)
+            return False, message
+
+        touch_value = "1"
+        if action == "touch":
+            self._show_touch = not self._show_touch
+            touch_value = "1" if self._show_touch else "0"
+        worker = _MirrorToolbarActionWorker(
+            self._device_id,
+            action,
+            screenshotter=self.capture_screenshot,
+            touch_value=touch_value,
+        )
+        worker.succeeded.connect(self.toolbar_action_succeeded.emit)
+        worker.failed.connect(self.toolbar_action_failed.emit)
+        worker.finished.connect(self._on_toolbar_worker_finished)
+        self._toolbar_worker = worker
+        worker.start()
+        return True, ""
+
+    def _on_toolbar_worker_finished(self):
+        worker = self._toolbar_worker
+        self._toolbar_worker = None
+        if worker:
+            worker.deleteLater()
+
     def stop(self):
         """停止镜像（三阶段清理）"""
         self._monitor_timer.stop()
+
+        if self._toolbar_worker:
+            if self._toolbar_worker.isRunning():
+                self._toolbar_worker.wait(3000)
+            self._toolbar_worker.deleteLater()
+            self._toolbar_worker = None
 
         if self._shortcut_worker:
             if self._shortcut_worker.isRunning():
