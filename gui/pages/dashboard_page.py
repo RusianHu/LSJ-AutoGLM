@@ -943,10 +943,12 @@ class DashboardPage(QWidget):
 
         self._mirror_toolbar = MirrorToolbar(translator=self._t)
         self._mirror_toolbar.action_triggered.connect(self._on_mirror_toolbar_action)
+        # 内嵌镜像不需要额外的侧边工具栏；独立 scrcpy 窗口使用下方的吸附工具栏。
+        self._mirror_toolbar.hide()
         mirror_shell_layout.addWidget(self._mirror_toolbar, 0)
 
-        # 外部 scrcpy 模式使用独立吸附工具栏；内嵌/ADB 降级模式仍复用
-        # 上面的内部控件，避免把原生 scrcpy 窗口 reparent 到 Qt。
+        # 只有外部 scrcpy 模式使用独立吸附工具栏；内嵌/ADB 降级模式不显示工具栏，
+        # 同时避免把原生 scrcpy 窗口 reparent 到 Qt。
         self._mirror_toolbar_window = MirrorToolbarWindow(translator=self._t)
         self._mirror_toolbar_window.action_triggered.connect(self._on_mirror_toolbar_action)
         self._mirror_toolbar_window.apply_theme(self._theme_vars)
@@ -1430,6 +1432,7 @@ class DashboardPage(QWidget):
         self._apply_instruction_bar_tokens()
         if hasattr(self, "_log_view"):
             self._log_view.setStyleSheet(log_console(self._theme_tokens))
+            self._refresh_log_colors()
         if hasattr(self, "_event_list"):
             self._event_list.setStyleSheet(list_event(self._theme_tokens))
         if hasattr(self, "_result_lbl"):
@@ -1712,7 +1715,8 @@ class DashboardPage(QWidget):
 
         if toolbar is not None:
             toolbar.set_actions(actions)
-            toolbar.setVisible(enabled and not external_attached)
+            # 内嵌镜像不显示工具栏；工具栏只在独立 scrcpy 窗口侧边显示。
+            toolbar.setVisible(False)
             toolbar.set_action_enabled(controls_enabled)
 
         if floating is not None:
@@ -1960,22 +1964,42 @@ class DashboardPage(QWidget):
     def _on_log_line(self, line: str):
         self._append_log(line)
 
-    @staticmethod
-    def _log_color_for_line(line: str) -> str:
+    def _log_color_for_line(self, line: str) -> str:
+        """返回当前主题下可读的日志颜色。"""
+
+        tokens = self._theme_tokens or resolve_theme_tokens("dark")
         stripped = line.strip()
         if not stripped:
-            return "#c9d1d9"
+            return tokens.text_secondary
         if "专家请求失败" in stripped or stripped.startswith("⚠️"):
-            return "#f85149"
+            return tokens.danger
         if "专家请求成功" in stripped or "已注入主模型上下文" in stripped:
-            return "#3fb950"
+            return tokens.success
         if "触发严格模式专家咨询" in stripped or "触发自动专家救援" in stripped:
-            return "#e3b341"
+            return tokens.warning
         if "跳过严格模式专家咨询" in stripped:
-            return "#8b949e"
+            return tokens.text_secondary
         if stripped.startswith("[EXPERT]"):
-            return "#79c0ff"
-        return "#c9d1d9"
+            return tokens.accent
+        return tokens.text_primary
+
+    def _refresh_log_colors(self) -> None:
+        """主题切换时重绘已有日志，避免保留旧主题的字符颜色。"""
+
+        if not hasattr(self, "_log_view"):
+            return
+        document = self._log_view.document()
+        block = document.begin()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            cursor.select(QTextCursor.BlockUnderCursor)
+            if not cursor.selectedText():
+                block = block.next()
+                continue
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(self._log_color_for_line(block.text())))
+            cursor.mergeCharFormat(fmt)
+            block = block.next()
 
     def _append_log(self, line: str):
         cursor = self._log_view.textCursor()
