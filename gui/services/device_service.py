@@ -530,6 +530,26 @@ class DeviceService(QObject):
         self._initial_timer.setSingleShot(True)
         self._initial_timer.timeout.connect(self._initial_check)
         self._initial_timer.start(200)
+        if self._config is not None:
+            changed = getattr(self._config, "config_changed", None)
+            if changed is not None:
+                changed.connect(self._sync_selected_device_from_config)
+
+    def _sync_selected_device_from_config(self):
+        """响应自动化 CLI 写入的目标设备配置。"""
+        if self._config is None:
+            return
+        desired = (self._config.get("OPEN_AUTOGLM_DEVICE_ID") or "").strip()
+        current = self._selected_device.device_id if self._selected_device else ""
+        if desired == current:
+            return
+        if not desired:
+            self.select_device(None)
+            return
+        if any(item.device_id == desired for item in self._devices):
+            self.select_device(desired)
+        else:
+            self.refresh()
 
     def _initial_check(self):
         if self._stopping:

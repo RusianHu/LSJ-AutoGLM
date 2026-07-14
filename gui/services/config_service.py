@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Signal
 
 from gui.utils.runtime import build_task_subprocess_command, resolve_env_path
 from phone_agent.actions.registry import (
@@ -232,7 +232,12 @@ class ConfigService(QObject):
         self._cache: Dict[str, str] = {}
         self._env_bootstrap_created = False
         self._env_bootstrap_error = ""
+        self._env_signature: tuple[int, int] | None = None
         self.load()
+        self._external_change_timer = QTimer(self)
+        self._external_change_timer.timeout.connect(self._check_external_change)
+        if QCoreApplication.instance() is not None:
+            self._external_change_timer.start(500)
 
     @property
     def env_path(self) -> str:
@@ -288,6 +293,7 @@ class ConfigService(QObject):
             self._normalize_aliases()
             # 首次启动时自动生成初始 .env，保证配置可持久化
             self._bootstrap_env()
+            self._env_signature = self._read_env_signature()
             return
 
         try:
@@ -316,7 +322,24 @@ class ConfigService(QObject):
             self.config_error.emit(f".env 读取失败 (行 {lineno if 'lineno' in dir() else '?'}): {e}")
 
         self._normalize_aliases()
+        self._env_signature = self._read_env_signature()
         self.config_changed.emit()
+
+    def _read_env_signature(self) -> tuple[int, int] | None:
+        try:
+            stat = self._env_file.stat()
+            return int(stat.st_mtime_ns), int(stat.st_size)
+        except OSError:
+            return None
+
+    def _check_external_change(self):
+        """检测 CLI 的原子配置写入，并通知已打开的 GUI。"""
+        if self._read_env_signature() != self._env_signature:
+            self.load()
+
+    def shutdown(self):
+        """停止外部配置监听。"""
+        self._external_change_timer.stop()
 
     def get(self, key: str, default: str = "") -> str:
         """读取配置值（兼容旧键名回退）"""
@@ -602,6 +625,7 @@ class ConfigService(QObject):
 
             if replace_error is not None:
                 raise replace_error
+            self._env_signature = self._read_env_signature()
         except Exception as e:
             try:
                 tmp_path.unlink(missing_ok=True)

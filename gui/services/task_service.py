@@ -33,6 +33,7 @@ except ImportError:  # psutil 未安装时优雅降级（进程挂起不可用�
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
+from cli.automation_state import JobStore
 from gui.services.task_event_parser import TaskLogEventParser
 from gui.services.task_runtime_inbox import TaskRuntimeInboxWriter
 from gui.utils.runtime import app_root
@@ -167,6 +168,13 @@ class TaskService(QObject):
         self._current_record: Optional[TaskRecord] = None
         self._reader: Optional[_LogReaderThread] = None
         self._finishing = False   # 防止 _finish_task 重入
+        # GUI 与自动化 CLI 共用的跨进程任务状态。CLI 因此可发现并控制
+        # 已由 GUI 启动的任务，而不只是启动一份等价的新任务。
+        self._automation_store = JobStore()
+        self._automation_job_id: Optional[str] = None
+        self._automation_takeover_seen = False
+        self._automation_stuck = False
+        self._automation_last_output_publish = 0.0
 
         # 运行时用户指令收件箱（inbox）管理
         self._runtime_dir: Optional[Path] = None
@@ -202,6 +210,11 @@ class TaskService(QObject):
     @property
     def current_record(self) -> Optional[TaskRecord]:
         return self._current_record
+
+    @property
+    def automation_job_id(self) -> Optional[str]:
+        """当前 GUI 任务对应的自动化 CLI 作业 ID。"""
+        return self._automation_job_id
 
     def _set_state(self, state: TaskState):
         self._state = state
@@ -267,6 +280,33 @@ class TaskService(QObject):
         )
         self._current_record = record
         self._finishing = False
+        try:
+            automation_state = self._automation_store.create(
+                "task",
+                {"owner": "gui"},
+                {
+                    "owner": "gui",
+                    "task_text": task_text,
+                    "device_id": effective_device_id,
+                    "model": record.model,
+                    "base_url": record.base_url,
+                    "max_steps": record.max_steps,
+                    "inbox_path": str(self._inbox_path),
+                    "log_file": str(log_file),
+                },
+            )
+            self._automation_job_id = automation_state["job_id"]
+            self._automation_store.spec_path(self._automation_job_id).unlink(missing_ok=True)
+        except Exception as exc:
+            self._automation_job_id = None
+            self.log_line.emit(
+                "[WARN] "
+                + self._translate_text("task.automation_sync_failed", error=str(exc))
+                + "\n"
+            )
+        self._automation_takeover_seen = False
+        self._automation_stuck = False
+        self._automation_last_output_publish = 0.0
         # Reset token accumulators for new task
         self._acc_prompt_tokens = 0
         self._acc_completion_tokens = 0
@@ -303,6 +343,7 @@ class TaskService(QObject):
             self._set_state(TaskState.FAILED)
             self.task_finished.emit(record)
             self._save_history()
+            self._publish_automation_state("failed", returncode=127, error=str(e))
             return False
 
         self._add_event("process_started", f"子进程已启动，PID={self._process.pid}",
@@ -310,6 +351,11 @@ class TaskService(QObject):
                         message_params={"pid": self._process.pid})
         self._set_state(TaskState.RUNNING)
         record.state = TaskState.RUNNING
+        self._publish_automation_state(
+            "running",
+            worker_pid=os.getpid(),
+            process_pid=self._process.pid,
+        )
         self.task_started.emit(record)
 
         # 启动日志读取线程
@@ -341,6 +387,7 @@ class TaskService(QObject):
         if self._state not in (TaskState.RUNNING, TaskState.PAUSED, TaskState.STARTING):
             return
         self._set_state(TaskState.STOPPING)
+        self._publish_automation_state("stopping", stop_requested=True)
         self._add_event("user_stop", "用户终止任务",
                         message_key="event.user_stop", message_params={})
         self._terminate_process()
@@ -360,6 +407,7 @@ class TaskService(QObject):
         if not suspended and self._process is not None and _psutil is not None:
             self.log_line.emit("[WARN] 进程树挂起失败，人工接管可能无法完全停止自动化")
         self._set_state(TaskState.PAUSED)
+        self._publish_automation_state("paused")
         self._add_event("user_pause", f"任务暂停: {reason}",
                         message_key="event.user_pause", message_params={})
 
@@ -374,6 +422,7 @@ class TaskService(QObject):
         # 先恢复被挂起的进程树，再改状态
         self._resume_process()
         self._set_state(TaskState.RUNNING)
+        self._publish_automation_state("running")
         self._add_event("user_resume", "任务恢复执行",
                         message_key="event.user_resume", message_params={})
         # 重启卡住检测
@@ -430,12 +479,26 @@ class TaskService(QObject):
                             message_key="event.takeover_request",
                             message_params={"reason": reason})
             self.takeover_requested.emit(reason)
+            self._automation_takeover_seen = True
+            self._publish_automation_state(
+                "paused", takeover=True, takeover_reason=reason
+            )
 
     # ---------- 内部事件处理 ----------
 
     def _on_log_line(self, line: str):
         """收到日志行"""
         self._last_output_time = time.time()
+        now = self._last_output_time
+        if self._automation_stuck or now - self._automation_last_output_publish >= 2:
+            self._automation_stuck = False
+            self._automation_last_output_publish = now
+            self._publish_automation_state(
+                self._state.value,
+                last_output_at=now,
+                stuck_detected=False,
+                stuck_since=None,
+            )
         # 重置卡住检测（仅在 running 态）
         if self._state == TaskState.RUNNING:
             self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
@@ -548,7 +611,7 @@ class TaskService(QObject):
         if "throughput" in data:
             self._last_throughput = float(data["throughput"])
         self._step_count_tokens += 1
-        self.tokens_stats_changed.emit({
+        stats = {
             "prompt": self._acc_prompt_tokens,
             "completion": self._acc_completion_tokens,
             "total": self._acc_total_tokens,
@@ -556,7 +619,9 @@ class TaskService(QObject):
             "ttft": self._last_ttft,
             "throughput": self._last_throughput,
             "steps": self._step_count_tokens,
-        })
+        }
+        self.tokens_stats_changed.emit(stats)
+        self._publish_automation_state(self._state.value, tokens_stats=stats)
 
     def _on_reader_finished(self):
         """日志读取线程结束时触发进程收尾"""
@@ -570,6 +635,8 @@ class TaskService(QObject):
         if self._process is None:
             self._poll_timer.stop()
             return
+
+        self._sync_external_automation_control()
 
         ret = self._process.poll()
         if ret is None and not force:
@@ -632,6 +699,78 @@ class TaskService(QObject):
 
             self.task_finished.emit(record)
             self._save_history()
+            self._publish_automation_state(
+                record.state.value,
+                process_pid=None,
+                returncode=exit_code,
+            )
+
+    def _publish_automation_state(self, state: str, **updates):
+        """把 GUI 状态写入 CLI 作业存储；状态存储故障不应中断 GUI。"""
+        if not self._automation_job_id:
+            return
+        try:
+            self._automation_store.update(
+                self._automation_job_id,
+                state=state,
+                **updates,
+            )
+        except Exception as exc:
+            self.log_line.emit(
+                "[WARN] "
+                + self._translate_text("task.automation_sync_failed", error=str(exc))
+                + "\n"
+            )
+
+    def _sync_external_automation_control(self):
+        """让 GUI 状态机接受另一次 CLI 调用施加的进程控制。"""
+        if not self._automation_job_id or self._finishing:
+            return
+        try:
+            external = self._automation_store.read(self._automation_job_id)
+        except Exception:
+            return
+        external_state = external.get("state")
+        if external_state == "paused" and self._state == TaskState.RUNNING:
+            self._stuck_timer.stop()
+            self._set_state(TaskState.PAUSED)
+            if external.get("takeover") and not self._automation_takeover_seen:
+                self._automation_takeover_seen = True
+                reason = str(
+                    external.get("takeover_reason")
+                    or self._translate_text("task.cli_takeover_reason")
+                )
+                self.takeover_requested.emit(reason)
+            self._add_event(
+                "external_pause",
+                "任务已由自动化 CLI 暂停",
+                message_key="event.external_pause",
+                message_params={},
+            )
+        elif external_state == "running" and self._state == TaskState.PAUSED:
+            self._set_state(TaskState.RUNNING)
+            self._last_output_time = time.time()
+            self._stuck_timer.start(self.STUCK_TIMEOUT_S * 1000)
+            self._add_event(
+                "external_resume",
+                "任务已由自动化 CLI 恢复",
+                message_key="event.external_resume",
+                message_params={},
+            )
+        elif external_state == "stopping" and self._state in {
+            TaskState.RUNNING,
+            TaskState.PAUSED,
+            TaskState.STARTING,
+        }:
+            # CLI 已负责终止子进程；GUI 只同步状态并等待 poll() 收尾，避免
+            # 对同一进程重复发送终止信号。
+            self._set_state(TaskState.STOPPING)
+            self._add_event(
+                "external_stop",
+                "任务已由自动化 CLI 请求停止",
+                message_key="event.external_stop",
+                message_params={},
+            )
 
     def _terminate_process(self):
         """
@@ -750,6 +889,12 @@ class TaskService(QObject):
             message_params={"timeout": self.STUCK_TIMEOUT_S},
         )
         self.stuck_detected.emit()
+        self._automation_stuck = True
+        self._publish_automation_state(
+            self._state.value,
+            stuck_detected=True,
+            stuck_since=time.time(),
+        )
 
     def _add_event(
         self,
@@ -844,6 +989,15 @@ class TaskService(QObject):
 
         # 清理运行时目录
         self._cleanup_runtime_dir()
+        if self._automation_job_id:
+            try:
+                state = self._automation_store.read(self._automation_job_id)
+                if state.get("state") not in {"completed", "failed", "cancelled"}:
+                    self._publish_automation_state(
+                        "cancelled", process_pid=None, returncode=-1, stop_requested=True
+                    )
+            except Exception:
+                pass
 
     # ---------- 运行时目录清理 ----------
 

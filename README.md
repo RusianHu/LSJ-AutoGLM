@@ -13,6 +13,7 @@
 - **[官方说明文档 (Original README)](README_official.md)**
 - [English README](README_en.md)
 - [AI 工具与动作参考](docs/ai_tools_reference.md)
+- [自动化控制 CLI](docs/cli_automation.md)
 
 ---
 
@@ -145,6 +146,20 @@ OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY=true
 - **`--no-compress-image`**: 禁用截图压缩（保持原图质量）
 
 ## 快速使用
+
+### 方式零：自动化控制 CLI（Codex、Claude Code、CI 推荐）
+
+统一 CLI 覆盖 TUI/GUI 的配置、设备、任务控制、诊断、历史、镜像和构建逻辑；默认 JSON 输出，长任务默认后台运行：
+
+```powershell
+python cli_app.py capabilities
+$task = python cli_app.py task start "打开设置并报告系统版本" | ConvertFrom-Json
+python cli_app.py task status $task.data.job_id
+python cli_app.py task logs $task.data.job_id
+python cli_app.py task stop $task.data.job_id
+```
+
+安装项目后也可使用 `open-autoglm`。完整命令、退出码和非阻塞作业协议见 [自动化控制 CLI](docs/cli_automation.md)。
 
 ### 从 GitHub 部署
 

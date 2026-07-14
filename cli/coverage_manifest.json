@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "features": [
+    {"surface":"TUI","feature":"状态总览","source":"launcher.py","handlers":["show_status"],"commands":["status --probe-devices"]},
+    {"surface":"TUI","feature":"交互与单任务执行","source":"launcher.py","handlers":["run_agent_interactive","run_single_task"],"commands":["task start sample","task run sample --wait-timeout 1"]},
+    {"surface":"TUI","feature":"配置加载保存","source":"launcher.py","handlers":["load_config_from_file","save_config_to_file"],"commands":["config list","config set-many {}","config reload"]},
+    {"surface":"TUI","feature":"渠道预设与 API 测试","source":"launcher.py","handlers":["apply_api_preset","check_api_connection"],"commands":["config use-channel modelscope","config test-api"]},
+    {"surface":"TUI","feature":"设备枚举连接断开","source":"launcher.py","handlers":["get_connected_devices","connect_wireless","disconnect_device"],"commands":["device list","device connect 127.0.0.1:5555","device disconnect all"]},
+    {"surface":"TUI","feature":"ADB 重启与设备 IP","source":"launcher.py","handlers":["restart_adb_server","get_device_ip"],"commands":["device restart-adb","device ip device"]},
+    {"surface":"TUI","feature":"USB 转无线与键盘","source":"launcher.py","handlers":["enable_tcpip","check_adb_keyboard"],"commands":["device tcpip device","device keyboard-status device","device install-keyboard device"]},
+    {"surface":"TUI","feature":"系统检查","source":"launcher.py","handlers":["run_system_check"],"commands":["diagnostics start"]},
+
+    {"surface":"GUI 设置","feature":"保存校验重载","source":"gui/pages/settings_page.py","handlers":["_on_save","_on_validate","_on_reload"],"commands":["config set-many {}","config validate","config reload"]},
+    {"surface":"GUI 设置","feature":"渠道切换","source":"gui/pages/settings_page.py","handlers":["_on_preset_card_clicked"],"commands":["config channels","config use-channel newapi"]},
+    {"surface":"GUI 设置","feature":"动作策略管理","source":"gui/pages/settings_page.py","handlers":["_on_action_policy_reset_defaults","_on_action_policy_select_all","_on_action_policy_clear_all","_on_runtime_action_toggled","_on_ai_action_toggled"],"commands":["config action-policy --reset","config action-policy --select-all","config action-policy --clear"]},
+    {"surface":"GUI 设置","feature":"镜像工具栏配置","source":"gui/pages/settings_page.py","handlers":["_on_mirror_toolbar_master_toggled"],"commands":["config mirror-toolbar --enabled true --select-all","config mirror-toolbar --clear"]},
+    {"surface":"GUI 设置","feature":"主题语言平台","source":"gui/pages/settings_page.py","handlers":["_on_theme_changed","_on_lang_changed","_on_device_type_changed"],"commands":["config set OPEN_AUTOGLM_THEME dark","config set OPEN_AUTOGLM_LANG en","config set OPEN_AUTOGLM_DEVICE_TYPE adb"]},
+    {"surface":"GUI 设置","feature":"GUI 构建和目录","source":"gui/pages/settings_page.py","handlers":["_on_run_build_script","_on_open_scripts_dir","_on_open_dist_dir"],"commands":["build gui","paths"]},
+
+    {"surface":"GUI 设备","feature":"ADB 检查刷新选择","source":"gui/pages/device_page.py","handlers":["_on_check_adb","_on_refresh","_on_set_active"],"commands":["device adb-status","device list","device select device"]},
+    {"surface":"GUI 设备","feature":"无线连接断开","source":"gui/pages/device_page.py","handlers":["_on_wifi_connect","_on_disconnect"],"commands":["device connect 127.0.0.1:5555","device connect-start 127.0.0.1:5555","device disconnect all","device disconnect-start all"]},
+    {"surface":"GUI 设备","feature":"USB 与 TCPIP 模式","source":"gui/pages/device_page.py","handlers":["_on_usb_to_wifi","_on_use_usb"],"commands":["device tcpip device","device tcpip-start device","device usb device","device usb-start device"]},
+    {"surface":"GUI 设备","feature":"无线调试手动及二维码配对","source":"gui/pages/device_page.py","handlers":["_on_pair","_on_qr_pair","_on_qr_scan_pair"],"commands":["device pair 127.0.0.1:12345 123456","device pair-start 127.0.0.1:12345 123456","device qr","device qr-start studio-test password"]},
+    {"surface":"GUI 设备","feature":"ADB Keyboard 检查安装","source":"gui/pages/device_page.py","handlers":["_on_check_kbd","_on_install_kbd"],"commands":["device keyboard-status device","device install-keyboard device","device install-keyboard-start device"]},
+    {"surface":"GUI 设备","feature":"scrcpy 检查","source":"gui/pages/device_page.py","handlers":["_on_check_scrcpy"],"commands":["device scrcpy-status","mirror check"]},
+
+    {"surface":"GUI 工作区","feature":"任务启动停止暂停恢复接管","source":"gui/pages/dashboard_page.py","handlers":["_on_start","_on_stop","_on_pause_resume","_on_takeover","_on_resume_after_takeover"],"commands":["task start sample","task stop job","task pause job","task resume job","task takeover job"]},
+    {"surface":"GUI 工作区","feature":"任务中追加指令","source":"gui/pages/dashboard_page.py","handlers":["_on_send_instruction","_on_instruction_submitted"],"commands":["task instruct job continue"]},
+    {"surface":"GUI 工作区","feature":"渠道选择与就绪检查","source":"gui/pages/dashboard_page.py","handlers":["_on_channel_changed","_on_readiness_results"],"commands":["config use-channel modelscope","diagnostics start"]},
+    {"surface":"GUI 工作区","feature":"镜像生命周期","source":"gui/pages/dashboard_page.py","handlers":["_on_mirror_toggle","_on_mirror_open_mode_toggled"],"commands":["mirror start device --mode auto","mirror status --job-id job","mirror stop --job-id job","config set OPEN_AUTOGLM_GUI_MIRROR_NEW_WINDOW true"]},
+    {"surface":"GUI 工作区","feature":"镜像工具栏与剪贴板","source":"gui/pages/dashboard_page.py","handlers":["_on_mirror_toolbar_action","_on_mirror_paste_clipboard"],"commands":["mirror action home --job-id job","mirror paste --job-id job","mirror screenshot --job-id job"]},
+
+    {"surface":"GUI 诊断","feature":"完整诊断及停止","source":"gui/pages/diagnostics_page.py","handlers":["_on_run"],"commands":["diagnostics start","jobs stop job","diagnostics result job"]},
+    {"surface":"GUI 历史","feature":"列表筛选详情日志清空","source":"gui/pages/history_page.py","handlers":["_load_history","_on_task_selected","_on_clear_all"],"commands":["history list --state completed","history show task","history logs task","history clear"]},
+
+    {"surface":"GUI 主窗口","feature":"主题切换","source":"gui/main_window.py","handlers":["_on_theme_btn_clicked"],"commands":["config set OPEN_AUTOGLM_THEME system"]},
+    {"surface":"GUI 主窗口","feature":"卡住后的等待接管停止","source":"gui/main_window.py","handlers":["_on_stuck_detected"],"commands":["task status job","task takeover job","task stop job","task resume job"]},
+
+    {"surface":"主 CLI","feature":"Android 应用发现","source":"cli/device_commands.py","handlers":["handle_device_commands"],"commands":["apps supported --platform adb","apps device --device-id device","apps find wechat --device-id device"]},
+    {"surface":"主 CLI","feature":"iOS 与 HarmonyOS 设备","source":"cli/device_commands.py","handlers":["handle_ios_device_commands"],"commands":["device list --platform ios","device list --platform hdc","device wda-status","device ios-pair"]}
+  ],
+  "ui_only_handlers": [
+    {"source":"gui/pages/settings_page.py","reason":"配置变化后的界面刷新回调，不产生新的后端能力","handlers":["_on_config_changed"]},
+    {"source":"gui/pages/device_page.py","reason":"对话框关闭、选择态、进度、计时与异步结果渲染；对应操作已由同页动作命令覆盖","handlers":["_on_adb_status","_on_close","_on_device_error","_on_device_selected","_on_operation_finished","_on_operation_started","_on_pairing_finished","_on_pairing_service_found","_on_pairing_status","_on_tick","_on_timed_out"]},
+    {"source":"gui/pages/dashboard_page.py","reason":"日志、帧、状态、Token、设备和异步结果的界面投影；CLI 通过 task/mirror/device status、logs 与结构化字段读取同一状态","handlers":["_on_clear_instruction","_on_device_selected","_on_devices_changed","_on_event_added","_on_log_line","_on_mirror_clipboard_failed","_on_mirror_clipboard_worker_finished","_on_mirror_control_action_succeeded","_on_mirror_control_ready_changed","_on_mirror_error","_on_mirror_frame","_on_mirror_mode_changed","_on_mirror_popup_window_closing","_on_mirror_state_changed","_on_mirror_toolbar_action_failed","_on_mirror_toolbar_action_succeeded","_on_mirror_window_created","_on_readiness_worker_finished","_on_task_finished","_on_task_state_changed","_on_tokens_stats_changed"]},
+    {"source":"gui/pages/diagnostics_page.py","reason":"诊断进度和结果渲染回调；diagnostics status/result 返回原始结构化结果","handlers":["_on_all_done","_on_progress","_on_result","_on_worker_finished"]},
+    {"source":"gui/main_window.py","reason":"导航、配置广播、语言/主题 Token 投影及接管弹窗；后端状态与操作已有独立命令","handlers":["_on_config_changed","_on_language_changed","_on_takeover_request","_on_tokens_changed","_switch_page"]}
+  ]
+}

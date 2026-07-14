@@ -129,6 +129,21 @@ adb disconnect <ip>:<port>
 
 ## Usage
 
+### Automation Control CLI (preferred)
+
+Use the non-interactive CLI for coding-agent workflows. It returns JSON by default, and long-running commands return a persistent `job_id` immediately:
+
+```powershell
+python cli_app.py capabilities
+$task = python cli_app.py task start "Open Chrome" | ConvertFrom-Json
+python cli_app.py task status $task.data.job_id
+python cli_app.py task logs $task.data.job_id
+python cli_app.py task instruct $task.data.job_id "Search for Open-AutoGLM"
+python cli_app.py task stop $task.data.job_id
+```
+
+Configuration, device control, diagnostics, history, mirroring, and GUI builds are also exposed. See [the complete automation CLI reference](docs/cli_automation.md).
+
 ### Command Line
 
 ```bash

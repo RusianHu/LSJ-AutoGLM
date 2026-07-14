@@ -549,6 +549,10 @@ class MainWindow(QMainWindow):
         if device:
             device.stop()
 
+        config = self._services.get("config")
+        if config and hasattr(config, "shutdown"):
+            config.shutdown()
+
         # 停止系统主题监听
         self._theme_manager.stop()
 

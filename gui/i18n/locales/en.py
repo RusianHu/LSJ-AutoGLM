@@ -632,6 +632,9 @@ EN: dict[str, str] = {
     "event.user_stop": "Task aborted by user",
     "event.user_pause": "Task paused by user",
     "event.user_resume": "Task resumed by user",
+    "event.external_pause": "Task paused by the automation CLI",
+    "event.external_resume": "Task resumed by the automation CLI",
+    "event.external_stop": "Task stop requested by the automation CLI",
     "event.user_instruction_queued": "User instruction queued: {instruction_preview}",
     "event.takeover_request": "Agent requested takeover: {reason}",
     "event.takeover_detected": "Takeover requested",
@@ -645,6 +648,8 @@ EN: dict[str, str] = {
     "event.api_check": "API check",
     "event.agent_start": "Agent execution started",
     "event.result_summary": "Run Summary",
+    "task.automation_sync_failed": "Failed to synchronize automation CLI state: {error}",
+    "task.cli_takeover_reason": "CLI manual takeover",
 
     # ============================================================
     # Readiness checks (ReadinessService)

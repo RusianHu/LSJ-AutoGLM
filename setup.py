@@ -16,6 +16,8 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/yourusername/phone-agent",
     packages=find_packages(),
+    py_modules=["main", "ios", "launcher", "gui_app", "cli_app"],
+    package_data={"cli": ["coverage_manifest.json"]},
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -33,6 +35,9 @@ setup(
         "Pillow>=12.0.0",
         "openai>=2.9.0",
         "psutil>=5.9.0",
+        "PySide6>=6.6.0",
+        "qrcode[pil]>=7.4.2",
+        "requests>=2.31.0",
     ],
     extras_require={
         "dev": [
@@ -45,6 +50,7 @@ setup(
     entry_points={
         "console_scripts": [
             "phone-agent=main:main",
+            "open-autoglm=cli.automation_cli:main",
         ],
     },
 )

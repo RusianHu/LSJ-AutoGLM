@@ -146,6 +146,20 @@ Adaptation for non-native AutoGLM models (e.g., Qwen3-VL):
 
 ## Quick Start
 
+### Method 0: Automation CLI (recommended for Codex, Claude Code, and CI)
+
+The unified CLI covers configuration, devices, task control, diagnostics, history, mirroring, and build operations from the TUI/GUI. It emits JSON by default and starts long-running operations as detached jobs:
+
+```powershell
+python cli_app.py capabilities
+$task = python cli_app.py task start "Open Settings and report the system version" | ConvertFrom-Json
+python cli_app.py task status $task.data.job_id
+python cli_app.py task logs $task.data.job_id
+python cli_app.py task stop $task.data.job_id
+```
+
+After installing the package, `open-autoglm` is equivalent to `python cli_app.py`. See [Automation Control CLI](docs/cli_automation.md) for the complete command and job protocol reference.
+
 ### Deploy from GitHub
 
 ```powershell

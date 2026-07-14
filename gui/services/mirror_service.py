@@ -27,6 +27,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 
+from cli.automation_state import JobStore
 from gui.services.adb_client import AdbClient
 
 
@@ -536,10 +537,14 @@ class MirrorService(QObject):
         self._mirror_debug_enabled = self._is_truthy(
             os.environ.get("OPEN_AUTOGLM_GUI_MIRROR_DEBUG", "")
         )
+        self._automation_store = JobStore()
+        self._automation_job_id: Optional[str] = None
 
         # 进程存活监控定时器
         self._monitor_timer = QTimer(self)
         self._monitor_timer.timeout.connect(self._monitor_process)
+        self._automation_timer = QTimer(self)
+        self._automation_timer.timeout.connect(self._sync_external_automation_control)
 
     # ---------- 状态属性 ----------
 
@@ -562,6 +567,57 @@ class MirrorService(QObject):
             and self._mode in {MirrorMode.SCRCPY_EMBEDDED, MirrorMode.SCRCPY_EXTERNAL}
             and self._state == MirrorState.RUNNING
         )
+
+    @property
+    def automation_job_id(self) -> Optional[str]:
+        """当前 GUI 镜像对应的自动化 CLI 作业 ID。"""
+        return self._automation_job_id
+
+    def _register_automation_job(self, device_id: str):
+        try:
+            state = self._automation_store.create(
+                "mirror",
+                {"owner": "gui"},
+                {"owner": "gui", "device_id": device_id, "mode": "starting"},
+            )
+            self._automation_job_id = state["job_id"]
+            self._automation_store.spec_path(self._automation_job_id).unlink(missing_ok=True)
+            self._automation_store.update(
+                self._automation_job_id,
+                worker_pid=os.getpid(),
+            )
+        except Exception as exc:
+            self._automation_job_id = None
+            self._emit_debug(f"自动化 CLI 镜像注册失败: {exc}")
+
+    def _publish_automation_state(self, state: str, **updates):
+        if not self._automation_job_id:
+            return
+        try:
+            self._automation_store.update(
+                self._automation_job_id,
+                state=state,
+                **updates,
+            )
+        except Exception as exc:
+            self._emit_debug(f"自动化 CLI 镜像状态同步失败: {exc}")
+
+    def _external_stop_requested(self) -> bool:
+        if not self._automation_job_id:
+            return False
+        try:
+            state = self._automation_store.read(self._automation_job_id)
+            return bool(state.get("stop_requested") or state.get("state") == "stopping")
+        except Exception:
+            return False
+
+    def _sync_external_automation_control(self):
+        if self._external_stop_requested() and self._state in {
+            MirrorState.STARTING,
+            MirrorState.RUNNING,
+            MirrorState.ERROR,
+        }:
+            self.stop()
 
     def _set_state(self, state: MirrorState):
         self._state = state
@@ -734,6 +790,8 @@ class MirrorService(QObject):
             return
 
         self._device_id = device_id
+        self._register_automation_job(device_id)
+        self._automation_timer.start(300)
         self._set_state(MirrorState.STARTING)
 
         scrcpy_path = self.find_scrcpy()
@@ -837,6 +895,12 @@ class MirrorService(QObject):
         self._mode = mode
         self.mode_changed.emit(mode)
         self._set_state(MirrorState.RUNNING)
+        self._publish_automation_state(
+            "running",
+            process_pid=self._scrcpy_proc.pid,
+            mode=mode.value,
+            window_title=window_title,
+        )
         self._emit_debug(f"scrcpy 进程已启动: pid={self._scrcpy_proc.pid}, mode={mode.value}")
 
         # 若是嵌入模式，在独立线程中异步等待窗口句柄（不阻塞 UI）
@@ -885,6 +949,11 @@ class MirrorService(QObject):
         self._screenshot_poller.error_occurred.connect(self.error_occurred.emit)
         self._screenshot_poller.start()
         self._set_state(MirrorState.RUNNING)
+        self._publish_automation_state(
+            "running",
+            process_pid=None,
+            mode=MirrorMode.ADB_SCREENSHOT.value,
+        )
 
     def _on_frame_bytes(self, data: bytes):
         """在主线程中将 bytes 解码为 QPixmap 后发出 frame_ready"""
@@ -975,7 +1044,13 @@ class MirrorService(QObject):
 
     def stop(self):
         """停止镜像（三阶段清理）"""
+        was_active = self._state in {
+            MirrorState.STARTING,
+            MirrorState.RUNNING,
+            MirrorState.ERROR,
+        }
         self._monitor_timer.stop()
+        self._automation_timer.stop()
 
         if self._toolbar_worker:
             if self._toolbar_worker.isRunning():
@@ -1020,6 +1095,10 @@ class MirrorService(QObject):
         self._mode = MirrorMode.NONE
         self.mode_changed.emit(MirrorMode.NONE)
         self._set_state(MirrorState.STOPPED)
+        if was_active:
+            self._publish_automation_state(
+                "cancelled", process_pid=None, stop_requested=True, returncode=0
+            )
 
     def _kill_scrcpy(self):
         """三阶段回收 scrcpy 进程：terminate -> wait(2s) -> kill"""
@@ -1061,6 +1140,18 @@ class MirrorService(QObject):
                 self._scrcpy_proc = None
                 self._monitor_timer.stop()
 
+                if self._external_stop_requested():
+                    self._window_hwnd = None
+                    self.control_ready_changed.emit(False)
+                    self._mode = MirrorMode.NONE
+                    self.mode_changed.emit(MirrorMode.NONE)
+                    self._set_state(MirrorState.STOPPED)
+                    self._automation_timer.stop()
+                    self._publish_automation_state(
+                        "cancelled", process_pid=None, returncode=ret
+                    )
+                    return
+
                 # 外部独立窗口被用户手动关闭时，scrcpy 常以 code=0 正常退出。
                 # 这属于正常停止，不应误判为错误并自动降级到 ADB 截图模式。
                 if last_mode == MirrorMode.SCRCPY_EXTERNAL and ret == 0:
@@ -1069,6 +1160,10 @@ class MirrorService(QObject):
                     self._mode = MirrorMode.NONE
                     self.mode_changed.emit(MirrorMode.NONE)
                     self._set_state(MirrorState.STOPPED)
+                    self._automation_timer.stop()
+                    self._publish_automation_state(
+                        "completed", process_pid=None, returncode=ret
+                    )
                     return
 
                 self.error_occurred.emit(f"scrcpy 进程已退出（code={ret}）")

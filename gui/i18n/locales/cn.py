@@ -632,6 +632,9 @@ CN: dict[str, str] = {
     "event.user_stop": "用户手动终止任务",
     "event.user_pause": "用户暂停任务",
     "event.user_resume": "用户恢复任务",
+    "event.external_pause": "任务已由自动化 CLI 暂停",
+    "event.external_resume": "任务已由自动化 CLI 恢复",
+    "event.external_stop": "任务已由自动化 CLI 请求停止",
     "event.user_instruction_queued": "用户追加指令已排队：{instruction_preview}",
     "event.takeover_request": "Agent 请求人工接管：{reason}",
     "event.takeover_detected": "检测到接管请求",
@@ -645,6 +648,8 @@ CN: dict[str, str] = {
     "event.api_check": "API 检查",
     "event.agent_start": "Agent 开始执行",
     "event.result_summary": "运行摘要",
+    "task.automation_sync_failed": "自动化 CLI 状态同步失败：{error}",
+    "task.cli_takeover_reason": "CLI 人工接管",
 
     # ============================================================
     # 环境检查项（ReadinessService）

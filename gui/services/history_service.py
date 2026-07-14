@@ -23,6 +23,8 @@ from typing import List, Optional
 
 from PySide6.QtCore import QObject, Signal
 
+from cli.automation_state import JobStore
+
 _HISTORY_DIR = Path("gui_history")
 _INDEX_FILE  = _HISTORY_DIR / "index.json"
 _LOGS_DIR    = _HISTORY_DIR / "logs"
@@ -128,8 +130,13 @@ class HistoryService(QObject):
 
     # ---------- 原子写入索引 ----------
 
-    def _save_index(self):
-        """原子写入索引（临时文件 + replace）"""
+    @staticmethod
+    def _history_lock():
+        """与自动化 CLI 共用历史索引锁，避免跨进程覆盖。"""
+        return JobStore(_HISTORY_DIR / "automation").history_lock()
+
+    def _save_index_unlocked(self):
+        """调用方持有历史锁时原子写入索引。"""
         tmp = _INDEX_FILE.with_suffix(".json.tmp")
         try:
             with open(tmp, "w", encoding="utf-8") as f:
@@ -142,6 +149,11 @@ class HistoryService(QObject):
             except Exception:
                 pass
             self.error_occurred.emit(f"历史索引保存失败: {e}")
+
+    def _save_index(self):
+        """跨进程加锁并原子写入索引。"""
+        with self._history_lock():
+            self._save_index_unlocked()
 
     # ---------- 保存记录 ----------
 
@@ -174,14 +186,16 @@ class HistoryService(QObject):
             raw["events"] = safe_events
             raw = self._normalize_record(raw)
 
-            # 移除旧记录（同 task_id）
-            self._records = [
-                r for r in self._records
-                if r.get("task_id") != raw.get("task_id")
-            ]
-            self._records.insert(0, raw)  # 最新在前
-
-            self._save_index()
+            with self._history_lock():
+                # GUI 可能在 CLI 作业完成后仍保持打开；写前重新读取磁盘，防止
+                # 长生命周期缓存覆盖 CLI 刚追加的历史记录。
+                self._load_index()
+                self._records = [
+                    r for r in self._records
+                    if r.get("task_id") != raw.get("task_id")
+                ]
+                self._records.insert(0, raw)  # 最新在前
+                self._save_index_unlocked()
             self.history_changed.emit()
         except Exception as e:
             self.error_occurred.emit(f"任务记录保存失败: {e}")
@@ -193,6 +207,7 @@ class HistoryService(QObject):
         返回所有历史记录（按时间倒序）。
         state_filter: 若非空则按 state 字段过滤，例如 'failed'/'completed'。
         """
+        self._load_index()
         records = list(self._records)
         if state_filter:
             records = [r for r in records if r.get("state") == state_filter]
@@ -200,6 +215,7 @@ class HistoryService(QObject):
 
     def get_record(self, task_id: str) -> Optional[dict]:
         """按 task_id 查找记录"""
+        self._load_index()
         for r in self._records:
             if r.get("task_id") == task_id:
                 return r
@@ -243,12 +259,15 @@ class HistoryService(QObject):
 
     def delete_record(self, task_id: str):
         """删除单条历史记录"""
-        self._records = [r for r in self._records if r.get("task_id") != task_id]
-        self._save_index()
+        with self._history_lock():
+            self._load_index()
+            self._records = [r for r in self._records if r.get("task_id") != task_id]
+            self._save_index_unlocked()
         self.history_changed.emit()
 
     def clear_all(self):
         """清空所有历史记录"""
-        self._records = []
-        self._save_index()
+        with self._history_lock():
+            self._records = []
+            self._save_index_unlocked()
         self.history_changed.emit()
