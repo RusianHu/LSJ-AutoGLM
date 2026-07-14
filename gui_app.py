@@ -33,7 +33,7 @@ if sys.platform == "win32":
     # 且 os.system() 会创建 cmd.exe 子进程导致黑框闪现，故移除。
     os.environ.setdefault("PYTHONUTF8", "1")
 
-# 源码运行时为仓库根目录；单文件运行时为 exe 所在目录
+# 源码运行时为仓库根目录；打包运行时为 exe 所在目录
 ROOT = app_root().resolve()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -45,7 +45,7 @@ patch_subprocess_for_gui()
 
 
 def _run_task_runner():
-    """单文件模式下的任务子进程入口。"""
+    """冻结模式下的任务子进程入口。"""
     ensure_standard_streams()
     if len(sys.argv) > 1 and sys.argv[1] == GUI_TASK_RUNNER_FLAG:
         sys.argv = [sys.argv[0], *sys.argv[2:]]
@@ -72,7 +72,7 @@ def main():
     # 提高浅色/深色主题下按钮填充、边框、文字颜色的一致性。
     app.setStyle("Fusion")
     app.setApplicationName("Open-AutoGLM")
-    app.setApplicationVersion("1.0.4")
+    app.setApplicationVersion("1.0.7")
     app.setOrganizationName("Open-AutoGLM")
 
     # 设置默认字体

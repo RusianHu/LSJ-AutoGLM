@@ -185,15 +185,25 @@ Run from source:
 python gui_app.py
 ```
 
-Run the single-file distribution:
+Build the official directory distribution with the project `venv`:
 
 ```powershell
-.\dist\OpenAutoGLM-GUI.exe
+.\scripts\build_gui_onedir_venv.bat
 ```
+
+The `release` directory will contain a Windows x64 ZIP and its SHA-256 checksum. Publish those two files instead of reusing the development `dist` directory.
+
+After extracting the complete ZIP, run:
+
+```powershell
+.\OpenAutoGLM-GUI-v1.0.7-windows-x64\OpenAutoGLM-GUI.exe
+```
+
+Do not copy the exe by itself; the adjacent `_internal` directory is required.
 
 First-run notes:
 
-1. If there is no [`.env`](.env.example) in the same directory as the exe, the GUI will attempt to create one automatically
+1. If there is no [`.env`](.env.example) in the same directory as the exe, the GUI will create one automatically without populating any API Key
 2. If the directory is not writable, the settings and diagnostics pages will display a prompt instead of failing silently
 3. If the diagnostics page detects missing ADB, ADB Keyboard, scrcpy, or API configuration, it will show the corresponding fix guides and download links
 4. The settings page now includes an "Action Policy" section where you can configure "Runtime Enabled / AI Visible" actions per device platform; unsupported actions are filtered automatically when the platform changes

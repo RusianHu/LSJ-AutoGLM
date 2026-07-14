@@ -185,15 +185,25 @@ python launcher.py
 python gui_app.py
 ```
 
-单文件分发运行：
+正式目录分发包构建（使用项目 `venv`）：
 
 ```powershell
-.\dist\OpenAutoGLM-GUI.exe
+.\scripts\build_gui_onedir_venv.bat
 ```
+
+构建完成后，`release` 目录会生成 Windows x64 ZIP 和同名 SHA-256 校验文件。分发时应上传这两个文件，不要复用日常 `dist` 目录。
+
+用户完整解压 ZIP 后运行：
+
+```powershell
+.\OpenAutoGLM-GUI-v1.0.7-windows-x64\OpenAutoGLM-GUI.exe
+```
+
+不能只复制 exe；同目录的 `_internal` 是必需运行时。
 
 首次运行说明：
 
-1. 若 exe 同目录没有 [`.env`](.env.example)，GUI 会尝试自动创建
+1. 若 exe 同目录没有 [`.env`](.env.example)，GUI 会尝试自动创建，且不会填入任何 API Key
 2. 若目录不可写，设置页与诊断页会给出提示，不会静默失败
 3. 诊断页中如果发现 ADB、ADB Keyboard、scrcpy 或 API 配置缺失，会显示对应的修复指引与下载地址
 4. 设置页新增“动作策略”分组，可按当前设备平台勾选“运行时启用 / AI 可见”动作集合；平台切换时会自动过滤不可用动作

@@ -46,7 +46,7 @@ from gui.services.mirror_actions import (
 from gui.utils.runtime import (
     app_root,
     gui_build_script_path,
-    gui_onefile_output_path,
+    gui_release_output_path,
     is_frozen,
 )
 from phone_agent.actions.registry import (
@@ -1031,7 +1031,7 @@ class SettingsPage(QWidget):
         mode_key = "page.settings.build.mode.frozen" if is_frozen() else "page.settings.build.mode.source"
         root_path = app_root().resolve()
         script_path = gui_build_script_path().resolve()
-        output_path = gui_onefile_output_path().resolve()
+        output_path = gui_release_output_path().resolve()
 
         if hasattr(self, "_build_mode_lbl"):
             self._build_mode_lbl.setText(
@@ -1105,7 +1105,7 @@ class SettingsPage(QWidget):
         self._open_in_shell(gui_build_script_path().resolve().parent, ensure_dir=True)
 
     def _on_open_dist_dir(self):
-        output_path = gui_onefile_output_path().resolve()
+        output_path = gui_release_output_path().resolve()
         output_path.parent.mkdir(parents=True, exist_ok=True)
         self._open_in_shell(output_path, select_file=True, ensure_dir=True)
 

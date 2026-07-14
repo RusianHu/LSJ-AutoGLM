@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GUI 运行时路径与单文件子进程辅助。"""
+"""GUI 运行时路径与冻结子进程辅助。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-GUI_ONEFILE_EXE_NAME = "OpenAutoGLM-GUI.exe"
+GUI_EXE_NAME = "OpenAutoGLM-GUI.exe"
 GUI_TASK_RUNNER_FLAG = "--gui-task-runner"
 
 
@@ -31,7 +31,7 @@ def app_root() -> Path:
     """返回运行根目录。
 
     - 源码运行：仓库根目录
-    - 单文件运行：exe 所在目录
+    - 打包运行：exe 所在目录
     """
     if is_frozen():
         return Path(sys.executable).resolve().parent
@@ -97,7 +97,7 @@ def find_adb_executable() -> Path | None:
 
 
 def ensure_runtime_path() -> None:
-    """将运行期依赖目录注入 PATH，兼容 Windows 单文件打包启动。"""
+    """将运行期依赖目录注入 PATH，兼容 Windows 冻结包启动。"""
     path_entries = os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []
     normalized = {entry.lower() if sys.platform == "win32" else entry for entry in path_entries if entry}
 
@@ -174,25 +174,25 @@ def find_adb_keyboard_apk() -> Path | None:
 
 
 def gui_build_script_path() -> Path:
-    """GUI 单文件打包脚本路径。"""
-    return resolve_path("scripts", "build_gui_onefile.bat")
+    """GUI 目录分发打包脚本路径。"""
+    return resolve_path("scripts", "build_gui_onedir_venv.bat")
 
 
-def gui_dist_dir() -> Path:
-    """GUI 打包输出目录。"""
-    return resolve_path("dist")
+def gui_release_dir() -> Path:
+    """GUI 正式发布产物目录。"""
+    return resolve_path("release")
 
 
-def gui_onefile_output_path() -> Path:
-    """GUI 单文件 exe 预期输出路径。"""
-    return gui_dist_dir() / GUI_ONEFILE_EXE_NAME
+def gui_release_output_path() -> Path:
+    """GUI 目录分发产物根目录。"""
+    return gui_release_dir()
 
 
 def build_task_subprocess_command(cli_args: list[str] | tuple[str, ...]) -> list[str]:
     """构建任务子进程命令。
 
     - 源码运行：python -u main.py ...
-    - 单文件运行：当前 exe --gui-task-runner ...
+    - 打包运行：当前 exe --gui-task-runner ...
     """
     normalized_args = list(cli_args)
     if is_frozen():
@@ -261,7 +261,7 @@ def patch_subprocess_for_gui() -> None:
 
 
 def ensure_standard_streams() -> None:
-    """为 windowed 单文件子进程补齐标准流。
+    """为 windowed 冻结子进程补齐标准流。
 
     PyInstaller 在 --windowed 模式下可能把 sys.stdout/sys.stderr 设为 None。
     任务子进程仍需要把 CLI 日志通过 PIPE 回传给 GUI，因此在 runner 模式中显式补齐。

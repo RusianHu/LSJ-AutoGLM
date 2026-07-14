@@ -437,7 +437,7 @@ def check_main_py() -> ReadinessCheckResult:
         return _success(
             "main_py",
             "任务入口可访问",
-            f"单文件任务入口可用: {exe_path}",
+            f"冻结任务入口可用: {exe_path}",
             label_key="readiness.main_py.label",
             detail_key="readiness.main_py.detail.ok",
             detail_params={"path": str(exe_path)},

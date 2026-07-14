@@ -577,9 +577,9 @@ class MirrorService(QObject):
         1. PATH 中的 scrcpy
         2. app_root() 相对路径（源码运行 = 项目根；打包运行 = exe 所在目录 dist/）
         3. 打包运行时额外搜索 app_root().parent（即 exe 上一级，通常是项目根目录），
-           支持 dist/OpenAutoGLM-GUI.exe 旁边放 scrcpy 的目录结构:
+           支持 OpenAutoGLM-GUI.exe 旁边放 scrcpy 的目录结构:
                项目根/
-               ├── dist/OpenAutoGLM-GUI.exe
+               ├── OpenAutoGLM-GUI.exe
                └── scrcpy/scrcpy.exe   ← 可被自动识别
         4. 常见绝对路径
         """
