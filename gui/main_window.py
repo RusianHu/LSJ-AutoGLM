@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""主窗口 - 左侧多页导航框架"""
+"""主窗口 - 竖版布局：顶部导航条 + 纵向内容区"""
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon
@@ -30,7 +30,7 @@ from gui.i18n.page_adapter import PageI18nAdapter
 class MainWindow(QMainWindow):
     """
     主窗口。
-    布局：左侧导航栏 (220px) + 右侧内容区（StackedWidget）。
+    布局（竖版）：顶部导航条（Logo/主题/导航按钮）+ 下方内容区（StackedWidget）。
 
     主题系统：
       - 由 ThemeManager 统一管理主题解析与广播
@@ -39,9 +39,8 @@ class MainWindow(QMainWindow):
       - MainWindow.apply_theme 作为兼容入口，内部委托给 ThemeManager
     """
 
-    NAV_WIDTH = 200
-    MIN_WIDTH = 1280
-    MIN_HEIGHT = 780
+    MIN_WIDTH = 480
+    MIN_HEIGHT = 720
 
     def __init__(self, services: dict, parent=None):
         """
@@ -86,7 +85,7 @@ class MainWindow(QMainWindow):
         )
         self.setWindowTitle(self._i18n_manager.t("shell.window.title"))
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
-        self.resize(1440, 900)
+        self.resize(560, 960)
         self._build_ui()
         self._connect_signals()
 
@@ -98,22 +97,22 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QHBoxLayout(central)
+        root_layout = QVBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # 左侧导航
+        # 顶部导航条
         self._nav_panel = self._build_nav()
         root_layout.addWidget(self._nav_panel)
 
         # 分隔线
         self._sep = QFrame()
         self._sep.setObjectName("MainSeparator")
-        self._sep.setFrameShape(QFrame.VLine)
-        self._sep.setStyleSheet("background:#1e2330; border:none; max-width:1px;")
+        self._sep.setFrameShape(QFrame.HLine)
+        self._sep.setStyleSheet("background:#1e2330; border:none; max-height:1px;")
         root_layout.addWidget(self._sep)
 
-        # 右侧内容区
+        # 下方内容区
         self._stack = QStackedWidget()
         self._stack.setObjectName("ContentStack")
         self._stack.setStyleSheet("background:#0d1117;")
@@ -125,23 +124,37 @@ class MainWindow(QMainWindow):
     def _build_nav(self) -> QWidget:
         nav = QWidget()
         nav.setObjectName("NavPanel")
-        nav.setFixedWidth(self.NAV_WIDTH)
         nav.setStyleSheet("background:#13192a;")
         layout = QVBoxLayout(nav)
-        layout.setContentsMargins(12, 20, 12, 20)
-        layout.setSpacing(4)
+        layout.setContentsMargins(14, 10, 14, 8)
+        layout.setSpacing(8)
 
-        # Logo
+        # 第一行：Logo + 版本号 + 主题切换器
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
+
         self._logo_lbl = QLabel("LSJ AutoGLM")
         self._logo_lbl.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        self._logo_lbl.setStyleSheet("color:#529bf5; padding:4px 8px 16px 8px;")
-        layout.addWidget(self._logo_lbl)
+        self._logo_lbl.setStyleSheet("color:#529bf5; padding:2px 4px;")
+        top_row.addWidget(self._logo_lbl)
 
-        # 导航按钮
+        _t = self._i18n_manager.t
+        self._ver_lbl = QLabel(_t("shell.footer.version", version=self._app_version))
+        self._ver_lbl.setStyleSheet("color:#3a4560; font-size:10px; padding:4px 2px 0 0;")
+        top_row.addWidget(self._ver_lbl)
+
+        top_row.addStretch(1)
+
+        self._theme_switcher_widget = self._build_theme_switcher()
+        top_row.addWidget(self._theme_switcher_widget)
+        layout.addLayout(top_row)
+
+        # 第二行：横向导航按钮
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
         self._btn_group = QButtonGroup(self)
         self._btn_group.setExclusive(True)
 
-        _t = self._i18n_manager.t
         # (key, icon, i18n_key)
         nav_items = [
             ("dashboard", "[=]", "shell.nav.dashboard"),
@@ -155,49 +168,40 @@ class MainWindow(QMainWindow):
         for key, icon, i18n_key in nav_items:
             btn = NavButton(icon, _t(i18n_key))
             self._btn_group.addButton(btn)
-            layout.addWidget(btn)
+            btn_row.addWidget(btn, 1)
             self._nav_buttons[key] = btn
             btn.setProperty("i18n_key", i18n_key)
-
-        layout.addStretch(1)
-
-        # 底部主题切换器
-        self._theme_switcher_widget = self._build_theme_switcher()
-        layout.addWidget(self._theme_switcher_widget)
-
-        # 底部版本号
-        self._ver_lbl = QLabel(_t("shell.footer.version", version=self._app_version))
-        self._ver_lbl.setStyleSheet("color:#3a4560; font-size:10px; padding:4px 8px;")
-        layout.addWidget(self._ver_lbl)
+        layout.addLayout(btn_row)
 
         return nav
 
     def _build_theme_switcher(self) -> QWidget:
-        """构建底部主题切换器（三段 pill 按钮组），放置于版本号上方。"""
+        """构建顶部主题切换器（三段紧凑 pill 按钮组）。"""
         _t = self._i18n_manager.t
 
         container = QWidget()
         container.setObjectName("ThemeSwitcherBar")
-        outer = QVBoxLayout(container)
-        outer.setContentsMargins(0, 8, 0, 2)
+        outer = QHBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
-        # 小说明标签
+        # 小说明标签（紧凑模式下隐藏，仅保留供 i18n/主题刷新引用）
         self._theme_hint_lbl = QLabel(_t("shell.theme_switcher.label"))
         self._theme_hint_lbl.setObjectName("ThemeSwitcherHint")
         self._theme_hint_lbl.setStyleSheet(
             "color:#3a4560; font-size:10px; font-weight:600; background: transparent; border: none;"
         )
+        self._theme_hint_lbl.hide()
         outer.addWidget(self._theme_hint_lbl)
 
         # Pill 容器（三个按钮的外壳）
         pill = QFrame()
         pill.setObjectName("ThemeSwitcherPill")
-        pill.setFixedHeight(40)
-        pill.setStyleSheet("background:#1a2035; border:1px solid #283247; border-radius:12px;")
+        pill.setFixedHeight(32)
+        pill.setStyleSheet("background:#1a2035; border:1px solid #283247; border-radius:10px;")
         h = QHBoxLayout(pill)
-        h.setContentsMargins(4, 4, 4, 4)
-        h.setSpacing(4)
+        h.setContentsMargins(3, 3, 3, 3)
+        h.setSpacing(3)
 
         self._theme_btns: dict[str, QPushButton] = {}
         self._theme_btn_meta = [
@@ -209,12 +213,12 @@ class MainWindow(QMainWindow):
             QPushButton {
                 background: transparent;
                 border: 1px solid transparent;
-                border-radius: 9px;
+                border-radius: 8px;
                 color: #66778d;
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 600;
-                padding: 0 8px;
-                min-height: 30px;
+                padding: 0 10px;
+                min-height: 24px;
             }
             QPushButton:hover {
                 background: #243050;
@@ -229,9 +233,9 @@ class MainWindow(QMainWindow):
         """
         for mode, text_key, tooltip_key in self._theme_btn_meta:
             btn = QPushButton(_t(text_key))
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(24)
             btn.setMinimumWidth(0)
-            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
             btn.setToolTip(_t(tooltip_key))
@@ -279,7 +283,7 @@ class MainWindow(QMainWindow):
             return
         if hasattr(self, "_theme_pill"):
             self._theme_pill.setStyleSheet(
-                f"background:{tokens.bg_elevated}; border:1px solid {tokens.border}; border-radius:12px;"
+                f"background:{tokens.bg_elevated}; border:1px solid {tokens.border}; border-radius:10px;"
             )
         if hasattr(self, "_theme_hint_lbl"):
             self._theme_hint_lbl.setStyleSheet(
@@ -290,12 +294,12 @@ class MainWindow(QMainWindow):
             QPushButton {{
                 background: transparent;
                 border: 1px solid transparent;
-                border-radius: 9px;
+                border-radius: 8px;
                 color: {tokens.text_secondary};
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 600;
-                padding: 0 8px;
-                min-height: 30px;
+                padding: 0 10px;
+                min-height: 24px;
             }}
             QPushButton:hover {{
                 background: {tokens.bg_secondary};
@@ -493,17 +497,17 @@ class MainWindow(QMainWindow):
             self._nav_panel.setStyleSheet(f"background:{tokens.bg_nav};")
         if hasattr(self, "_sep"):
             self._sep.setStyleSheet(
-                f"background:{tokens.sep_color}; border:none; max-width:1px;"
+                f"background:{tokens.sep_color}; border:none; max-height:1px;"
             )
         if hasattr(self, "_stack"):
             self._stack.setStyleSheet(f"background:{tokens.bg_main};")
         if hasattr(self, "_logo_lbl"):
             self._logo_lbl.setStyleSheet(
-                f"color:{tokens.accent}; padding:4px 8px 16px 8px;"
+                f"color:{tokens.accent}; padding:2px 4px;"
             )
         if hasattr(self, "_ver_lbl"):
             self._ver_lbl.setStyleSheet(
-                f"color:{tokens.text_muted}; font-size:10px; padding:4px 8px;"
+                f"color:{tokens.text_muted}; font-size:10px; padding:4px 2px 0 0;"
             )
 
         # 更新底部主题切换器样式并同步选中态

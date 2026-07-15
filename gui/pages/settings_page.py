@@ -613,6 +613,7 @@ class SettingsPage(QWidget):
         # 滚动区
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setStyleSheet("QScrollArea { border:none; }")
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
@@ -880,13 +881,13 @@ class SettingsPage(QWidget):
         hint.setWordWrap(True)
         outer.addWidget(hint)
 
-        # 卡片网格：每行两列
+        # 卡片列表：竖版窄窗下纵向堆叠
         if not self._config:
             return group
 
         presets = [p for p in self._config.CHANNEL_PRESETS if p["id"] != "custom"]
         grid_widget = QWidget()
-        grid_layout = QHBoxLayout(grid_widget)
+        grid_layout = QVBoxLayout(grid_widget)
         grid_layout.setContentsMargins(0, 0, 0, 0)
         grid_layout.setSpacing(10)
 
@@ -1213,7 +1214,7 @@ class SettingsPage(QWidget):
                         pass
             else:
                 edit = QLineEdit()
-                edit.setMinimumWidth(320)
+                edit.setMinimumWidth(180)
                 if sensitive:
                     edit.setEchoMode(QLineEdit.Password)
                 if not editable:

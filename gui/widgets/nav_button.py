@@ -1,24 +1,31 @@
 # -*- coding: utf-8 -*-
-"""左侧导航按钮控件"""
+"""顶部导航按钮控件（竖版壳层，横向排布）"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QPushButton, QSizePolicy
 
 
 class NavButton(QPushButton):
-    """左侧导航栏按钮"""
+    """顶部导航条按钮"""
 
     def __init__(self, icon_text: str, label: str, parent=None):
         super().__init__(parent)
         self._icon_text = icon_text
         self._label = label
         self.setObjectName("NavButton")
-        self.setText(f"{icon_text}\n{label}")
+        self.setText(label)
+        self.setToolTip(label)
         self.setCheckable(True)
-        self.setFixedHeight(64)
+        self.setFixedHeight(36)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self._apply_default_style()
+
+    def set_label(self, label: str) -> None:
+        """更新显示文案（语言切换时由 MainWindow 调用）。"""
+        self._label = label
+        self.setText(label)
+        self.setToolTip(label)
 
     def apply_theme_tokens(self, tokens) -> None:
         """
@@ -30,11 +37,11 @@ class NavButton(QPushButton):
             NavButton {{
                 background: transparent;
                 border: none;
-                border-radius: 12px;
+                border-radius: 10px;
                 color: {tokens.nav_text};
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
-                padding: 6px 10px;
+                padding: 4px 8px;
                 text-align: center;
             }}
             NavButton:hover {{
@@ -44,7 +51,7 @@ class NavButton(QPushButton):
             NavButton:checked {{
                 background: {tokens.accent_soft};
                 color: {tokens.accent};
-                border-left: 3px solid {tokens.accent};
+                border-bottom: 2px solid {tokens.accent};
             }}
         """)
 
@@ -58,11 +65,11 @@ class NavButton(QPushButton):
             NavButton {{
                 background: transparent;
                 border: none;
-                border-radius: 12px;
+                border-radius: 10px;
                 color: {theme_vars['nav_text']};
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
-                padding: 6px 10px;
+                padding: 4px 8px;
                 text-align: center;
             }}
             NavButton:hover {{
@@ -72,7 +79,7 @@ class NavButton(QPushButton):
             NavButton:checked {{
                 background: {theme_vars['accent_soft']};
                 color: {theme_vars['accent']};
-                border-left: 3px solid {theme_vars['accent']};
+                border-bottom: 2px solid {theme_vars['accent']};
             }}
         """)
 

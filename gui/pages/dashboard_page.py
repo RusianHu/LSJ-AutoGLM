@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-工作台页面。
+工作台页面（竖版布局）。
 
 布局：
-  顶部工具区（任务输入 + 控制按钮 + 状态条）
-  └── 主工作区三列：
-      - 左列：控制摘要 / 动作策略 / 渠道 / 就绪状态
-      - 中列：日志与事件
-      - 右列：大尺寸设备镜像
+  顶部控制区（渠道 + 任务输入 + 控制按钮 + 追加指令 + 状态/就绪条）
+  └── 主工作区 Tab（纵向填充剩余空间）：
+      - 设备镜像
+      - 日志与事件
+      - 工作台概览（动作策略 / 渠道 / 就绪状态卡片）
 """
 
 import os
@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
-    QSplitter,
     QStackedLayout,
     QTabWidget,
     QVBoxLayout,
@@ -335,49 +334,38 @@ class DashboardPage(QWidget):
 
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 18, 18, 18)
-        root.setSpacing(16)
+        root.setContentsMargins(14, 12, 14, 12)
+        root.setSpacing(10)
 
         root.addWidget(self._build_hero_panel())
 
-        left_panel = self._build_workspace_overview()
-        left_panel.setMinimumWidth(320)
-        left_panel.setMaximumWidth(420)
-        left_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        mirror_panel = self._build_mirror_panel()
+        log_panel = self._build_log_panel()
+        overview_panel = self._build_workspace_overview()
 
-        center_panel = self._build_log_panel()
-        center_panel.setMinimumWidth(420)
-        center_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        right_panel = self._build_mirror_panel()
-        # 允许工具栏在常见 1440px 窗口中与镜像区同时显示；镜像区本身
-        # 会按剩余宽度伸缩，用户仍可通过拖动分隔线放大预览区域。
-        right_panel.setMinimumWidth(360)
-        right_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-        splitter = QSplitter(Qt.Horizontal)
-        self._main_splitter = splitter
-        splitter.setObjectName("DashboardMainSplitter")
-        splitter.setHandleWidth(8)
-        splitter.setChildrenCollapsible(False)
-        splitter.addWidget(left_panel)
-        splitter.addWidget(center_panel)
-        splitter.addWidget(right_panel)
-        splitter.setSizes([360, 620, 860])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 2)
-        root.addWidget(splitter, 1)
+        # 竖版主工作区：镜像 / 日志 / 概览以 Tab 纵向复用同一块空间
+        self._main_tabs = QTabWidget()
+        self._main_tabs.setObjectName("DashboardMainTabs")
+        self._main_tabs.setDocumentMode(True)
+        self._main_tabs.addTab(mirror_panel, self._t("page.dashboard.tab.mirror"))
+        self._main_tabs.addTab(log_panel, self._t("page.dashboard.tab.logs"))
+        self._main_tabs.addTab(overview_panel, self._t("page.dashboard.tab.overview"))
+        root.addWidget(self._main_tabs, 1)
 
         self._refresh_workspace_overview()
+
+    def _switch_main_tab_to_logs(self):
+        """任务启动时自动切到日志页，便于观察执行过程。"""
+        if hasattr(self, "_main_tabs"):
+            self._main_tabs.setCurrentIndex(1)
 
     def _build_hero_panel(self) -> QWidget:
         panel = QFrame()
         self._hero_panel = panel
         panel.setObjectName("DashboardHeroPanel")
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(22, 14, 22, 16)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 10, 14, 12)
+        layout.setSpacing(6)
 
         layout.addWidget(self._build_toolbar())
         layout.addWidget(self._build_instruction_bar())
@@ -565,50 +553,54 @@ class DashboardPage(QWidget):
         bar = QWidget()
         self._toolbar = bar
         bar.setProperty("role", "toolbar")
-        bar.setFixedHeight(60)
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(10)
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
 
-        # 渠道切换下拉框
+        # 第一行：渠道切换下拉框 + 任务开始按钮
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
         self._channel_combo = QComboBox()
         self._channel_combo.setFixedHeight(32)
-        self._channel_combo.setMinimumWidth(220)
-        self._channel_combo.setMaximumWidth(280)
         self._populate_channel_combo()
         self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
-        layout.addWidget(self._channel_combo)
+        top_row.addWidget(self._channel_combo, 1)
+        layout.addLayout(top_row)
 
-        # 任务输入框
+        # 第二行：任务输入框 + 开始按钮
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
         self._task_input = QLineEdit()
         self._task_input.setPlaceholderText(self._t("page.dashboard.toolbar.task_placeholder"))
-        self._task_input.setMinimumWidth(300)
+        self._task_input.setFixedHeight(34)
         self._task_input.returnPressed.connect(self._on_start)
-        layout.addWidget(self._task_input, 1)
+        input_row.addWidget(self._task_input, 1)
 
-        # 开始按钮
         self._btn_start = QPushButton(self._t("page.dashboard.toolbar.btn.start"))
         self._btn_start.setProperty("variant", "primary")
         self._btn_start.clicked.connect(self._on_start)
-        layout.addWidget(self._btn_start)
+        input_row.addWidget(self._btn_start)
+        layout.addLayout(input_row)
 
-        # 停止按钮
+        # 第三行：运行控制按钮（等宽平铺）
+        ctrl_row = QHBoxLayout()
+        ctrl_row.setSpacing(8)
+
         self._btn_stop = QPushButton(self._t("page.dashboard.toolbar.btn.stop"))
         self._btn_stop.setProperty("variant", "danger")
         self._btn_stop.clicked.connect(self._on_stop)
-        layout.addWidget(self._btn_stop)
+        ctrl_row.addWidget(self._btn_stop, 1)
 
-        # 暂停/恢复按钮
         self._btn_pause = QPushButton(self._t("page.dashboard.toolbar.btn.pause"))
         self._btn_pause.setProperty("variant", "warning")
         self._btn_pause.clicked.connect(self._on_pause_resume)
-        layout.addWidget(self._btn_pause)
+        ctrl_row.addWidget(self._btn_pause, 1)
 
-        # 接管按钮
         self._btn_takeover = QPushButton(self._t("page.dashboard.toolbar.btn.takeover"))
         self._btn_takeover.setProperty("variant", "warning")
         self._btn_takeover.clicked.connect(self._on_takeover)
-        layout.addWidget(self._btn_takeover)
+        ctrl_row.addWidget(self._btn_takeover, 1)
+        layout.addLayout(ctrl_row)
 
         self._sync_toolbar_action_button_widths()
         return bar
@@ -619,28 +611,32 @@ class DashboardPage(QWidget):
         self._instruction_bar = bar
         bar.setObjectName("DashboardInstructionBar")
 
-        # 使用垂直布局：上行（标题+状态+输入框+按钮），下行（说明文字）
+        # 使用垂直布局：上行（标题+状态），中行（输入框+按钮），下行（说明文字）
         outer = QVBoxLayout(bar)
-        outer.setContentsMargins(16, 10, 16, 10)
+        outer.setContentsMargins(12, 8, 12, 8)
         outer.setSpacing(6)
 
-        # 上行：标题 + 状态 + 输入框 + 按钮
-        row = QHBoxLayout()
-        row.setSpacing(10)
+        # 上行：标题 + 状态
+        head_row = QHBoxLayout()
+        head_row.setSpacing(10)
 
         # 标题标签
         title_lbl = QLabel(self._t("page.dashboard.instruction.card.title"))
         title_lbl.setObjectName("DashboardInstructionBarTitle")
         self._instruction_bar_title_lbl = title_lbl
-        row.addWidget(title_lbl)
+        head_row.addWidget(title_lbl)
 
         # 状态指示器
         status_chip = QLabel()
         status_chip.setObjectName("DashboardInstructionBarStatusChip")
         self._instruction_status_chip = status_chip
-        row.addWidget(status_chip)
+        head_row.addWidget(status_chip)
+        head_row.addStretch(1)
+        outer.addLayout(head_row)
 
-        # 指令输入框
+        # 中行：指令输入框 + 按钮
+        row = QHBoxLayout()
+        row.setSpacing(8)
         self._instruction_input = QLineEdit()
         self._instruction_input.setPlaceholderText(
             self._t("page.dashboard.instruction.input.placeholder")
@@ -685,10 +681,9 @@ class DashboardPage(QWidget):
         bar = QWidget()
         self._status_bar = bar
         bar.setProperty("role", "statusBar")
-        bar.setFixedHeight(32)
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(20)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(10)
 
         self._lbl_task_state = self._make_status_chip(
             self._t("page.dashboard.status.label.state"),
@@ -712,7 +707,7 @@ class DashboardPage(QWidget):
 
         # 镜像兜底粘贴按钮（主要用于独立 scrcpy 窗口模式）
         self._btn_mirror_paste_clipboard = QPushButton(self._t("page.dashboard.mirror.btn.paste_clipboard"))
-        self._btn_mirror_paste_clipboard.setFixedHeight(22)
+        self._btn_mirror_paste_clipboard.setFixedHeight(24)
         self._btn_mirror_paste_clipboard.setProperty("variant", "subtle")
         self._btn_mirror_paste_clipboard.clicked.connect(self._on_mirror_paste_clipboard)
         self._btn_mirror_paste_clipboard.setEnabled(False)
@@ -720,7 +715,7 @@ class DashboardPage(QWidget):
 
         # 镜像控制按钮
         self._btn_mirror_toggle = QPushButton(self._t("page.dashboard.mirror.btn.start_mirror"))
-        self._btn_mirror_toggle.setFixedHeight(22)
+        self._btn_mirror_toggle.setFixedHeight(24)
         self._btn_mirror_toggle.setProperty("variant", "subtle")
         self._btn_mirror_toggle.clicked.connect(self._on_mirror_toggle)
         layout.addWidget(self._btn_mirror_toggle)
@@ -871,7 +866,6 @@ class DashboardPage(QWidget):
     def _build_mirror_panel(self) -> QWidget:
         self._mirror_panel_group = QGroupBox(self._t("page.dashboard.mirror.title"))
         panel = self._mirror_panel_group
-        panel.setMinimumWidth(360)
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(12, 18, 12, 12)
         layout.setSpacing(10)
@@ -1345,10 +1339,6 @@ class DashboardPage(QWidget):
             self._hero_title_lbl.setStyleSheet(
                 f"color:{v.get('text_primary', '#c9d1d9')}; font-size:20px; font-weight:700;"
             )
-        if hasattr(self, "_main_splitter"):
-            self._main_splitter.setStyleSheet(
-                f"QSplitter::handle {{ background:{v.get('border', '#30363d')}; border-radius:999px; margin:18px 8px; }}"
-            )
         if hasattr(self, "_policy_card"):
             self._policy_card.setStyleSheet(self._workspace_card_style("default"))
         if hasattr(self, "_channel_card"):
@@ -1648,6 +1638,7 @@ class DashboardPage(QWidget):
                 self._summary_style(self._theme_vars.get("text_secondary", "#526273"))
             )
             self._task.start_task(text, device_id_override=self._current_device_id())
+            self._switch_main_tab_to_logs()
 
     def _on_stop(self):
         if self._task:
@@ -1919,6 +1910,9 @@ class DashboardPage(QWidget):
             if self._mirror_prefers_new_window():
                 self._start_mirror_for_device(device_id, external_window=True)
             else:
+                # 内嵌模式：切到镜像 Tab 保证宿主容器可见后再启动
+                if hasattr(self, "_main_tabs"):
+                    self._main_tabs.setCurrentIndex(0)
                 self._start_mirror_for_device(device_id)
 
     # ================================================================
@@ -2590,8 +2584,9 @@ class DashboardPage(QWidget):
             min_width,
             max(btn.fontMetrics().horizontalAdvance(btn.text()) + padding for btn in buttons),
         )
+        # 竖版布局下按钮按行拉伸填充，仅约束最小宽度保证文案完整。
         for btn in buttons:
-            btn.setFixedWidth(max_width)
+            btn.setMinimumWidth(max_width)
 
     def _apply_action_button_styles(self, task_state=None, mirror_running=None):
         if task_state is None:
@@ -2734,6 +2729,10 @@ class DashboardPage(QWidget):
         elif not self._readiness_results:
             self._set_readiness_state(_t("page.dashboard.readiness.checking"), self._last_readiness_state[1])
 
+        if hasattr(self, "_main_tabs"):
+            self._main_tabs.setTabText(0, _t("page.dashboard.tab.mirror"))
+            self._main_tabs.setTabText(1, _t("page.dashboard.tab.logs"))
+            self._main_tabs.setTabText(2, _t("page.dashboard.tab.overview"))
         if hasattr(self, "_log_panel_group"):
             self._log_panel_group.setTitle(_t("event.result_summary"))
         if hasattr(self, "_log_tabs"):

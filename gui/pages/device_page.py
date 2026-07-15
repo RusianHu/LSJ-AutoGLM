@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -669,7 +670,19 @@ class DevicePage(QWidget):
             return template
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
+        # 竖版窄窗下内容较长，整页放入滚动容器
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        root = QVBoxLayout(content)
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(16)
 
@@ -686,6 +699,7 @@ class DevicePage(QWidget):
 
         self._adb_status_lbl = QLabel(self._t("page.device.adb.checking"))
         self._adb_status_lbl.setProperty("role", "muted")
+        self._adb_status_lbl.setWordWrap(True)
         self._adb_status_lbl.setStyleSheet("font-size:13px;")
         adb_layout.addWidget(self._adb_status_lbl)
 
@@ -841,6 +855,7 @@ class DevicePage(QWidget):
         scrcpy_layout = QHBoxLayout(scrcpy_group)
         self._scrcpy_status_lbl = QLabel("—")
         self._scrcpy_status_lbl.setProperty("role", "muted")
+        self._scrcpy_status_lbl.setWordWrap(True)
         scrcpy_layout.addWidget(self._scrcpy_status_lbl)
         self._btn_check_scrcpy = QPushButton(self._t("page.device.btn.check_scrcpy"))
         self._btn_check_scrcpy.setProperty("variant", "subtle")

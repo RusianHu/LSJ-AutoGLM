@@ -114,8 +114,8 @@ class HistoryPage(QWidget):
         header.addWidget(self._btn_clear)
         root.addLayout(header)
 
-        # 主体 Splitter
-        splitter = QSplitter(Qt.Horizontal)
+        # 主体 Splitter（竖版：上列表 / 下详情）
+        splitter = QSplitter(Qt.Vertical)
 
         # 左：任务列表
         left = QWidget()
@@ -155,7 +155,9 @@ class HistoryPage(QWidget):
 
         right_layout.addWidget(self._detail_tabs, 1)
         splitter.addWidget(right)
-        splitter.setSizes([340, 700])
+        splitter.setSizes([260, 480])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         root.addWidget(splitter, 1)
 
     def _build_overview_tab(self) -> QWidget:
