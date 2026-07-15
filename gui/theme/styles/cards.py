@@ -18,7 +18,7 @@ def card_default(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
         }}
         QGroupBox {{
             margin-top: 8px;
@@ -39,7 +39,7 @@ def card_elevated(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
         }}
         QGroupBox {{
             margin-top: 8px;
@@ -60,7 +60,7 @@ def card_outlined(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: transparent;
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
         }}
         QGroupBox {{
             margin-top: 8px;

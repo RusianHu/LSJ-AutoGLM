@@ -22,7 +22,7 @@ def dialog_surface(t: ThemeTokens) -> str:
         QDialog QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             margin-top: 8px;
             padding-top: 8px;
@@ -46,7 +46,7 @@ def dialog_surface(t: ThemeTokens) -> str:
         QDialog QPushButton {{
             background-color: {t.bg_btn};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             padding: 6px 18px;
             min-width: 80px;
@@ -72,13 +72,16 @@ def dialog_message_box(t: ThemeTokens) -> str:
         QPushButton {{
             background-color: {t.bg_btn};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             padding: 6px 18px;
             min-width: 80px;
         }}
         QPushButton:hover {{
             background-color: {t.bg_elevated};
-            border-color: {t.border_hover};
+            border-color: {t.accent};
+        }}
+        QPushButton:pressed {{
+            padding-top: 7px;
         }}
     """

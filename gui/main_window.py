@@ -23,6 +23,7 @@ from gui.theme.preferences import ThemePreference
 from gui.theme.global_shell import GlobalShellStyler
 from gui.theme.page_adapter import PageThemeAdapter
 from gui.theme.tokens import ThemeTokens
+from gui.theme.effects import apply_bar_shadow, play_page_fade
 from gui.i18n.manager import I18nManager
 from gui.i18n.page_adapter import PageI18nAdapter
 
@@ -380,7 +381,11 @@ class MainWindow(QMainWindow):
     def _switch_page(self, key: str):
         page = self._pages.get(key)
         if page:
+            switching = self._stack.currentWidget() is not page
             self._stack.setCurrentWidget(page)
+            # 淡入过渡；工作台页可能承载 scrcpy 原生宿主，跳过图形效果
+            if switching and key != "dashboard":
+                play_page_fade(page)
             # 通知页面已激活（可选刷新）
             if hasattr(page, "on_page_activated"):
                 page.on_page_activated()
@@ -494,7 +499,12 @@ class MainWindow(QMainWindow):
 
         # 更新壳层局部内联样式
         if hasattr(self, "_nav_panel"):
-            self._nav_panel.setStyleSheet(f"background:{tokens.bg_nav};")
+            nav_grad = (
+                "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+                f"stop:0 {tokens.bg_nav}, stop:1 {tokens.bg_main})"
+            )
+            self._nav_panel.setStyleSheet(f"background:{nav_grad};")
+            apply_bar_shadow(self._nav_panel, tokens)
         if hasattr(self, "_sep"):
             self._sep.setStyleSheet(
                 f"background:{tokens.sep_color}; border:none; max-height:1px;"

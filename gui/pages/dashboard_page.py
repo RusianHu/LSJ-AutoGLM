@@ -52,6 +52,7 @@ from gui.services.task_service import TaskState
 from gui.services.mirror_service import MirrorMode, MirrorState
 from gui.theme.tokens import ThemeTokens
 from gui.theme.themes import resolve_theme_tokens
+from gui.theme.effects import apply_card_shadow
 from gui.theme.styles.buttons import (
     btn_primary,
     btn_danger,
@@ -1223,7 +1224,7 @@ class DashboardPage(QWidget):
             QGroupBox {{
                 background:{v.get('bg_secondary', '#161b22')};
                 border:1px solid {v.get('border', '#30363d')};
-                border-radius:22px;
+                border-radius:16px;
                 margin-top:18px;
                 padding-top:18px;
                 color:{v.get('text_primary', '#c9d1d9')};
@@ -1250,7 +1251,7 @@ class DashboardPage(QWidget):
         }
         bg, border = semantic_map.get(semantic, semantic_map["default"])
         return (
-            f"background:{bg}; border:1px solid {border}; border-radius:22px;"
+            f"background:{bg}; border:1px solid {border}; border-radius:16px;"
         )
 
     def _channel_combo_style(self, theme_vars: dict) -> str:
@@ -1325,11 +1326,13 @@ class DashboardPage(QWidget):
         if hasattr(self, "_hero_panel"):
             self._hero_panel.setStyleSheet(
                 f"background:{v.get('bg_elevated', '#121924')};"
-                f"border:1px solid {v.get('border', '#30363d')}; border-radius:22px;"
+                f"border:1px solid {v.get('border', '#30363d')}; border-radius:16px;"
             )
+            # 主题感知投影（hero 不承载原生窗口，可安全应用图形效果）
+            apply_card_shadow(self._hero_panel, self._theme_tokens, blur=26, y_offset=4)
         if hasattr(self, "_workspace_overview_panel"):
             self._workspace_overview_panel.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#121924')}; border:none; border-radius:26px;"
+                f"background:{v.get('bg_elevated', '#121924')}; border:none; border-radius:16px;"
             )
         if hasattr(self, "_workspace_section_lbl"):
             self._workspace_section_lbl.setStyleSheet(
@@ -1341,10 +1344,13 @@ class DashboardPage(QWidget):
             )
         if hasattr(self, "_policy_card"):
             self._policy_card.setStyleSheet(self._workspace_card_style("default"))
+            apply_card_shadow(self._policy_card, self._theme_tokens, strength="soft")
         if hasattr(self, "_channel_card"):
             self._channel_card.setStyleSheet(self._workspace_card_style("info"))
+            apply_card_shadow(self._channel_card, self._theme_tokens, strength="soft")
         if hasattr(self, "_readiness_card"):
             self._readiness_card.setStyleSheet(self._workspace_card_style(self._last_readiness_state[1]))
+            apply_card_shadow(self._readiness_card, self._theme_tokens, strength="soft")
         for label in (
             getattr(self, "_policy_title_lbl", None),
             getattr(self, "_channel_title_lbl", None),

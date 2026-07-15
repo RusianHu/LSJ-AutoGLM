@@ -36,6 +36,10 @@ class MirrorToolbarWindow(QWidget):
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_DeleteOnClose, False)
+        # 工具栏窗口从不激活（WindowDoesNotAcceptFocus）。默认情况下 Qt
+        # 只在激活窗口内显示 tooltip，因此必须显式允许非激活窗口弹出提示，
+        # 否则悬停按钮不会出现文字气泡。
+        self.setAttribute(Qt.WA_AlwaysShowToolTips, True)
         self.setFixedWidth(63)
 
         layout = QVBoxLayout(self)
@@ -48,6 +52,7 @@ class MirrorToolbarWindow(QWidget):
         self._target_hwnd = 0
         self._enabled = True
         self._last_geometry: tuple[int, int, int, int] | None = None
+        self._owner_bound = False
         self._follow_timer = QTimer(self)
         self._follow_timer.setInterval(120)
         self._follow_timer.timeout.connect(self.sync_geometry)
@@ -56,6 +61,7 @@ class MirrorToolbarWindow(QWidget):
     def set_target_hwnd(self, hwnd: int | None) -> None:
         self._target_hwnd = int(hwnd or 0)
         self._last_geometry = None
+        self._owner_bound = False
         self._set_native_owner(self._target_hwnd)
         self.sync_geometry()
 
@@ -63,6 +69,7 @@ class MirrorToolbarWindow(QWidget):
         self._enabled = bool(enabled)
         if not self._enabled:
             self.hide()
+            self._owner_bound = False
         else:
             self.sync_geometry()
 
@@ -92,17 +99,20 @@ class MirrorToolbarWindow(QWidget):
         if not self._enabled or sys.platform != "win32" or not self._target_hwnd:
             if self.isVisible():
                 self.hide()
+                self._owner_bound = False
             return
 
         target = self._get_window_rect(self._target_hwnd)
         if target is None or target.width() <= 0 or target.height() <= 0:
             if self.isVisible():
                 self.hide()
+                self._owner_bound = False
             return
 
         if self._is_iconic(self._target_hwnd):
             if self.isVisible():
                 self.hide()
+                self._owner_bound = False
             return
 
         screen = QGuiApplication.screenAt(target.topLeft())
@@ -132,15 +142,19 @@ class MirrorToolbarWindow(QWidget):
         y = max(available.top(), y)
 
         geometry = (int(x), int(y), int(width), int(height))
-        if geometry != self._last_geometry:
+        geometry_changed = geometry != self._last_geometry
+        if geometry_changed:
             self.setGeometry(*geometry)
             self._last_geometry = geometry
-        if not self.isVisible():
+        just_shown = not self.isVisible()
+        if just_shown:
             self.show()
-        # show() 之后才一定有真实 HWND；此时再绑定 owner，避免 Qt 在
-        # 创建原生窗口时覆盖掉 Win32 层级关系。owner 关系会让工具栏
-        # 跟随 scrcpy 所在的窗口组，而不是成为全局 TopMost 窗口。
-        self._set_native_owner(self._target_hwnd)
+        # 仅在几何变化或首次显示时重绑 owner。稳定状态下不再每 120ms
+        # 调用 SetWindowPos —— 持续扰动窗口会不断重置 Qt 的悬停计时，
+        # 导致按钮 tooltip 永远无法弹出。
+        if geometry_changed or just_shown or not self._owner_bound:
+            self._set_native_owner(self._target_hwnd)
+            self._owner_bound = True
 
     @staticmethod
     def _set_window_long_ptr(user32, hwnd: int, index: int, value: int) -> None:

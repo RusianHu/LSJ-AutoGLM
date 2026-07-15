@@ -14,13 +14,17 @@ def input_default(t: ThemeTokens) -> str:
         QLineEdit, QTextEdit, QPlainTextEdit {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             padding: 6px 10px;
             selection-background-color: {t.selection_bg};
         }}
+        QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {{
+            border-color: {t.border_hover};
+        }}
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border-color: {t.accent};
+            background: {t.bg_main};
         }}
         QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
             background: {t.bg_elevated};
@@ -36,7 +40,7 @@ def input_readonly(t: ThemeTokens) -> str:
             background: {t.bg_elevated};
             color: {t.text_muted};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 9px;
             padding: 6px 10px;
         }}
     """
@@ -48,7 +52,7 @@ def input_invalid(t: ThemeTokens) -> str:
         QLineEdit {{
             background: {t.bg_secondary};
             border: 1px solid {t.danger_border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             padding: 6px 10px;
         }}
@@ -64,7 +68,7 @@ def input_success(t: ThemeTokens) -> str:
         QLineEdit {{
             background: {t.bg_secondary};
             border: 1px solid {t.success_border};
-            border-radius: 8px;
+            border-radius: 9px;
             color: {t.text_primary};
             padding: 6px 10px;
         }}

@@ -14,8 +14,8 @@ def _banner_base(bg: str, border: str, color: str) -> str:
             background: {bg};
             border: 1px solid {border};
             color: {color};
-            border-radius: 6px;
-            padding: 6px 10px;
+            border-radius: 9px;
+            padding: 7px 12px;
             font-size: 12px;
         }}
     """

@@ -310,7 +310,12 @@ class ConfigService(QObject):
                     # 去除引号
                     if (val.startswith('"') and val.endswith('"')) or \
                        (val.startswith("'") and val.endswith("'")):
+                        quote = val[0]
                         val = val[1:-1]
+                        # 与 _quote_value 对称地反转义，避免读写不对称导致
+                        # 每次保存都累积一层反斜杠（历史脏数据也会被此步收敛）。
+                        if quote == '"':
+                            val = self._unescape_double_quoted(val)
                     # 若文件中该键为空占位（KEY=），但环境变量中有非空注入值，
                     # 则保留环境变量值，避免首次引导生成的空敏感占位行覆盖注入配置。
                     env_val = os.environ.get(key)
@@ -644,6 +649,23 @@ class ConfigService(QObject):
             escaped = value.replace('\\', '\\\\').replace('"', '\\"')
             return f'"{escaped}"'
         return value
+
+    @staticmethod
+    def _unescape_double_quoted(value: str) -> str:
+        """
+        _quote_value 的逆操作：还原双引号包裹值内部的 \\" 与 \\\\ 转义。
+
+        为收敛历史上因读写不对称而累积的多层反斜杠，这里循环反转义直到稳定，
+        使 KEY="\\\\\\"a\\\\\\"" 之类的脏值最终归一为 ["a"]。
+        """
+        prev = None
+        cur = value
+        for _ in range(8):
+            if cur == prev:
+                break
+            prev = cur
+            cur = cur.replace('\\"', '"').replace('\\\\', '\\')
+        return cur
 
     # ---------- 校验（不污染缓存） ----------
 

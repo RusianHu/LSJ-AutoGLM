@@ -14,13 +14,14 @@ def list_default(t: ThemeTokens) -> str:
         QListWidget {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 10px;
             color: {t.text_primary};
             outline: none;
         }}
         QListWidget::item {{
-            padding: 6px 10px;
-            border-radius: 4px;
+            padding: 7px 10px;
+            border-radius: 7px;
+            margin: 1px 2px;
         }}
         QListWidget::item:selected {{
             background: {t.accent_soft};
@@ -38,7 +39,7 @@ def list_console(t: ThemeTokens) -> str:
         QListWidget {{
             background: {t.bg_console};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 10px;
             color: {t.text_secondary};
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 12px;
@@ -60,13 +61,15 @@ def list_event(t: ThemeTokens) -> str:
         QListWidget {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 10px;
             color: {t.text_primary};
             outline: none;
         }}
         QListWidget::item {{
-            padding: 4px 8px;
+            padding: 5px 8px;
             border-left: 3px solid transparent;
+            border-radius: 4px;
+            margin: 1px 2px;
         }}
         QListWidget::item:selected {{
             background: {t.accent_soft};

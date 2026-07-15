@@ -46,13 +46,16 @@ def normalize_mirror_toolbar_actions(value: object) -> list[str]:
         raw = value.strip()
         if not raw:
             return list(MIRROR_TOOLBAR_DEFAULT_ACTIONS)
-        # ConfigService 为包含引号的 .env 值加了一层转义引号，兼容该写法。
-        if '\\"' in raw:
-            raw = raw.replace('\\"', '\"')
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            parsed = [part.strip() for part in raw.split(",")]
+        # ConfigService 反复保存含引号的 .env 值时会累积多层反斜杠转义
+        # （\" -> \\\" -> ...）。这里循环剥离，直到能被 json.loads 解析，
+        # 兼容任意层数的历史脏数据。
+        parsed = _loads_escaped_json(raw)
+        if parsed is None:
+            # 无法解析为 JSON 时退回逗号分隔，并顺带清掉残留的反斜杠与引号。
+            parsed = [
+                part.strip().strip('\\"').strip()
+                for part in raw.replace("\\", "").replace('"', "").split(",")
+            ]
 
     if isinstance(parsed, dict):
         parsed = parsed.get("actions", [])
@@ -61,6 +64,21 @@ def normalize_mirror_toolbar_actions(value: object) -> list[str]:
 
     selected = {str(item).strip() for item in parsed if str(item).strip()}
     return [name for name in MIRROR_TOOLBAR_ACTION_NAMES if name in selected]
+
+
+def _loads_escaped_json(raw: str) -> object | None:
+    """尝试解析可能被多层反斜杠转义包裹的 JSON 字符串。"""
+
+    candidate = raw
+    for _ in range(8):
+        try:
+            return json.loads(candidate)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            if "\\" not in candidate:
+                return None
+            # 每轮去掉一层反斜杠转义后重试。
+            candidate = candidate.replace("\\", "")
+    return None
 
 
 def serialize_mirror_toolbar_actions(actions: Iterable[str]) -> str:
