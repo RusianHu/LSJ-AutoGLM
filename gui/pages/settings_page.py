@@ -169,7 +169,6 @@ class _PresetCard(QFrame):
       - 圆角卡片，宽度拉伸，高度固定
       - 左侧圆形图标徽章（缩写字母）
       - 右侧：主标题（渠道名） + 副标题（模型名，截断）
-      - 右上角标签（原生 AutoGLM / 第三方提示词）
       - 活跃状态：accent 色边框 + 淡色背景高亮
     """
 
@@ -180,7 +179,6 @@ class _PresetCard(QFrame):
         self._active = False
         self._theme_tokens: ThemeTokens = None
         self._translator = translator
-        self._use_thirdparty = bool(self._preset.get("use_thirdparty", False))
         self._build_ui()
         self.setFixedHeight(72)
         self.setCursor(Qt.PointingHandCursor)
@@ -216,23 +214,8 @@ class _PresetCard(QFrame):
     def _refresh_texts(self) -> None:
         if hasattr(self, "_name_lbl"):
             self._name_lbl.setText(self._channel_name())
-        if hasattr(self, "_tag_lbl"):
-            tag_key = (
-                "page.settings.preset.tag.thirdparty"
-                if self._use_thirdparty else "page.settings.preset.tag.native"
-            )
-            self._tag_lbl.setText(self._t(tag_key))
         if hasattr(self, "_model_lbl"):
             self.update_model_display(self._resolved_model)
-
-    def set_prompt_mode(self, use_thirdparty: bool | None) -> None:
-        self._use_thirdparty = (
-            bool(self._preset.get("use_thirdparty", False))
-            if use_thirdparty is None
-            else bool(use_thirdparty)
-        )
-        self._refresh_texts()
-        self._refresh_style()
 
     # ----------------------------------------------------------------
     # 构建
@@ -267,25 +250,13 @@ class _PresetCard(QFrame):
         text_col.addWidget(self._model_lbl)
         layout.addLayout(text_col, 1)
 
-        # 右侧标签 + 活跃指示
-        right_col = QVBoxLayout()
-        right_col.setContentsMargins(0, 0, 0, 0)
-        right_col.setSpacing(4)
-        right_col.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-
-        tag_key = "page.settings.preset.tag.thirdparty" if self._use_thirdparty else "page.settings.preset.tag.native"
-        self._tag_lbl = QLabel(self._t(tag_key))
-        self._tag_lbl.setObjectName("presetCardTag")
-        self._tag_lbl.setAlignment(Qt.AlignRight)
-
+        # 右侧活跃指示
         self._active_dot = QLabel("")
         self._active_dot.setFixedSize(QSize(8, 8))
         self._active_dot.setObjectName("presetActiveDot")
         self._active_dot.setAlignment(Qt.AlignRight)
 
-        right_col.addWidget(self._tag_lbl)
-        right_col.addWidget(self._active_dot, 0, Qt.AlignRight)
-        layout.addLayout(right_col)
+        layout.addWidget(self._active_dot, 0, Qt.AlignRight | Qt.AlignVCenter)
 
     # ----------------------------------------------------------------
     # 状态更新
@@ -325,9 +296,6 @@ class _PresetCard(QFrame):
             name_color = t.text_primary
             dot_color = "transparent"
 
-        tag_color = t.warning if self._use_thirdparty else t.success
-        tag_bg = t.warning_bg if self._use_thirdparty else t.success_bg
-
         self.setStyleSheet(f"""
             _PresetCard, QFrame#presetCard {{
                 background: {card_bg};
@@ -363,17 +331,6 @@ class _PresetCard(QFrame):
                 color: {t.text_secondary};
                 font-size: 11px;
                 background: transparent;
-                border: none;
-            }}
-        """)
-
-        self._tag_lbl.setStyleSheet(f"""
-            QLabel {{
-                background: {tag_bg};
-                color: {tag_color};
-                font-size: 10px;
-                padding: 2px 6px;
-                border-radius: 4px;
                 border: none;
             }}
         """)
@@ -637,8 +594,6 @@ class SettingsPage(QWidget):
             "OPEN_AUTOGLM_MODEL",
             "OPEN_AUTOGLM_API_KEY",
             "OPEN_AUTOGLM_BACKUP_API_KEY",
-            "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT",
-            "OPEN_AUTOGLM_THIRDPARTY_THINKING",
             "OPEN_AUTOGLM_COMPRESS_IMAGE",
         ]
         self._add_fields(model_form, api_fields)
@@ -943,15 +898,11 @@ class SettingsPage(QWidget):
             return
         active = self._config.get_active_channel()
         active_id = active.get("id", "") if active else ""
-        current_thirdparty = self._current_thirdparty_prompt_enabled()
         for card in self._preset_cards:
             # 每次都从 .env 读取该预设的实际模型名（用户可能已在设置页修改）
             resolved_model = self._config.get_preset_model(card._preset)
             card.update_model_display(resolved_model)
             is_active = card._preset.get("id") == active_id
-            card.set_prompt_mode(
-                current_thirdparty if is_active else card._preset.get("use_thirdparty", False)
-            )
             card.set_active(is_active, self._theme_tokens)
 
         # 更新提示文字
@@ -1207,11 +1158,6 @@ class SettingsPage(QWidget):
                 row_layout.addStretch(1)
                 form.addRow(lbl, row_widget)
                 self._field_widgets[key] = edit
-                if key == "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT":
-                    try:
-                        edit.toggled.connect(lambda _checked: self._refresh_preset_active())
-                    except Exception:
-                        pass
             else:
                 edit = QLineEdit()
                 edit.setMinimumWidth(180)
@@ -1284,16 +1230,6 @@ class SettingsPage(QWidget):
                 self._config.get("OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS", "true")
             )
         return True
-
-    def _current_thirdparty_prompt_enabled(self) -> bool:
-        toggle_widget = self._field_widgets.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT")
-        if toggle_widget is not None:
-            return self._is_truthy_text(toggle_widget.text())
-        if self._config:
-            return self._is_truthy_text(
-                self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
-            )
-        return False
 
     def _build_action_policy_updates(
         self,

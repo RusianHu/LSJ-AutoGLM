@@ -59,7 +59,7 @@ class _PairWatcher(QThread):
     status_changed = Signal(str)
     service_found = Signal(str)
     pairing_finished = Signal(bool, str, str)  # success, message, connected endpoint
-    timed_out = Signal()
+    timed_out = Signal(str)
 
     def __init__(
         self,
@@ -93,8 +93,7 @@ class _PairWatcher(QThread):
             if result.paired:
                 self.pairing_finished.emit(True, result.message, result.connected_endpoint)
             elif result.timed_out:
-                self.status_changed.emit(result.message)
-                self.timed_out.emit()
+                self.timed_out.emit(result.message)
             else:
                 self.pairing_finished.emit(False, result.message, "")
         except (AdbError, ValueError) as exc:
@@ -130,6 +129,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
         self._service_name, self._password = generate_qr_credentials()
         self._pair_succeeded = False
         self._pair_message = ""
+        self._pairing_endpoint = ""
         self._theme_mode = theme
         self._translator = translator
         self._status_text = self._t("page.device.qr_scan.waiting")
@@ -328,6 +328,7 @@ class QrCodeScanDialog(ThemeAwareDialog):
     def _on_pairing_service_found(self, endpoint: str):
         """将后台发现到的地址转换为当前语言的状态文案。"""
         if endpoint and ":" in endpoint:
+            self._pairing_endpoint = endpoint
             self._status_text = self._t(
                 "page.device.qr_scan.service_found",
                 endpoint=endpoint,
@@ -351,12 +352,21 @@ class QrCodeScanDialog(ThemeAwareDialog):
         self._countdown_lbl.setText("")
         self._close_btn.setText(self._t("page.device.qr_scan.btn.done"))
 
-    def _on_timed_out(self):
+    def _on_timed_out(self, message: str):
         self._timer.stop()
-        self._status_text = self._t("page.device.qr_scan.timeout")
+        self._pair_message = message
+        if "TCP 通道不可达" in message and self._pairing_endpoint:
+            self._status_text = self._t(
+                "page.device.qr_scan.network_unreachable",
+                endpoint=self._pairing_endpoint,
+            )
+        else:
+            self._status_text = self._t("page.device.qr_scan.timeout")
+        self._status_lbl.setToolTip(message)
         self._status_level = "warning"
         self._render_status()
         self._countdown_lbl.setText("")
+        self._close_btn.setText(self._t("page.device.qr_scan.btn.done"))
 
     def _on_tick(self):
         self._remaining -= 1
@@ -1185,6 +1195,8 @@ class DevicePage(QWidget):
                     self._wifi_input.setText(paired_id)
                     self._log(self._t("page.device.log.addr_filled", addr=paired_id))
         else:
+            if dlg.pair_message:
+                self._log(dlg.pair_message)
             self._log(self._t("page.device.log.qr_dialog_closed"))
 
     def _on_qr_pair(self):

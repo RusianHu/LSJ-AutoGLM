@@ -8,7 +8,7 @@
 - load() 与 _write_env 统一使用 utf-8 编码
 - set() 先写文件后更新缓存，写失败时回滚缓存
 - _on_validate（仅校验）不再污染运行缓存
-- build_command_args 补充第三方模型参数选择逻辑
+- build_command_args 显式传递截图压缩开关
 """
 
 import json
@@ -60,8 +60,6 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_DEVICE_ID": "",
         "OPEN_AUTOGLM_LANG": "cn",
         "OPEN_AUTOGLM_MAX_STEPS": "100",
-        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": "false",
-        "OPEN_AUTOGLM_THIRDPARTY_THINKING": "true",
         "OPEN_AUTOGLM_COMPRESS_IMAGE": "false",
         "OPEN_AUTOGLM_ACTION_POLICY_VERSION": str(ACTION_POLICY_VERSION),
         "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": "true",
@@ -143,8 +141,6 @@ class ConfigService(QObject):
         "OPEN_AUTOGLM_DEVICE_ID": {"label": "设备 ID", "label_i18n_key": "page.settings.field.device_id", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_LANG": {"label": "语言", "label_i18n_key": "page.settings.field.lang", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_MAX_STEPS": {"label": "最大步数", "label_i18n_key": "page.settings.field.max_steps", "sensitive": False, "editable": True},
-        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": {"label": "启用第三方提示词工程", "label_i18n_key": "page.settings.field.use_thirdparty_prompt", "sensitive": False, "editable": True, "boolean": True},
-        "OPEN_AUTOGLM_THIRDPARTY_THINKING": {"label": "第三方思考输出 (think/answer 标签)", "label_i18n_key": "page.settings.field.thirdparty_thinking", "sensitive": False, "editable": True, "boolean": True},
         "OPEN_AUTOGLM_COMPRESS_IMAGE": {"label": "截图压缩", "label_i18n_key": "page.settings.field.compress_image", "sensitive": False, "editable": True, "boolean": True},
         "OPEN_AUTOGLM_ACTION_POLICY_VERSION": {"label": "动作策略版本", "label_i18n_key": "page.settings.field.action_policy_version", "sensitive": False, "editable": True},
         "OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS": {"label": "启用平台默认动作回退", "label_i18n_key": "page.settings.field.use_platform_default_actions", "sensitive": False, "editable": True, "boolean": True},
@@ -159,13 +155,11 @@ class ConfigService(QObject):
     # 兼容第一轮 GUI 中已写入/读取过的旧键名
     KEY_ALIASES: Dict[str, tuple] = {
         "OPEN_AUTOGLM_LANG": ("OPEN_AUTOGLM_LANGUAGE",),
-        "OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT": ("OPEN_AUTOGLM_THIRDPARTY",),
     }
 
     # 渠道预设元信息。
     # url_field/model_field: 从 .env 读取实际值的字段名
     # default_url/default_model: 对应字段为空时的兜底默认值
-    # use_thirdparty: 是否启用第三方提示词工程（--thirdparty 参数）
     # api_key_field: 该渠道对应的 API Key 环境变量名
     CHANNEL_PRESETS: List[Dict] = [
         {
@@ -175,8 +169,6 @@ class ConfigService(QObject):
             "model_field": "OPEN_AUTOGLM_MODELSCOPE_MODEL",
             "default_url": "https://api-inference.modelscope.cn/v1",
             "default_model": "ZhipuAI/AutoGLM-Phone-9B",
-            "use_thirdparty": False,
-            "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_MODELSCOPE_API_KEY",
             "backup_api_key_field": "OPEN_AUTOGLM_MODELSCOPE_BACKUP_API_KEY",
         },
@@ -187,8 +179,6 @@ class ConfigService(QObject):
             "model_field": "OPEN_AUTOGLM_ZHIPU_MODEL",
             "default_url": "https://open.bigmodel.cn/api/paas/v4",
             "default_model": "AutoGLM-Phone-9B",
-            "use_thirdparty": False,
-            "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_ZHIPU_API_KEY",
         },
         {
@@ -198,8 +188,6 @@ class ConfigService(QObject):
             "model_field": "OPEN_AUTOGLM_NEWAPI_MODEL",
             "default_url": "https://ai.yanshanlaosiji.top/v1",
             "default_model": "Qwen/Qwen3-VL-235B-A22B-Instruct",
-            "use_thirdparty": True,
-            "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_NEWAPI_API_KEY",
         },
         {
@@ -209,8 +197,6 @@ class ConfigService(QObject):
             "model_field": "OPEN_AUTOGLM_LOCAL_OPENAI_MODEL",
             "default_url": "http://127.0.0.1:1234",
             "default_model": "autoglm-phone-9b",
-            "use_thirdparty": True,
-            "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY",
         },
         {
@@ -220,8 +206,6 @@ class ConfigService(QObject):
             "model_field": "",
             "default_url": "",
             "default_model": "",
-            "use_thirdparty": False,
-            "compress_image": False,
             "api_key_field": "OPEN_AUTOGLM_API_KEY",
         },
     ]
@@ -1017,7 +1001,7 @@ class ConfigService(QObject):
         快速切换到指定渠道，并写回当前生效配置。
         - BASE_URL / MODEL 从该渠道在 .env 中保存的专属字段读取
         - OPEN_AUTOGLM_API_KEY / OPEN_AUTOGLM_BACKUP_API_KEY 同步为该渠道已保存值
-        - 不覆盖 USE_THIRDPARTY_PROMPT / COMPRESS_IMAGE 等用户单独保存的运行开关
+        - 不覆盖 COMPRESS_IMAGE 等用户单独保存的运行开关
         - 「自定义」模式不主动改写当前配置
         返回 True 表示切换成功。
         """
@@ -1128,15 +1112,8 @@ class ConfigService(QObject):
         if action_policy["ai_visible_actions"]:
             cli_args += ["--ai-visible-actions", action_policy["ai_visible_actions"]]
 
-        # 第三方模型（非 AutoGLM 原生）提示词工程参数，与 launcher.py 保持一致
-        if self._is_truthy(self.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")):
-            cli_args.append("--thirdparty")
-            thinking_enabled = self._is_truthy(self.get("OPEN_AUTOGLM_THIRDPARTY_THINKING", "true"))
-            cli_args.append("--thirdparty-thinking" if thinking_enabled else "--thirdparty-no-thinking")
-
-            compress_image = self._is_truthy(self.get("OPEN_AUTOGLM_COMPRESS_IMAGE", "false"))
-            if not compress_image:
-                cli_args.append("--no-compress-image")
+        compress_image = self._is_truthy(self.get("OPEN_AUTOGLM_COMPRESS_IMAGE", "false"))
+        cli_args.append("--compress-image" if compress_image else "--no-compress-image")
 
         if self._is_truthy(self.get("OPEN_AUTOGLM_EXPERT_MODE", "false")):
             cli_args.append("--expert-mode")

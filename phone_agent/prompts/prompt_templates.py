@@ -51,27 +51,6 @@ EN_GENERAL_RULES: tuple[str, ...] = (
     "Use Note only for intermediate observations. Once the requested final result is visible or the task is complete, immediately output finish(message=\"completion note\").",
 )
 
-THIRDPARTY_GENERAL_RULES_ZH: tuple[str, ...] = (
-    "只输出一个动作，不要输出多个动作或解释文本。",
-    "坐标必须是整数，范围为 0-999。",
-    "不要添加 markdown 代码块。",
-    "如果当前不在目标 App 且还不知道目标包名，在 Android ADB 模式下先调用 Find_App。",
-    "涉及登录、验证码或必须人工处理的步骤时，使用 Take_over。",
-    "如果任务已经完成，必须输出 finish(message=\"完成说明\")；不要使用 do(action=\"Note\", ...) 表示任务结束。",
-    "Note 只能用于记录中间观察；一旦已经看到用户要求的最终结果或确认任务结束，立即输出 finish(message=\"完成说明\")。",
-)
-
-THIRDPARTY_GENERAL_RULES_EN: tuple[str, ...] = (
-    "Output exactly one action and nothing else.",
-    "Coordinates must be integers in the range 0-999.",
-    "Do not wrap the action in markdown code fences.",
-    "In Android ADB mode, use Find_App before Launch when the exact package is still unknown.",
-    "Use Take_over for login, captcha, or other steps that require manual intervention.",
-    "When the task is completed, you must output finish(message=\"completion note\"). Do not use do(action=\"Note\", ...) to end the task.",
-    "Use Note only for intermediate observations. Once the requested final result is visible or the task is complete, immediately output finish(message=\"completion note\").",
-)
-
-
 CN_HEADER = """你是一个智能体分析专家，可以根据操作历史和当前状态图执行一系列操作来完成任务。
 你必须严格按照要求输出以下格式：
 <think>{think}</think>
@@ -98,29 +77,6 @@ Your response format must be structured as follows:
 - Use <answer>...</answer> to return a single line of pseudo-code representing the operation.
 - If the task is already complete, the action must be finish(message=\"completion note\") rather than Note."""
 
-THIRDPARTY_HEADER_ZH = """你是一个手机自动化操控专家。你的任务是根据屏幕截图，输出精确的操作指令来完成用户任务。任务完成时必须输出 finish(message=\"完成说明\")，不要用 Note 表示结束。"""
-THIRDPARTY_HEADER_EN = """You are a mobile automation expert. Your task is to inspect the screenshot and output a precise action instruction that directly advances the user's goal. When the task is complete, you must output finish(message=\"completion note\") instead of Note."""
-
-THIRDPARTY_THINKING_HEADER_ZH = """你是一个手机自动化操控专家。根据屏幕截图，分析并输出操作指令。
-
-输出格式（必须严格遵守）
-<think>简短分析当前屏幕和下一步操作</think>
-<answer>动作指令</answer>
-
-如果任务已经完成，<answer> 中必须输出 finish(message=\"完成说明\")，不要输出 Note 作为结束。"""
-
-THIRDPARTY_THINKING_HEADER_EN = """You are a mobile automation expert. Analyze the screenshot and output the next action.
-
-Required output format:
-<think>Briefly explain the screen state and why this action is best</think>
-<answer>The action instruction</answer>
-
-If the task is already complete, the answer must be finish(message=\"completion note\") rather than Note."""
-
-MINIMAL_HEADER_ZH = """你是手机自动化助手。看截图完成任务。只输出一个动作代码。"""
-MINIMAL_HEADER_EN = """You are a mobile automation assistant. Inspect the screenshot and output only one action code."""
-
-
 DEFAULT_FALLBACK_MESSAGE_ZH = "任务完成"
 DEFAULT_FALLBACK_MESSAGE_EN = "Task completed"
 
@@ -144,13 +100,5 @@ __all__ = [
     "DEFAULT_FALLBACK_MESSAGE_ZH",
     "EN_GENERAL_RULES",
     "EN_HEADER",
-    "MINIMAL_HEADER_EN",
-    "MINIMAL_HEADER_ZH",
-    "THIRDPARTY_GENERAL_RULES_EN",
-    "THIRDPARTY_GENERAL_RULES_ZH",
-    "THIRDPARTY_HEADER_EN",
-    "THIRDPARTY_HEADER_ZH",
-    "THIRDPARTY_THINKING_HEADER_EN",
-    "THIRDPARTY_THINKING_HEADER_ZH",
     "format_today",
 ]

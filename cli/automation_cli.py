@@ -176,7 +176,7 @@ def _handle_status(args: argparse.Namespace) -> int:
         "device_id": config.get("OPEN_AUTOGLM_DEVICE_ID", ""),
         "language": config.get("OPEN_AUTOGLM_LANG", "cn"),
         "max_steps": config.get("OPEN_AUTOGLM_MAX_STEPS", "100"),
-        "thirdparty": config._is_truthy(config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")),
+        "compress_image": config._is_truthy(config.get("OPEN_AUTOGLM_COMPRESS_IMAGE", "false")),
         "active_jobs": [_job_public(item) for item in store.list(limit=100) if item.get("state") not in TERMINAL_STATES],
     }
     if args.probe_devices:
@@ -242,7 +242,6 @@ def _handle_config(args: argparse.Namespace) -> int:
                 "base_url": config.get_preset_url(preset),
                 "model": config.get_preset_model(preset),
                 "active": preset["id"] == active.get("id"),
-                "thirdparty": bool(preset.get("use_thirdparty")),
             })
         return _emit(args, channels)
     if args.config_command == "use-channel":
@@ -474,7 +473,15 @@ def _handle_device(args: argparse.Namespace) -> int:
         return _emit(args, {"device_id": args.device_id, "ip": address}, ok=bool(address), message="" if address else "无法读取 WLAN IPv4")
     if cmd == "adb-status":
         result = adb.run(["version"], timeout=5)
-        return _emit(args, {"command": result.command, "version": result.merged_output}, ok=result.returncode == 0)
+        return _emit(
+            args,
+            {
+                "command": list(result.args),
+                "version": result.merged_output,
+                "server": adb.server_status(),
+            },
+            ok=result.returncode == 0,
+        )
     if cmd == "scrcpy-status":
         path = _find_scrcpy()
         if not path:

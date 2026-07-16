@@ -16,7 +16,6 @@
 - `phone_agent/config/prompts.py`
 - `phone_agent/config/prompts_zh.py`
 - `phone_agent/config/prompts_en.py`
-- `phone_agent/config/prompts_thirdparty.py`
 
 ---
 
@@ -609,7 +608,7 @@ python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' -
 - Android ADB 已不再默认做“真实名称 → 包名”的慢速全量解析，而是通过 `Find_App` + `Launch` 两步完成
 - HarmonyOS 与 iOS 的 `Launch` 仍主要依赖内置映射，而不是动态包扫描
 - `Find_App` 当前仅支持 Android ADB，不支持 HarmonyOS / iOS
-- 第三方模型若跳过 `Find_App` 且直接输出模糊应用名，在 Android ADB 下仍可能导致 `Launch` 失败
+- 模型若跳过 `Find_App` 且直接输出模糊应用名，在 Android ADB 下仍可能导致 `Launch` 失败
 
 ---
 
@@ -639,4 +638,3 @@ python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' -
 - `phone_agent/config/prompts.py`
 - `phone_agent/config/prompts_zh.py`
 - `phone_agent/config/prompts_en.py`
-- `phone_agent/config/prompts_thirdparty.py`

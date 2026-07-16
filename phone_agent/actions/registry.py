@@ -65,8 +65,6 @@ class ActionSupportSpec:
     platforms: tuple[PlatformName, ...]
     visible_to_ai_by_default: bool = True
     runtime_enabled_by_default: bool = True
-    allow_in_thirdparty_prompt: bool = True
-    allow_in_minimal_prompt: bool = True
 
 
 @dataclass(frozen=True)
@@ -204,7 +202,7 @@ _ACTIONS: tuple[ActionSpec, ...] = (
             summary_en="Search installed Android packages before launching.",
             examples=('do(action="Find_App", query="微信")',),
         ),
-        support=ActionSupportSpec(platforms=("adb",), allow_in_minimal_prompt=False),
+        support=ActionSupportSpec(platforms=("adb",)),
         tags=("safe", "android_only"),
         sort_order=110,
         i18n_key_prefix="action.find_app",
@@ -699,8 +697,6 @@ def export_prompt_action_specs(
     *,
     lang: str = "cn",
     include_actions: Iterable[str] | None = None,
-    thirdparty: bool = False,
-    minimal: bool = False,
 ) -> tuple[ActionSpec, ...]:
     allowed = None
     if include_actions is not None:
@@ -711,10 +707,6 @@ def export_prompt_action_specs(
             continue
         support = spec.support
         if support is None:
-            continue
-        if thirdparty and not support.allow_in_thirdparty_prompt:
-            continue
-        if minimal and not support.allow_in_minimal_prompt:
             continue
         result.append(spec)
     return tuple(result)

@@ -128,16 +128,13 @@ API_PRESETS = {
         "name": "第三方API",
         "base_url": _env_str("OPEN_AUTOGLM_NEWAPI_BASE_URL", "https://ai.yanshanlaosiji.top/v1"),
         "model": _env_str("OPEN_AUTOGLM_NEWAPI_MODEL", "Qwen/Qwen3-VL-235B-A22B-Instruct"),
-        "compatible": True,                 # 使用第三方提示词工程后兼容
-        "use_thirdparty_prompt": _env_truthy("OPEN_AUTOGLM_NEWAPI_USE_THIRDPARTY_PROMPT", default=True),
-        "thirdparty_thinking": _env_truthy("OPEN_AUTOGLM_NEWAPI_THIRDPARTY_THINKING", default=True),
+        "compatible": True,
         "note": "API Key 请在 .env 中设置 OPEN_AUTOGLM_NEWAPI_API_KEY",
     },
     "local_openai": {
         "name": "本地 OpenAI 兼容服务",
         "base_url": _env_str("OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL", "http://127.0.0.1:1234"),
         "model": _env_str("OPEN_AUTOGLM_LOCAL_OPENAI_MODEL", "autoglm-phone-9b"),
-        "use_thirdparty_prompt": False,      # 标记需要使用第三方提示词
         "allow_empty_key": _env_truthy("OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY", default=True),
         "compatible": True,
         "note": "可选 Key：OPEN_AUTOGLM_LOCAL_OPENAI_API_KEY；部分本地服务允许不填 Key",
@@ -177,17 +174,7 @@ class Config:
         default_factory=lambda: int(os.environ.get("OPEN_AUTOGLM_MAX_STEPS", "100").strip() or "100")
     )
 
-    # 第三方模型提示词工程
-    use_thirdparty_prompt: bool = field(
-        default_factory=lambda: _env_truthy("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", default=False)
-    )
-
-    # 第三方模式启用思考（规范输出 <think>/<answer>；部分中转站不兼容可关闭）
-    thirdparty_thinking: bool = field(
-        default_factory=lambda: _env_truthy("OPEN_AUTOGLM_THIRDPARTY_THINKING", default=True)
-    )
-
-    # 第三方模式截图压缩（部分模型/中转站对大图敏感；但压缩过度会影响识别）
+    # 截图压缩可降低请求体积，但压缩过度会影响界面识别
     compress_image: bool = field(
         default_factory=lambda: _env_truthy("OPEN_AUTOGLM_COMPRESS_IMAGE", default=False)
     )
@@ -327,10 +314,6 @@ def load_config_from_file() -> Tuple[bool, str]:
                 CONFIG.max_steps = max_steps
         except Exception:
             pass
-    if isinstance(data.get("use_thirdparty_prompt"), bool):
-        CONFIG.use_thirdparty_prompt = data["use_thirdparty_prompt"]
-    if isinstance(data.get("thirdparty_thinking"), bool):
-        CONFIG.thirdparty_thinking = data["thirdparty_thinking"]
     if isinstance(data.get("compress_image"), bool):
         CONFIG.compress_image = data["compress_image"]
     return True, "配置已加载"
@@ -555,8 +538,6 @@ def show_status():
     print(f"  🎯 目标设备: {CONFIG.device_id or '自动检测'}")
     print(f"  🌍 语言: {'中文' if CONFIG.lang == 'cn' else '英文'}")
     print(f"  📊 最大步数: {CONFIG.max_steps}")
-    if CONFIG.use_thirdparty_prompt:
-        print(f"  📝 提示词模式: 第三方模型适配")
 
 def show_main_menu():
     """显示主菜单"""
@@ -578,7 +559,7 @@ def show_api_menu():
     print("  请选择一个预设:")
     print(f"    [1] 🔄 {API_PRESETS['modelscope']['name']} (推荐)")
     print(f"    [2] 🔄 {API_PRESETS['zhipu']['name']}")
-    print(f"    [3] 🔄 {API_PRESETS['newapi']['name']} (第三方提示词工程)")
+    print(f"    [3] 🔄 {API_PRESETS['newapi']['name']}")
     print(f"    [4] 🔄 {API_PRESETS['local_openai']['name']} (本地/自建)")
     print_divider("其他")
     print("  [t] 🧪 测试 API 连接")
@@ -619,8 +600,6 @@ def apply_api_preset(preset_key: str) -> None:
         CONFIG.api_key = ""
         CONFIG.backup_api_key = ""
 
-    CONFIG.use_thirdparty_prompt = preset.get("use_thirdparty_prompt", False)
-    CONFIG.thirdparty_thinking = preset.get("thirdparty_thinking", True)
     note = preset.get("note", "")
     print(f"  ✅ 已切换到 {preset['name']}")
     if preset_key == "zhipu" and not (CONFIG.api_key or "").strip():
@@ -629,8 +608,6 @@ def apply_api_preset(preset_key: str) -> None:
         print("  ⚠️  未检测到 ModelScope API Key：请在 .env 设置 OPEN_AUTOGLM_MODELSCOPE_API_KEY 或在配置设置中手动输入")
     if preset_key == "newapi" and not (CONFIG.api_key or "").strip():
         print("  ⚠️  未检测到第三方 API Key：请在 .env 设置 OPEN_AUTOGLM_NEWAPI_API_KEY 或在配置设置中手动输入")
-    if CONFIG.use_thirdparty_prompt:
-        print("  📝 已自动启用第三方模型提示词工程")
     if note:
         print(f"  {note}")
 
@@ -704,13 +681,8 @@ def show_config_menu():
     print(f"  [5] 目标设备: {CONFIG.device_id or '自动检测'}")
     print(f"  [6] 语言: {'中文' if CONFIG.lang == 'cn' else '英文'}")
     print(f"  [7] 最大步数: {CONFIG.max_steps}")
-    thirdparty_status = "✅ 启用" if CONFIG.use_thirdparty_prompt else "❌ 禁用"
-    print(f"  [p] 第三方提示词: {thirdparty_status}")
-    if CONFIG.use_thirdparty_prompt:
-        thinking_status = "✅ 启用" if CONFIG.thirdparty_thinking else "❌ 禁用"
-        print(f"  [k] 第三方思考: {thinking_status}")
-        compress_status = "✅ 启用" if CONFIG.compress_image else "❌ 禁用"
-        print(f"  [i] 截图压缩: {compress_status}")
+    compress_status = "✅ 启用" if CONFIG.compress_image else "❌ 禁用"
+    print(f"  [i] 截图压缩: {compress_status}")
     print_divider("其他操作")
     print("  [w] 💾 保存配置到文件")
     print("  [r] 🔄 从文件重新加载配置")
@@ -818,11 +790,7 @@ def run_agent_interactive():
     ]
     if CONFIG.device_id:
         cmd.extend(["--device-id", CONFIG.device_id])
-    if CONFIG.use_thirdparty_prompt:
-        cmd.append("--thirdparty")
-        cmd.append("--thirdparty-thinking" if CONFIG.thirdparty_thinking else "--thirdparty-no-thinking")
-        if not CONFIG.compress_image:
-            cmd.append("--no-compress-image")
+    cmd.append("--compress-image" if CONFIG.compress_image else "--no-compress-image")
 
     if _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
         sanitized = []
@@ -839,8 +807,6 @@ def run_agent_interactive():
             sanitized.append(str(part))
         print(
             "[debug] launch flags: "
-            f"thirdparty={CONFIG.use_thirdparty_prompt} "
-            f"thirdparty_thinking={CONFIG.thirdparty_thinking} "
             f"compress_image={CONFIG.compress_image}"
         )
         print(f"[debug] cmd: {' '.join(sanitized)}")
@@ -875,11 +841,7 @@ def run_single_task():
     ]
     if CONFIG.device_id:
         cmd.extend(["--device-id", CONFIG.device_id])
-    if CONFIG.use_thirdparty_prompt:
-        cmd.append("--thirdparty")
-        cmd.append("--thirdparty-thinking" if CONFIG.thirdparty_thinking else "--thirdparty-no-thinking")
-        if not CONFIG.compress_image:
-            cmd.append("--no-compress-image")
+    cmd.append("--compress-image" if CONFIG.compress_image else "--no-compress-image")
 
     if _env_truthy("OPEN_AUTOGLM_DEBUG", default=False):
         sanitized = []
@@ -896,8 +858,6 @@ def run_single_task():
             sanitized.append(str(part))
         print(
             "[debug] launch flags: "
-            f"thirdparty={CONFIG.use_thirdparty_prompt} "
-            f"thirdparty_thinking={CONFIG.thirdparty_thinking} "
             f"compress_image={CONFIG.compress_image}"
         )
         print(f"[debug] cmd: {' '.join(sanitized)}")
@@ -1107,29 +1067,10 @@ def handle_config_menu():
             new_val = input("  新值: ").strip()
             if new_val.isdigit():
                 CONFIG.max_steps = int(new_val)
-        elif choice.lower() == 'p':
-            # 切换第三方提示词模式
-            CONFIG.use_thirdparty_prompt = not CONFIG.use_thirdparty_prompt
-            status = "启用" if CONFIG.use_thirdparty_prompt else "禁用"
-            print(f"  ✅ 第三方提示词工程已{status}")
-            input("  按回车键继续...")
-        elif choice.lower() == 'k':
-            if not CONFIG.use_thirdparty_prompt:
-                print("  ⚠️  仅在启用第三方提示词模式时可设置第三方思考")
-            else:
-                CONFIG.thirdparty_thinking = not CONFIG.thirdparty_thinking
-                status = "启用" if CONFIG.thirdparty_thinking else "禁用"
-                print(f"  ✅ 第三方思考已{status}")
-                if not CONFIG.thirdparty_thinking:
-                    print("  📝 已切换为纯动作输出（更兼容部分中转站）")
-            input("  按回车键继续...")
         elif choice.lower() == 'i':
-            if not CONFIG.use_thirdparty_prompt:
-                print("  ⚠️  仅在启用第三方提示词模式时可设置截图压缩")
-            else:
-                CONFIG.compress_image = not CONFIG.compress_image
-                status = "启用" if CONFIG.compress_image else "禁用"
-                print(f"  ✅ 截图压缩已{status}")
+            CONFIG.compress_image = not CONFIG.compress_image
+            status = "启用" if CONFIG.compress_image else "禁用"
+            print(f"  ✅ 截图压缩已{status}")
             input("  按回车键继续...")
         elif choice.lower() == 's':
             # 切换主/备用 Key

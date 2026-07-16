@@ -677,7 +677,7 @@ def parse_action(response: str) -> dict[str, Any]:
                 "Empty action response from model after stripping wrappers/tags"
             )
 
-        # JSON action payload (some thirdparty models output dict directly)
+        # JSON action payload (some models output dicts directly)
         if response.startswith("{") and response.endswith("}"):
             try:
                 payload = json.loads(response)

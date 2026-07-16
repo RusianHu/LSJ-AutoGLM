@@ -79,6 +79,21 @@ def _env_value(primary_key: str, fallback_key: str | None = None, default: str =
     return value
 
 
+def _configure_screenshot_compression(explicit: bool | None) -> bool:
+    """Resolve screenshot compression independently from model or API channel."""
+    if explicit is None:
+        disabled_by_env = _env_truthy("PHONE_AGENT_NO_COMPRESS_IMAGE")
+        enabled = _env_truthy("PHONE_AGENT_COMPRESS_IMAGE") and not disabled_by_env
+    else:
+        enabled = explicit
+
+    if enabled:
+        os.environ["PHONE_AGENT_COMPRESS_IMAGE"] = "true"
+    else:
+        os.environ.pop("PHONE_AGENT_COMPRESS_IMAGE", None)
+    return enabled
+
+
 
 def _parse_cli_action_collection(raw_value: str | None, option_name: str) -> tuple[str, ...] | None:
     """兼容包装：委托给 [`parse_cli_action_collection()`](cli/action_policy.py:16)。"""
@@ -262,42 +277,42 @@ Examples:
         help="Language for system prompt (cn or en, default: cn)",
     )
 
+    # Transitional compatibility: accept retired prompt flags without exposing them
+    # in help or changing the unified prompt selected for the model.
     parser.add_argument(
         "--thirdparty",
+        dest="legacy_prompt_mode",
         action="store_true",
-        default=os.getenv("PHONE_AGENT_THIRDPARTY", "").lower() == "true",
-        help="Use thirdparty prompt engineering for non-AutoGLM models (e.g., Qwen3-VL)",
+        help=argparse.SUPPRESS,
     )
-
-    thirdparty_thinking_group = parser.add_mutually_exclusive_group()
-    thirdparty_thinking_group.add_argument(
+    parser.add_argument(
         "--thirdparty-thinking",
-        dest="thirdparty_thinking",
+        dest="legacy_prompt_thinking",
         action="store_true",
         default=None,
-        help="Enable <think>/<answer> output format in thirdparty mode (default: enabled)",
+        help=argparse.SUPPRESS,
     )
-    thirdparty_thinking_group.add_argument(
+    parser.add_argument(
         "--thirdparty-no-thinking",
-        dest="thirdparty_thinking",
+        dest="legacy_prompt_thinking",
         action="store_false",
-        default=None,
-        help="Disable <think>/<answer> output format in thirdparty mode (fallback to action-only)",
+        help=argparse.SUPPRESS,
     )
 
-    parser.add_argument(
+    compression_group = parser.add_mutually_exclusive_group()
+    compression_group.add_argument(
         "--compress-image",
+        dest="compress_image",
         action="store_true",
-        default=os.getenv("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true",
-        help="Enable screenshot compression in thirdparty mode (some APIs are sensitive to large images)",
+        help="Enable screenshot compression to reduce request size",
     )
-
-    parser.add_argument(
+    compression_group.add_argument(
         "--no-compress-image",
-        action="store_true",
-        default=os.getenv("PHONE_AGENT_NO_COMPRESS_IMAGE", "").lower() == "true",
-        help="Disable screenshot compression in thirdparty mode (default in thirdparty mode; useful if UI recognition is poor)",
+        dest="compress_image",
+        action="store_false",
+        help="Disable screenshot compression to preserve original image quality",
     )
+    parser.set_defaults(compress_image=None)
 
     parser.add_argument(
         "--device-type",
@@ -476,6 +491,13 @@ def main():
     """Main entry point."""
     args = parse_args()
 
+    if args.legacy_prompt_mode or args.legacy_prompt_thinking is not None:
+        print(
+            "Warning: retired third-party prompt options are ignored; "
+            "all model channels now use the unified prompt."
+        )
+    _configure_screenshot_compression(args.compress_image)
+
     # Set device type globally based on args
     if args.device_type == "adb":
         device_type = DeviceType.ADB
@@ -572,8 +594,6 @@ def main():
     )
 
     if device_type == DeviceType.IOS:
-        if args.thirdparty:
-            print("Warning: --thirdparty is not supported on iOS yet; ignoring.")
         if args.expert_mode:
             print("Warning: expert mode is not supported on iOS yet; ignoring.")
         if args.expert_strict_mode:
@@ -602,57 +622,12 @@ def main():
             device_id=args.device_id,
             verbose=not args.quiet,
             lang=args.lang,
-            use_thirdparty_prompt=args.thirdparty,
-            thirdparty_thinking=(
-                True
-                if args.thirdparty and args.thirdparty_thinking is None
-                else bool(args.thirdparty_thinking)
-            ),
             platform=args.device_type,
             action_policy=action_policy,
             runtime_action_policy=resolved_action_policy,
             expert_config=expert_config,
             runtime_inbox_path=getattr(args, "runtime_inbox_path", None) or None,
         )
-
-        # 第三方模式截图压缩开关：
-        # - CLI 默认：不压缩（与 launcher.py 行为一致）
-        # - 显式开启：--compress-image 或 PHONE_AGENT_COMPRESS_IMAGE=true
-        # - 显式关闭：--no-compress-image 或 PHONE_AGENT_NO_COMPRESS_IMAGE=true
-        if args.thirdparty:
-            argv = set(sys.argv[1:])
-            flag_compress = "--compress-image" in argv
-            flag_no_compress = "--no-compress-image" in argv
-
-            if flag_compress and flag_no_compress:
-                print(
-                    "Error: --compress-image and --no-compress-image cannot be used together."
-                )
-                sys.exit(2)
-
-            env_no_compress = (
-                os.getenv("PHONE_AGENT_NO_COMPRESS_IMAGE", "").lower() == "true"
-            )
-            env_compress = (
-                os.getenv("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true"
-            )
-
-            if flag_compress:
-                compress = True
-            elif flag_no_compress:
-                compress = False
-            elif env_no_compress:
-                compress = False
-            elif env_compress:
-                compress = True
-            else:
-                compress = False
-
-            if compress:
-                os.environ["PHONE_AGENT_COMPRESS_IMAGE"] = "true"
-            else:
-                if os.environ.get("PHONE_AGENT_COMPRESS_IMAGE", "").lower() == "true":
-                    os.environ.pop("PHONE_AGENT_COMPRESS_IMAGE", None)
 
         agent = PhoneAgent(
             model_config=model_config,
@@ -685,9 +660,6 @@ def main():
         "AI Visible Actions: "
         + (", ".join(resolved_action_policy.ai_visible_actions) or "(none)")
     )
-    if args.thirdparty:
-        print("Prompt Mode: 第三方模型适配 (Thirdparty)")
-
     # Show iOS-specific config
     if device_type == DeviceType.IOS:
         print(f"WDA URL: {args.wda_url}")

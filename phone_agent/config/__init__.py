@@ -8,13 +8,6 @@ from phone_agent.config.apps_ios import APP_PACKAGES_IOS
 from phone_agent.config.i18n import get_message, get_messages
 from phone_agent.config.prompts_en import SYSTEM_PROMPT as SYSTEM_PROMPT_EN
 from phone_agent.config.prompts_en import get_system_prompt_en
-from phone_agent.config.prompts_thirdparty import (
-    THIRDPARTY_MINIMAL_PROMPT,
-    THIRDPARTY_MINIMAL_PROMPT_WITH_THINKING,
-    THIRDPARTY_SYSTEM_PROMPT,
-    THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING,
-    get_thirdparty_system_prompt,
-)
 from phone_agent.config.prompts_zh import SYSTEM_PROMPT as SYSTEM_PROMPT_ZH
 from phone_agent.config.prompts_zh import get_system_prompt_zh
 from phone_agent.config.timing import (
@@ -33,24 +26,12 @@ def get_system_prompt(
     lang: str = "cn",
     *,
     platform: str | None = None,
-    thirdparty: bool = False,
-    thirdparty_thinking: bool = True,
-    minimal: bool = False,
     action_policy: ActionPolicyInput | None = None,
 ) -> str:
     """Get system prompt by language and runtime strategy."""
     normalized_lang = (lang or "cn").strip().lower()
     if normalized_lang == "zh":
         normalized_lang = "cn"
-
-    if thirdparty:
-        return get_thirdparty_system_prompt(
-            lang=normalized_lang,
-            platform=platform,
-            thinking=thirdparty_thinking,
-            minimal=minimal,
-            action_policy=action_policy,
-        )
 
     if normalized_lang == "en":
         return get_system_prompt_en(
@@ -72,14 +53,9 @@ __all__ = [
     "SYSTEM_PROMPT",
     "SYSTEM_PROMPT_ZH",
     "SYSTEM_PROMPT_EN",
-    "THIRDPARTY_SYSTEM_PROMPT",
-    "THIRDPARTY_SYSTEM_PROMPT_WITH_THINKING",
-    "THIRDPARTY_MINIMAL_PROMPT",
-    "THIRDPARTY_MINIMAL_PROMPT_WITH_THINKING",
     "get_system_prompt",
     "get_system_prompt_en",
     "get_system_prompt_zh",
-    "get_thirdparty_system_prompt",
     "get_messages",
     "get_message",
     "TIMING_CONFIG",

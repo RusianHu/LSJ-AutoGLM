@@ -21,9 +21,6 @@ class PromptPolicy:
 
     platform: PlatformName
     lang: str = "cn"
-    thirdparty: bool = False
-    thinking: bool = True
-    minimal: bool = False
     include_examples: bool = True
     include_rules: bool = True
     runtime_policy: ResolvedActionPolicy | None = None
@@ -54,8 +51,6 @@ class PromptPolicy:
             self.platform,
             lang=self.normalized_lang,
             include_actions=self.ai_visible_actions,
-            thirdparty=self.thirdparty,
-            minimal=self.minimal,
         )
 
 
@@ -76,9 +71,6 @@ def build_prompt_policy(
     *,
     platform: str | PlatformName | DeviceType | None = None,
     lang: str = "cn",
-    thirdparty: bool = False,
-    thinking: bool = True,
-    minimal: bool = False,
     include_examples: bool = True,
     include_rules: bool = True,
     action_policy: ActionPolicyInput | None = None,
@@ -88,9 +80,6 @@ def build_prompt_policy(
     return PromptPolicy(
         platform=resolved_platform,
         lang=lang,
-        thirdparty=thirdparty,
-        thinking=thinking,
-        minimal=minimal,
         include_examples=include_examples,
         include_rules=include_rules,
         runtime_policy=runtime_policy,

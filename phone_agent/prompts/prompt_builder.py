@@ -16,14 +16,6 @@ from phone_agent.prompts.prompt_templates import (
     CN_HEADER,
     EN_GENERAL_RULES,
     EN_HEADER,
-    MINIMAL_HEADER_EN,
-    MINIMAL_HEADER_ZH,
-    THIRDPARTY_GENERAL_RULES_EN,
-    THIRDPARTY_GENERAL_RULES_ZH,
-    THIRDPARTY_HEADER_EN,
-    THIRDPARTY_HEADER_ZH,
-    THIRDPARTY_THINKING_HEADER_EN,
-    THIRDPARTY_THINKING_HEADER_ZH,
     format_today,
 )
 
@@ -55,27 +47,6 @@ class PromptBuilder:
         action_specs = policy.export_action_specs()
         sections: list[str] = []
 
-        if policy.thirdparty:
-            sections.append(self._build_thirdparty_header(policy))
-            sections.append(
-                render_action_protocol_section(
-                    action_specs,
-                    lang=policy.normalized_lang,
-                    thirdparty=True,
-                    minimal=policy.minimal,
-                    include_examples=policy.include_examples,
-                    include_rules=policy.include_rules,
-                )
-            )
-            rules = (
-                THIRDPARTY_GENERAL_RULES_EN
-                if policy.normalized_lang == "en"
-                else THIRDPARTY_GENERAL_RULES_ZH
-            )
-            sections.append(render_rule_section(rules, lang=policy.normalized_lang))
-            sections.append(self._build_action_set_summary(policy, action_specs))
-            return sections
-
         sections.append(EN_HEADER if policy.normalized_lang == "en" else CN_HEADER)
         sections.append(
             render_action_protocol_section(
@@ -89,17 +60,6 @@ class PromptBuilder:
         sections.append(render_rule_section(rules, lang=policy.normalized_lang))
         sections.append(self._build_action_set_summary(policy, action_specs))
         return sections
-
-    def _build_thirdparty_header(self, policy: PromptPolicy) -> str:
-        if policy.minimal:
-            return MINIMAL_HEADER_EN if policy.normalized_lang == "en" else MINIMAL_HEADER_ZH
-        if policy.thinking:
-            return (
-                THIRDPARTY_THINKING_HEADER_EN
-                if policy.normalized_lang == "en"
-                else THIRDPARTY_THINKING_HEADER_ZH
-            )
-        return THIRDPARTY_HEADER_EN if policy.normalized_lang == "en" else THIRDPARTY_HEADER_ZH
 
     def _build_action_set_summary(self, policy: PromptPolicy, action_specs) -> str:
         action_list = render_action_name_list(action_specs)
@@ -126,9 +86,6 @@ def build_system_prompt(
     *,
     lang: str = "cn",
     platform: str | None = None,
-    thirdparty: bool = False,
-    thinking: bool = True,
-    minimal: bool = False,
     include_examples: bool = True,
     include_rules: bool = True,
     action_policy: ActionPolicyInput | None = None,
@@ -136,9 +93,6 @@ def build_system_prompt(
     policy = build_prompt_policy(
         platform=platform,
         lang=lang,
-        thirdparty=thirdparty,
-        thinking=thinking,
-        minimal=minimal,
         include_examples=include_examples,
         include_rules=include_rules,
         action_policy=action_policy,

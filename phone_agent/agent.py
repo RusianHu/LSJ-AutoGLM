@@ -32,8 +32,6 @@ class AgentConfig:
     lang: str = "cn"
     system_prompt: str | None = None
     verbose: bool = True
-    use_thirdparty_prompt: bool = False
-    thirdparty_thinking: bool = True
     platform: str | None = None
     action_policy: ActionPolicyInput | None = None
     runtime_action_policy: ResolvedActionPolicy | None = None
@@ -59,8 +57,6 @@ class AgentConfig:
             self.system_prompt = get_system_prompt(
                 self.lang,
                 platform=self.platform,
-                thirdparty=self.use_thirdparty_prompt,
-                thirdparty_thinking=self.thirdparty_thinking,
                 action_policy=self.action_policy,
             )
 
@@ -234,36 +230,15 @@ class PhoneAgent:
         if not normalized:
             return False
 
-        terminal_markers = (
-            "任务完成",
-            "已完成",
-            "已经完成",
-            "完成任务",
-            "已查看",
-            "可以看到",
-            "当前页面已经是",
-            "当前屏幕显示的是",
-            "最新记录",
-            "最新历史记录",
-            "最终结果",
-            "结果为",
-            "结果是",
-            "task completed",
-            "already complete",
-            "already completed",
-            "final result",
-            "result is",
-            "latest record",
-            "latest history",
+        terminal_patterns = (
+            r"^(?:任务(?:已经|已)?完成|已经完成(?:任务)?|已完成(?:任务)?|完成任务)(?:[\s，。,:：!！]|$)",
+            r"^(?:最终结果|结果为|结果是|最新记录|最新历史记录)(?:[\s，。,:：!！]|$)",
+            r"^(?:task (?:is )?(?:already )?completed?|already completed?|final result|result is|latest record|latest history)(?:[\s,.:!]|$)",
         )
-        return any(marker in normalized for marker in terminal_markers)
+        return any(re.match(pattern, normalized) for pattern in terminal_patterns)
 
     @staticmethod
-    def _normalize_thirdparty_terminal_note(
-        action: dict[str, Any], *, use_thirdparty_prompt: bool
-    ) -> dict[str, Any]:
-        if not use_thirdparty_prompt:
-            return action
+    def _normalize_terminal_note(action: dict[str, Any]) -> dict[str, Any]:
         if action.get("_metadata") != "do" or action.get("action") != "Note":
             return action
 
@@ -342,8 +317,6 @@ class PhoneAgent:
             platform,
             lang=self.agent_config.lang,
             include_actions=action_policy.ai_visible_actions if action_policy else (),
-            thirdparty=False,
-            minimal=False,
         )
         action_protocol = render_action_protocol_section(
             action_specs,
@@ -705,18 +678,15 @@ class PhoneAgent:
                 )
             action = recommended_action or action
 
-        normalized_action = self._normalize_thirdparty_terminal_note(
-            action,
-            use_thirdparty_prompt=self.agent_config.use_thirdparty_prompt,
-        )
+        normalized_action = self._normalize_terminal_note(action)
         if self.agent_config.verbose and normalized_action is not action:
             print(
-                "🧩 Normalizing thirdparty completion note to finish:",
+                "🧩 Normalizing completion note to finish:",
                 json.dumps(normalized_action, ensure_ascii=False),
             )
         action = normalized_action
 
-        # Track recent actions for loop detection & better thirdparty guidance.
+        # Track recent actions for loop detection and recovery guidance.
         self._step_tracker.record_action(self._action_signature(action))
 
         if self.agent_config.verbose:

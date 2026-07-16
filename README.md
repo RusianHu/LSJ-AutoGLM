@@ -110,9 +110,8 @@ OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true
 OPEN_AUTOGLM_ENABLED_ACTIONS=["Launch", "Tap", "Type"]
 OPEN_AUTOGLM_AI_VISIBLE_ACTIONS=["Launch", "Tap"]
 
-# 第三方模型提示词工程
-OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT=true
-OPEN_AUTOGLM_THIRDPARTY_THINKING=true
+# 截图压缩（降低请求体积，默认关闭以保留原图质量）
+OPEN_AUTOGLM_COMPRESS_IMAGE=false
 
 # 本地 OpenAI 兼容服务
 OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:1234
@@ -134,16 +133,14 @@ OPEN_AUTOGLM_LOCAL_OPENAI_ALLOW_EMPTY_KEY=true
 - **设备配置**: 小米 14 Ultra 的 USB ID、无线调试端口
 - **API 配置表**: ModelScope、智谱、第三方中转站的完整参数
 - **快速启动命令**: 各种场景的启动示例
-- **注意事项**: 第三方模型使用 `--thirdparty` 参数的重要说明
+- **注意事项**: 模型渠道、截图压缩与设备连接说明
 
-### 4. 第三方模型支持 (`--thirdparty`)
+### 4. 统一模型提示词与截图压缩
 
-针对非 AutoGLM 原生模型（如 Qwen3-VL）的适配：
+所有模型渠道统一使用标准 Phone Agent 提示词，不再需要按模型来源切换提示词模式。响应解析同时兼容 `<think>/<answer>`、带分析文本的动作和纯动作输出。
 
-- **`--thirdparty`**: 启用第三方模型提示词工程
-- **`--thirdparty-thinking`**: 启用思考输出（`<think>`/`<answer>` 格式）
-- **`--thirdparty-no-thinking`**: 禁用思考（纯动作输出，更兼容部分中转站）
-- **`--no-compress-image`**: 禁用截图压缩（保持原图质量）
+- **`--compress-image`**：启用截图压缩，降低请求体积
+- **`--no-compress-image`**：禁用截图压缩，保持原图质量（默认）
 
 ## 快速使用
 
@@ -211,7 +208,7 @@ python gui_app.py
 用户完整解压 ZIP 后运行：
 
 ```powershell
-.\OpenAutoGLM-GUI-v1.0.7-windows-x64\OpenAutoGLM-GUI.exe
+.\OpenAutoGLM-GUI-v1.0.8-windows-x64\OpenAutoGLM-GUI.exe
 ```
 
 不能只复制 exe；同目录的 `_internal` 是必需运行时。
@@ -234,7 +231,7 @@ python main.py --base-url "https://api-inference.modelscope.cn/v1" --model "Zhip
 python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' --ai-visible-actions '["Launch", "Tap"]' --disable-platform-default-actions "打开设置"
 
 # 使用第三方模型（如 Qwen3-VL）
-python main.py --thirdparty --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "你的Key" "打开设置"
+python main.py --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "你的Key" "打开设置"
 ```
 
 动作策略相关 CLI 参数：

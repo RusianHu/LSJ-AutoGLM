@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import re
 import secrets
 import string
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Iterable, Optional, Sequence
 
 
@@ -82,6 +85,33 @@ def is_mdns_transport_serial(value: str) -> bool:
 
 def _creation_flags() -> int:
     return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def clear_host_neighbor_cache(host: str) -> bool:
+    """清除 Windows 上单个 IPv4 主机的失败 ARP/邻居项。
+
+    无线调试端口已经由 mDNS 更新，但 Windows 偶尔仍会把目标邻居保持为
+    ``Unreachable``。这里只删除目标手机的一项；非 Windows、IPv6 或命令失败时
+    静默跳过，由后续正常重试处理。
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        address = ipaddress.ip_address((host or "").strip())
+    except ValueError:
+        return False
+    if not isinstance(address, ipaddress.IPv4Address):
+        return False
+    try:
+        result = subprocess.run(
+            ["arp.exe", "-d", str(address)],
+            capture_output=True,
+            timeout=5,
+            creationflags=_creation_flags(),
+        )
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0
 
 
 def normalize_endpoint(value: str, default_port: Optional[int] = None) -> str:
@@ -179,6 +209,26 @@ def parse_mdns_services(output: str) -> list[MdnsService]:
             continue
         services.append(MdnsService(instance_name, service_type, endpoint))
     return services
+
+
+def parse_adb_server_status(output: str) -> dict[str, str]:
+    """解析 ``adb server-status`` 的 ``key: value`` 输出。"""
+    status: dict[str, str] = {}
+    for raw_line in (output or "").splitlines():
+        if ":" not in raw_line:
+            continue
+        key, value = raw_line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            try:
+                value = str(json.loads(value))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                value = value[1:-1]
+        status[key] = value
+    return status
 
 
 def parse_adb_devices(output: str) -> list[AdbDeviceRecord]:
@@ -306,6 +356,98 @@ class AdbClient:
     ) -> AdbCommandResult:
         return self.run(["start-server"], timeout=10, should_stop=should_stop)
 
+    def restart_server(
+        self,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> AdbCommandResult:
+        """重启 ADB server，以清空失效 transport 和 mDNS 发现状态。"""
+        self.run(["kill-server"], timeout=10, should_stop=should_stop)
+        return self.start_server(should_stop=should_stop)
+
+    def server_status(
+        self,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> dict[str, str]:
+        """读取 ADB server 配置；旧版 ADB 不支持时返回空字典。"""
+        result = self.run(["server-status"], timeout=5, should_stop=should_stop)
+        if result.returncode != 0:
+            return {}
+        return parse_adb_server_status(result.merged_output)
+
+    def _pairing_log_cursor(
+        self,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> tuple[Path, int] | None:
+        """记录配对前的 ADB 日志位置，用于还原被客户端隐藏的 server 错误。"""
+        try:
+            raw_path = self.server_status(should_stop=should_stop).get("log_absolute_path", "")
+            if not raw_path:
+                return None
+            path = Path(raw_path)
+            return path, path.stat().st_size if path.exists() else 0
+        except (AdbError, OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _pairing_log_failure(cursor: tuple[Path, int] | None) -> str:
+        if cursor is None:
+            return ""
+        path, offset = cursor
+        try:
+            with path.open("rb") as stream:
+                if path.stat().st_size >= offset:
+                    stream.seek(offset)
+                appended = stream.read().decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+        marker = "Failed to start pairing connection client ["
+        failures: list[str] = []
+        for line in appended.splitlines():
+            if marker not in line:
+                continue
+            detail = line.split(marker, 1)[1]
+            if detail.endswith("]"):
+                detail = detail[:-1]
+            if detail.strip():
+                failures.append(detail.strip())
+        return failures[-1] if failures else ""
+
+    @staticmethod
+    def _format_pair_failure(endpoint: str, output: str, detail: str) -> str:
+        evidence = detail or output
+        lowered = evidence.lower()
+        if "cannot connect to" in lowered and (
+            "10060" in lowered
+            or "timed out" in lowered
+            or "没有正确答复" in evidence
+            or "连接尝试失败" in evidence
+        ):
+            summary = (
+                f"ADB 无法连接手机配对端口 {endpoint}：mDNS 已发现服务，但 TCP 通道不可达。"
+                "该端口是临时配对端口，与手机无线调试主页显示的 TLS 连接端口不同是正常现象。"
+                "请确认手机和电脑位于同一局域网，关闭访客网络/AP 隔离或会抢占局域网路由的 VPN，"
+                "并在手机上关闭再开启无线调试后重新扫码。"
+            )
+        elif "cannot connect to" in lowered and (
+            "10061" in lowered or "actively refused" in lowered or "积极拒绝" in evidence
+        ):
+            summary = (
+                f"手机配对端口 {endpoint} 已关闭或发生变化。"
+                "该端口与手机无线调试主页显示的 TLS 连接端口不同是正常现象。"
+                "请保持手机配对窗口开启，并重新扫码获取当前端口。"
+            )
+        elif "cannot resolve host" in lowered:
+            summary = f"ADB 无法解析配对地址 {endpoint}，请检查地址格式和网络配置。"
+        elif "protocol fault" in output.lower():
+            summary = (
+                "ADB 配对失败；当前 ADB 的 protocol fault 可能只是错误回传缺陷，"
+                "不能据此判定为配对码错误。请保持手机配对窗口开启后重试。"
+            )
+        else:
+            return output
+        return f"{summary} | ADB 详情：{evidence}" if evidence else summary
+
     def mdns_check(
         self,
         should_stop: Optional[Callable[[], bool]] = None,
@@ -341,6 +483,7 @@ class AdbClient:
         code = (pairing_code or "").strip()
         if not code:
             raise ValueError("配对码不能为空")
+        log_cursor = self._pairing_log_cursor(should_stop=should_stop)
         result = self.run(["pair", normalized, code], timeout=35, should_stop=should_stop)
         output = result.merged_output or "ADB 未返回配对结果"
         lowered = output.lower()
@@ -349,12 +492,9 @@ class AdbClient:
             or "already paired" in lowered
             or ("paired to" in lowered and "failed" not in lowered)
         )
-        if not paired and "protocol fault" in lowered:
-            output = (
-                "ADB 拒绝配对：配对地址、专用配对端口或配对码不正确/已过期。"
-                "请保持手机“使用配对码配对设备”窗口开启，并使用该窗口当前显示的新端口和 6 位码。"
-                f" | 原始错误：{output}"
-            )
+        if not paired:
+            detail = self._pairing_log_failure(log_cursor)
+            output = self._format_pair_failure(normalized, output, detail)
         return PairResult(paired, output, pairing_endpoint=normalized)
 
     def resolve_pairing_endpoint(
@@ -505,6 +645,8 @@ class AdbClient:
 
         deadline = time.monotonic() + max(timeout, 0)
         last_error = ""
+        attempts_by_endpoint: dict[str, int] = {}
+        discovery_restarted = False
         while time.monotonic() < deadline:
             if should_stop and should_stop():
                 return PairResult(False, "二维码配对已取消")
@@ -519,14 +661,39 @@ class AdbClient:
                     None,
                 )
                 if target is not None:
-                    if on_service_found:
-                        on_service_found(target.endpoint)
-                    return self.pair_and_connect(
-                        target.endpoint,
-                        password,
-                        connect_timeout=15,
-                        should_stop=should_stop,
-                    )
+                    attempts = attempts_by_endpoint.get(target.endpoint, 0)
+                    if attempts < 2:
+                        attempts_by_endpoint[target.endpoint] = attempts + 1
+                        if on_service_found:
+                            on_service_found(target.endpoint)
+                        paired = self.pair(target.endpoint, password, should_stop=should_stop)
+                        if paired.paired:
+                            host = endpoint_host(paired.pairing_endpoint)
+                            connected = self.wait_for_connection(host, 15, should_stop)
+                            message = paired.message
+                            if connected:
+                                message += f" | 已连接：{connected}"
+                            else:
+                                message += " | 配对已完成，暂未发现连接端口；请保持手机无线调试开启后刷新"
+                            return PairResult(
+                                True,
+                                message,
+                                paired.pairing_endpoint,
+                                connected,
+                            )
+
+                        last_error = paired.message
+                        # ADB 的 mDNS 结果偶尔会保留已失效端口。首次失败后只刷新一次
+                        # server；TCP 不可达时同时清除 Windows 中目标手机的失败邻居项。
+                        # 若手机仍在配对页，同一服务会被重新发现并重试。
+                        if not discovery_restarted and time.monotonic() < deadline:
+                            if "TCP 通道不可达" in paired.message:
+                                clear_host_neighbor_cache(endpoint_host(target.endpoint))
+                            self.restart_server(should_stop=should_stop)
+                            discovery_restarted = True
+                            mdns_ok, mdns_message = self.mdns_check(should_stop=should_stop)
+                            if not mdns_ok:
+                                return PairResult(False, mdns_message)
             except AdbError as exc:
                 last_error = str(exc)
             _interruptible_sleep(0.5, should_stop)

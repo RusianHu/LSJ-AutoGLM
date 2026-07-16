@@ -492,14 +492,6 @@ class DashboardPage(QWidget):
         active_name = self._channel_name(active) if active else self._t("page.dashboard.channel.display.custom_plain")
         base_url = self._config.get("OPEN_AUTOGLM_BASE_URL") or "—"
         model = self._config.get("OPEN_AUTOGLM_MODEL") or "—"
-        is_thirdparty = self._config._is_truthy(
-            self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
-        )
-        mode_hint = self._t(
-            "page.dashboard.channel.hint.thirdparty_bracketed"
-            if is_thirdparty else
-            "page.dashboard.channel.hint.native_bracketed"
-        )
         self._channel_summary_lbl.setText(
             self._t(
                 "page.dashboard.workspace.card.channel.summary",
@@ -511,7 +503,6 @@ class DashboardPage(QWidget):
             self._t(
                 "page.dashboard.workspace.card.channel.meta",
                 base_url=base_url,
-                mode_hint=mode_hint,
             )
         )
 
@@ -1577,18 +1568,12 @@ class DashboardPage(QWidget):
             (p for p in self._config.CHANNEL_PRESETS if p["id"] == channel_id), None
         )
         if preset and channel_id != "custom":
-            mode_hint = self._t(
-                "page.dashboard.channel.hint.thirdparty_inline"
-                if preset["use_thirdparty"]
-                else "page.dashboard.channel.hint.native_inline"
-            )
             resolved_url = self._config.get_preset_url(preset)
             resolved_model = self._config.get_preset_model(preset)
             self._append_log(
                 self._t(
                     "page.dashboard.channel.log.switch_preset",
                     name=self._channel_name(preset),
-                    mode_hint=mode_hint,
                     base_url=resolved_url,
                     model=resolved_model,
                 )
@@ -2495,14 +2480,6 @@ class DashboardPage(QWidget):
         # 更新 tooltip 显示完整的 Base URL 和模型名
         base_url = self._config.get("OPEN_AUTOGLM_BASE_URL") or "—"
         model = self._config.get("OPEN_AUTOGLM_MODEL") or "—"
-        is_thirdparty = self._config._is_truthy(
-            self._config.get("OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT", "false")
-        )
-        tp_hint = self._t(
-            "page.dashboard.channel.hint.thirdparty_bracketed"
-            if is_thirdparty
-            else "page.dashboard.channel.hint.native_bracketed"
-        )
         # 渠道下拉框显示名加上动态模型名后缀（便于区分同渠道不同模型）
         active = self._config.get_active_channel()
         active_id = active["id"] if active else "custom"
@@ -2528,7 +2505,6 @@ class DashboardPage(QWidget):
                 "page.dashboard.channel.tooltip",
                 base_url=base_url,
                 model=model,
-                mode_hint=tp_hint,
             )
         )
         self._refresh_channel_card()

@@ -107,9 +107,8 @@ OPEN_AUTOGLM_USE_PLATFORM_DEFAULT_ACTIONS=true
 OPEN_AUTOGLM_ENABLED_ACTIONS=["Launch", "Tap", "Type"]
 OPEN_AUTOGLM_AI_VISIBLE_ACTIONS=["Launch", "Tap"]
 
-# Third-party model prompt engineering
-OPEN_AUTOGLM_USE_THIRDPARTY_PROMPT=true
-OPEN_AUTOGLM_THIRDPARTY_THINKING=true
+# Screenshot compression (reduces request size; disabled by default for image quality)
+OPEN_AUTOGLM_COMPRESS_IMAGE=false
 
 # Local OpenAI-compatible service
 OPEN_AUTOGLM_LOCAL_OPENAI_BASE_URL=http://127.0.0.1:1234
@@ -131,16 +130,14 @@ A project rules file designed for AI Coding Agents (e.g., Claude Code, Kilo Code
 - **Device Configuration**: Xiaomi 14 Ultra USB ID, wireless debugging port
 - **API Configuration Table**: Full parameters for ModelScope, Zhipu, and third-party relay
 - **Quick Start Commands**: Launch examples for various scenarios
-- **Notes**: Important notes on using `--thirdparty` parameter for third-party models
+- **Notes**: Model channels, screenshot compression, and device connectivity
 
-### 4. Third-Party Model Support (`--thirdparty`)
+### 4. Unified Model Prompt and Screenshot Compression
 
-Adaptation for non-native AutoGLM models (e.g., Qwen3-VL):
+All model channels use the standard Phone Agent prompt. No prompt-mode switch is required based on model source. Response parsing accepts `<think>/<answer>`, an action preceded by analysis text, and action-only output.
 
-- **`--thirdparty`**: Enable third-party model prompt engineering
-- **`--thirdparty-thinking`**: Enable thinking output (`<think>`/`<answer>` format)
-- **`--thirdparty-no-thinking`**: Disable thinking output (pure action output, more compatible with some relay services)
-- **`--no-compress-image`**: Disable screenshot compression (preserve original image quality)
+- **`--compress-image`**: Enable screenshot compression to reduce request size
+- **`--no-compress-image`**: Disable screenshot compression to preserve original image quality (default)
 
 ---
 
@@ -210,7 +207,7 @@ The `release` directory will contain a Windows x64 ZIP and its SHA-256 checksum.
 After extracting the complete ZIP, run:
 
 ```powershell
-.\OpenAutoGLM-GUI-v1.0.7-windows-x64\OpenAutoGLM-GUI.exe
+.\OpenAutoGLM-GUI-v1.0.8-windows-x64\OpenAutoGLM-GUI.exe
 ```
 
 Do not copy the exe by itself; the adjacent `_internal` directory is required.
@@ -233,7 +230,7 @@ python main.py --base-url "https://api-inference.modelscope.cn/v1" --model "Zhip
 python main.py --device-type ios --enabled-actions '["Launch", "Tap", "Wait"]' --ai-visible-actions '["Launch", "Tap"]' --disable-platform-default-actions "Open Settings"
 
 # Using a third-party model (e.g., Qwen3-VL)
-python main.py --thirdparty --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "your-key" "Open Settings"
+python main.py --base-url "https://your-api.com/v1" --model "Qwen/Qwen3-VL-235B" --apikey "your-key" "Open Settings"
 ```
 
 Action-policy-related CLI parameters:
