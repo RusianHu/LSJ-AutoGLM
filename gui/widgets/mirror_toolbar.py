@@ -166,20 +166,28 @@ class MirrorToolbar(QFrame):
         border_hover = values.get("border_hover", values.get("accent", "#4f8cff"))
         text = values.get("text_primary", "#DCDCDC")
         disabled_text = values.get("text_muted", "#777777")
+        # 图标字体族必须写进自身样式表：全局壳层 QSS 的 font-family
+        # 会覆盖 setFont() 程序化设置。
+        icon_font_css = (
+            f"font-family: '{self._font_family}'; font-size: 16px;"
+            if self._font_family
+            else ""
+        )
         self.setStyleSheet(
             f"""
             QFrame#MirrorToolbar {{
                 background: {panel};
                 border: 1px solid {border};
-                border-radius: 4px;
+                border-radius: 8px;
             }}
             QToolButton {{
                 border: 1px solid {border};
                 color: {text};
                 padding: 5px;
                 min-height: 15px;
-                border-radius: 5px;
+                border-radius: 6px;
                 background: {button_bg};
+                {icon_font_css}
             }}
             QToolButton:hover {{
                 border-color: {border_hover};

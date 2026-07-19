@@ -28,11 +28,11 @@ from gui.theme.styles.logs import log_console
 
 
 STATE_COLOR = {
-    "completed": "#3fb950",
-    "failed":    "#f85149",
-    "cancelled": "#8b949e",
-    "running":   "#e3b341",
-    "paused":    "#e3b341",
+    "completed": "#26a269",
+    "failed":    "#e5484d",
+    "cancelled": "#8a91a5",
+    "running":   "#c77d0a",
+    "paused":    "#c77d0a",
 }
 
 class HistoryPage(QWidget):
@@ -114,8 +114,9 @@ class HistoryPage(QWidget):
         header.addWidget(self._btn_clear)
         root.addLayout(header)
 
-        # 主体 Splitter（竖版：上列表 / 下详情）
-        splitter = QSplitter(Qt.Vertical)
+        # 主体 Splitter（横版：左列表 / 右详情）
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
         # 左：任务列表
         left = QWidget()
@@ -127,12 +128,13 @@ class HistoryPage(QWidget):
         self._task_list.setProperty("surface", "console")
         self._task_list.currentRowChanged.connect(self._on_task_selected)
         left_layout.addWidget(self._task_list, 1)
+        left.setMinimumWidth(260)
         splitter.addWidget(left)
 
         # 右：详情
         right = QWidget()
         right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(12, 0, 0, 0)
         right_layout.setSpacing(8)
 
         self._detail_tabs = QTabWidget()
@@ -154,10 +156,11 @@ class HistoryPage(QWidget):
         self._detail_tabs.addTab(self._event_list, self._t("page.history.tab.events"))
 
         right_layout.addWidget(self._detail_tabs, 1)
+        right.setMinimumWidth(380)
         splitter.addWidget(right)
-        splitter.setSizes([260, 480])
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([340, 700])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
         root.addWidget(splitter, 1)
 
     def _build_overview_tab(self) -> QWidget:
@@ -355,7 +358,7 @@ class HistoryPage(QWidget):
         selected_row = -1
         for row, rec in enumerate(records):
             state = rec.get("state", "")
-            color = STATE_COLOR.get(state, "#8b949e")
+            color = STATE_COLOR.get(state, "#8a91a5")
             # 通过 i18n 翻译状态标签
             state_key = f"history.state.{state}" if state else "history.state.unknown"
             label = self._t(state_key)
@@ -397,7 +400,7 @@ class HistoryPage(QWidget):
 
     def _show_overview(self, rec: dict):
         state = rec.get("state", "")
-        color = STATE_COLOR.get(state, "#8b949e")
+        color = STATE_COLOR.get(state, "#8a91a5")
         # 通过 i18n 翻译状态标签
         state_key = f"history.state.{state}" if state else "history.state.unknown"
         label = self._t(state_key)
@@ -414,7 +417,7 @@ class HistoryPage(QWidget):
         self._ov_steps.setText(str(rec.get("max_steps", "—")))
         self._ov_log.setText(rec.get("log_file", "—") or "—")
         err = rec.get("error_summary", "") or "—"
-        err_color = "#f85149" if err != "—" else "#8b949e"
+        err_color = "#e5484d" if err != "—" else "#8a91a5"
         self._ov_error.setText(f"<span style='color:{err_color}'>{err}</span>")
 
     def _show_log(self, task_id: str):
@@ -440,10 +443,10 @@ class HistoryPage(QWidget):
             item = QListWidgetItem(text)
             etype = evt.get("type", "")
             color_map = {
-                "task_complete":    "#3fb950",
-                "task_failed":      "#f85149",
-                "error":            "#f85149",
-                "takeover_request": "#e3b341",
+                "task_complete":    "#26a269",
+                "task_failed":      "#e5484d",
+                "error":            "#e5484d",
+                "takeover_request": "#c77d0a",
                 "stuck_detected":   "#f0883e",
             }
             c = color_map.get(etype)

@@ -10,6 +10,7 @@ from gui.theme.tokens import ThemeTokens
 
 def dialog_surface(t: ThemeTokens) -> str:
     """通用对话框外观：背景、标签、基础按钮。"""
+    input_bg = t.comp.input_bg if t.comp else t.bg_elevated
     return f"""
         QDialog {{
             background: {t.bg_secondary};
@@ -22,7 +23,7 @@ def dialog_surface(t: ThemeTokens) -> str:
         QDialog QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 12px;
             color: {t.text_primary};
             margin-top: 8px;
             padding-top: 8px;
@@ -34,11 +35,11 @@ def dialog_surface(t: ThemeTokens) -> str:
             font-size: 12px;
         }}
         QDialog QLineEdit, QDialog QTextEdit, QDialog QPlainTextEdit {{
-            background: {t.bg_elevated};
+            background: {input_bg};
             border: 1px solid {t.border};
-            border-radius: 6px;
+            border-radius: 8px;
             color: {t.text_primary};
-            padding: 5px 8px;
+            padding: 6px 10px;
         }}
         QDialog QLineEdit:focus, QDialog QTextEdit:focus {{
             border-color: {t.accent};
@@ -46,10 +47,11 @@ def dialog_surface(t: ThemeTokens) -> str:
         QDialog QPushButton {{
             background-color: {t.bg_btn};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 18px;
+            padding: 7px 18px;
             min-width: 80px;
+            font-weight: 500;
         }}
         QDialog QPushButton:hover {{
             background-color: {t.bg_elevated};
@@ -68,20 +70,22 @@ def dialog_message_box(t: ThemeTokens) -> str:
         QMessageBox QLabel {{
             color: {t.text_primary};
             background: transparent;
+            font-size: 13px;
         }}
         QPushButton {{
             background-color: {t.bg_btn};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 18px;
+            padding: 7px 18px;
             min-width: 80px;
+            font-weight: 500;
         }}
         QPushButton:hover {{
             background-color: {t.bg_elevated};
             border-color: {t.accent};
         }}
         QPushButton:pressed {{
-            padding-top: 7px;
+            padding-top: 8px;
         }}
     """

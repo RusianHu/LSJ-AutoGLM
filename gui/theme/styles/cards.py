@@ -18,7 +18,7 @@ def card_default(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 12px;
+            border-radius: 14px;
         }}
         QGroupBox {{
             margin-top: 8px;
@@ -39,7 +39,7 @@ def card_elevated(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 12px;
+            border-radius: 14px;
         }}
         QGroupBox {{
             margin-top: 8px;
@@ -60,7 +60,7 @@ def card_outlined(t: ThemeTokens) -> str:
         QFrame, QGroupBox {{
             background: transparent;
             border: 1px solid {t.border};
-            border-radius: 12px;
+            border-radius: 14px;
         }}
         QGroupBox {{
             margin-top: 8px;
@@ -81,14 +81,14 @@ def card_console(t: ThemeTokens) -> str:
         QFrame {{
             background: {t.bg_console};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 10px;
         }}
         QPlainTextEdit, QTextEdit {{
             background: {t.bg_console};
             color: {t.text_primary};
             border: 1px solid {t.border};
-            border-radius: 8px;
-            font-family: 'Consolas', 'Courier New', monospace;
+            border-radius: 10px;
+            font-family: 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
             font-size: 12px;
             padding: 8px;
             selection-background-color: {t.selection_bg};

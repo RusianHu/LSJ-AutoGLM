@@ -680,7 +680,9 @@ class DevicePage(QWidget):
             return template
 
     def _build_ui(self):
-        # 竖版窄窗下内容较长，整页放入滚动容器
+        # 内容较长，整页放入滚动容器；横版宽窗下内容列居中限宽保证可读性
+        from gui.utils.layout import wrap_center_column
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
@@ -689,12 +691,12 @@ class DevicePage(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         content = QWidget()
-        scroll.setWidget(content)
+        scroll.setWidget(wrap_center_column(content, max_width=920))
         outer.addWidget(scroll)
 
         root = QVBoxLayout(content)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(14)
 
         # 标题
         self._title_lbl = QLabel(self._t("page.device.title"))
@@ -1015,7 +1017,7 @@ class DevicePage(QWidget):
             )
 
     def _on_adb_status(self, available: bool, msg: str):
-        color = "#3fb950" if available else "#f85149"
+        color = "#26a269" if available else "#e5484d"
         status = self._t("page.device.result.available") if available else self._t("page.device.result.unavailable")
         self._adb_status_lbl.setText(
             self._t("page.device.adb.status_html", color=color, status=status, msg=msg)
@@ -1060,7 +1062,7 @@ class DevicePage(QWidget):
             preferred_id = self._device.selected_device.device_id or ""
         preferred_row = -1
         for d in devices:
-            color = "#3fb950" if d.status == DeviceStatus.CONNECTED else "#e3b341"
+            color = "#26a269" if d.status == DeviceStatus.CONNECTED else "#c77d0a"
             text = f"[{d.status.value.upper()}]  {d.display_name}"
             item = QListWidgetItem(text)
             from PySide6.QtGui import QColor
@@ -1221,7 +1223,7 @@ class DevicePage(QWidget):
             return
         if self._device:
             ok, msg = self._device.check_adb_keyboard(device_id)
-            color = "#3fb950" if ok else "#e3b341"
+            color = "#26a269" if ok else "#c77d0a"
             self._kbd_status_lbl.setText(
                 f"<span style='color:{color}'>{msg}</span>"
             )
@@ -1236,7 +1238,7 @@ class DevicePage(QWidget):
             return
         if self._device:
             ok, msg = self._device.install_adb_keyboard(device_id)
-            color = "#3fb950" if ok else "#f85149"
+            color = "#26a269" if ok else "#e5484d"
             self._kbd_status_lbl.setText(f"<span style='color:{color}'>{msg}</span>")
             self._log(self._t("page.device.log.kbd_install", msg=msg))
 
@@ -1248,7 +1250,7 @@ class DevicePage(QWidget):
             ok, msg = self._device.check_scrcpy()
         else:
             ok, msg = False, self._t("page.device.service_unavailable")
-        color = "#3fb950" if ok else "#e3b341"
+        color = "#26a269" if ok else "#c77d0a"
         self._scrcpy_status_lbl.setText(
             f"<span style='color:{color}'>{msg}</span>"
         )

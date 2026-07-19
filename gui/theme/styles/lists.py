@@ -14,13 +14,14 @@ def list_default(t: ThemeTokens) -> str:
         QListWidget {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
             color: {t.text_primary};
             outline: none;
+            padding: 4px;
         }}
         QListWidget::item {{
-            padding: 7px 10px;
-            border-radius: 7px;
+            padding: 8px 10px;
+            border-radius: 8px;
             margin: 1px 2px;
         }}
         QListWidget::item:selected {{
@@ -34,23 +35,29 @@ def list_default(t: ThemeTokens) -> str:
 
 
 def list_console(t: ThemeTokens) -> str:
-    """控制台日志列表：深色背景，等宽字体，无选中高亮。"""
+    """控制台日志列表：深色背景，等宽字体，弱选中高亮。"""
     return f"""
         QListWidget {{
             background: {t.bg_console};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
             color: {t.text_secondary};
-            font-family: 'Consolas', 'Courier New', monospace;
+            font-family: 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
             font-size: 12px;
             outline: none;
+            padding: 4px;
         }}
         QListWidget::item {{
-            padding: 2px 8px;
+            padding: 4px 8px;
+            border-radius: 6px;
+            margin: 1px 2px;
         }}
         QListWidget::item:selected {{
-            background: {t.bg_elevated};
+            background: {t.accent_soft};
             color: {t.text_primary};
+        }}
+        QListWidget::item:hover:!selected {{
+            background: {t.bg_elevated};
         }}
     """
 
@@ -61,19 +68,23 @@ def list_event(t: ThemeTokens) -> str:
         QListWidget {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 10px;
+            border-radius: 12px;
             color: {t.text_primary};
             outline: none;
+            padding: 4px;
         }}
         QListWidget::item {{
-            padding: 5px 8px;
+            padding: 6px 8px;
             border-left: 3px solid transparent;
-            border-radius: 4px;
+            border-radius: 6px;
             margin: 1px 2px;
         }}
         QListWidget::item:selected {{
             background: {t.accent_soft};
             border-left-color: {t.accent};
+        }}
+        QListWidget::item:hover:!selected {{
+            background: {t.bg_elevated};
         }}
     """
 
@@ -88,8 +99,8 @@ def list_side(t: ThemeTokens) -> str:
             outline: none;
         }}
         QListWidget::item {{
-            padding: 6px 12px;
-            border-radius: 6px;
+            padding: 7px 12px;
+            border-radius: 8px;
         }}
         QListWidget::item:selected {{
             background: {t.accent_soft};

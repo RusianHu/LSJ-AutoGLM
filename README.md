@@ -208,7 +208,7 @@ python gui_app.py
 用户完整解压 ZIP 后运行：
 
 ```powershell
-.\OpenAutoGLM-GUI-v1.0.8-windows-x64\OpenAutoGLM-GUI.exe
+.\OpenAutoGLM-GUI-v1.0.9-windows-x64\OpenAutoGLM-GUI.exe
 ```
 
 不能只复制 exe；同目录的 `_internal` 是必需运行时。

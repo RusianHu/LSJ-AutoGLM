@@ -8,15 +8,19 @@ gui/theme/styles/inputs.py - 统一输入框样式生成
 from gui.theme.tokens import ThemeTokens
 
 
+def _input_bg(t: ThemeTokens) -> str:
+    return t.comp.input_bg if t.comp else t.bg_secondary
+
+
 def input_default(t: ThemeTokens) -> str:
     """默认输入框：可编辑，支持聚焦高亮。"""
     return f"""
         QLineEdit, QTextEdit, QPlainTextEdit {{
-            background: {t.bg_secondary};
+            background: {_input_bg(t)};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 10px;
+            padding: 6px 12px;
             selection-background-color: {t.selection_bg};
         }}
         QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {{
@@ -24,7 +28,6 @@ def input_default(t: ThemeTokens) -> str:
         }}
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border-color: {t.accent};
-            background: {t.bg_main};
         }}
         QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
             background: {t.bg_elevated};
@@ -40,8 +43,8 @@ def input_readonly(t: ThemeTokens) -> str:
             background: {t.bg_elevated};
             color: {t.text_muted};
             border: 1px solid {t.border};
-            border-radius: 9px;
-            padding: 6px 10px;
+            border-radius: 10px;
+            padding: 6px 12px;
         }}
     """
 
@@ -50,11 +53,11 @@ def input_invalid(t: ThemeTokens) -> str:
     """错误态输入框：红色边框高亮。"""
     return f"""
         QLineEdit {{
-            background: {t.bg_secondary};
+            background: {_input_bg(t)};
             border: 1px solid {t.danger_border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 10px;
+            padding: 6px 12px;
         }}
         QLineEdit:focus {{
             border-color: {t.danger};
@@ -66,11 +69,11 @@ def input_success(t: ThemeTokens) -> str:
     """成功态输入框：绿色边框高亮。"""
     return f"""
         QLineEdit {{
-            background: {t.bg_secondary};
+            background: {_input_bg(t)};
             border: 1px solid {t.success_border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 10px;
+            padding: 6px 12px;
         }}
         QLineEdit:focus {{
             border-color: {t.success};
@@ -82,11 +85,11 @@ def input_search(t: ThemeTokens) -> str:
     """搜索框：圆角更大，内边距略调整。"""
     return f"""
         QLineEdit {{
-            background: {t.bg_secondary};
+            background: {_input_bg(t)};
             border: 1px solid {t.border};
-            border-radius: 16px;
+            border-radius: 17px;
             color: {t.text_primary};
-            padding: 5px 14px;
+            padding: 6px 16px;
             selection-background-color: {t.selection_bg};
         }}
         QLineEdit:focus {{

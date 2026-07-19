@@ -14,20 +14,19 @@ def _banner_base(bg: str, border: str, color: str) -> str:
             background: {bg};
             border: 1px solid {border};
             color: {color};
-            border-radius: 9px;
-            padding: 7px 12px;
+            border-radius: 10px;
+            padding: 8px 14px;
             font-size: 12px;
         }}
     """
 
 
 def banner_info(t: ThemeTokens) -> str:
-    """信息横幅（蓝色强调）。"""
-    return _banner_base(
-        bg=t.accent_soft,
-        border=t.accent,
-        color=t.accent,
-    )
+    """信息横幅（品牌色）。"""
+    c = t.comp
+    if c is not None:
+        return _banner_base(c.banner_info_bg, c.banner_info_border, c.banner_info_text)
+    return _banner_base(t.accent_soft, t.accent, t.accent)
 
 
 def banner_success(t: ThemeTokens) -> str:

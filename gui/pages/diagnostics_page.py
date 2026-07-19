@@ -115,9 +115,18 @@ class DiagnosticsPage(QWidget):
         return ""
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
+        # 横版宽窗：内容列居中限宽
+        from gui.utils.layout import wrap_center_column
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        page = QWidget()
+        outer.addWidget(wrap_center_column(page, max_width=960))
+
+        root = QVBoxLayout(page)
+        root.setContentsMargins(24, 22, 24, 22)
+        root.setSpacing(14)
 
         # 标题行
         header = QHBoxLayout()
@@ -164,19 +173,19 @@ class DiagnosticsPage(QWidget):
     def _summary_style(self, state: str) -> str:
         v = self._theme_vars or {}
         if state == "success":
-            color = v.get("success", "#3fb950")
+            color = v.get("success", "#26a269")
             bg = v.get("success_bg", "#0f2d1a")
-            border = v.get("success_border", "#3fb95040")
+            border = v.get("success_border", "#26a26940")
         elif state == "warning":
-            color = v.get("warning", "#e3b341")
+            color = v.get("warning", "#c77d0a")
             bg = v.get("warning_bg", "#2d2200")
-            border = v.get("warning_border", "#e3b34140")
+            border = v.get("warning_border", "#c77d0a40")
         elif state == "error":
-            color = v.get("danger", "#f85149")
+            color = v.get("danger", "#e5484d")
             bg = v.get("danger_bg", "#3d1a1a")
-            border = v.get("danger_border", "#f8514940")
+            border = v.get("danger_border", "#e5484d40")
         else:
-            color = v.get("text_secondary", "#8b949e")
+            color = v.get("text_secondary", "#8a91a5")
             bg = v.get("bg_secondary", "#161b22")
             border = v.get("border", "#30363d")
         return (
@@ -265,10 +274,10 @@ class DiagnosticsPage(QWidget):
 
     def _result_color(self, result: ReadinessCheckResult) -> str:
         if result.passed:
-            return self._theme_vars.get("success", "#3fb950")
+            return self._theme_vars.get("success", "#26a269")
         if result.blocking:
-            return self._theme_vars.get("danger", "#f85149")
-        return self._theme_vars.get("warning", "#e3b341")
+            return self._theme_vars.get("danger", "#e5484d")
+        return self._theme_vars.get("warning", "#c77d0a")
 
     def _on_progress(self, key: str, label_key: str, index: int, total: int):
         self._running_progress = (key, label_key, index, total)

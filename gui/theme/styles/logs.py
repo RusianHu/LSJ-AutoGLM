@@ -15,11 +15,11 @@ def log_console(t: ThemeTokens) -> str:
         QPlainTextEdit, QTextEdit {{
             background: {t.bg_console};
             border: 1px solid {t.border};
-            border-radius: 8px;
+            border-radius: 10px;
             color: {t.text_primary};
-            font-family: 'Consolas', 'Courier New', monospace;
+            font-family: 'Cascadia Mono', 'Consolas', 'Courier New', monospace;
             font-size: 12px;
-            padding: 6px;
+            padding: 8px;
             selection-background-color: {t.selection_bg};
             selection-color: {t.text_primary};
         }}

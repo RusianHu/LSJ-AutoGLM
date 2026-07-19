@@ -548,9 +548,18 @@ class SettingsPage(QWidget):
     # ================================================================
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
+        # 横版宽窗：整页内容列居中限宽（标题/滚动区/底部按钮对齐）
+        from gui.utils.layout import wrap_center_column
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        page = QWidget()
+        outer.addWidget(wrap_center_column(page, max_width=960))
+
+        root = QVBoxLayout(page)
+        root.setContentsMargins(24, 22, 24, 18)
+        root.setSpacing(14)
 
         self._title_lbl = QLabel(self._t("page.settings.title"))
         self._title_lbl.setProperty("role", "pageTitle")
@@ -571,10 +580,10 @@ class SettingsPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setStyleSheet("QScrollArea { border:none; }")
+        scroll.setStyleSheet("QScrollArea { border:none; background:transparent; }")
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setContentsMargins(0, 0, 8, 0)
         scroll_layout.setSpacing(16)
         scroll.setWidget(scroll_widget)
         root.addWidget(scroll, 1)
@@ -836,25 +845,29 @@ class SettingsPage(QWidget):
         hint.setWordWrap(True)
         outer.addWidget(hint)
 
-        # 卡片列表：竖版窄窗下纵向堆叠
+        # 卡片列表：横版下双列网格铺开
         if not self._config:
             return group
 
         presets = [p for p in self._config.CHANNEL_PRESETS if p["id"] != "custom"]
         grid_widget = QWidget()
-        grid_layout = QVBoxLayout(grid_widget)
+        grid_layout = QGridLayout(grid_widget)
         grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setSpacing(10)
+        grid_layout.setHorizontalSpacing(10)
+        grid_layout.setVerticalSpacing(10)
 
         self._preset_cards.clear()
-        for preset in presets:
+        for index, preset in enumerate(presets):
             # 读取该预设在 .env 中的真实模型名（本地预设等有专用字段）
             resolved_model = self._config.get_preset_model(preset)
             card = _PresetCard(preset, resolved_model=resolved_model, translator=self._t)
             card.apply_tokens(self._theme_tokens)
             card.mousePressEvent = lambda e, p=preset, c=card: self._on_preset_card_clicked(p, c)
-            grid_layout.addWidget(card)
+            row, col = divmod(index, 2)
+            grid_layout.addWidget(card, row, col)
             self._preset_cards.append(card)
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
 
         outer.addWidget(grid_widget)
 

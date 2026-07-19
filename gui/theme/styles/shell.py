@@ -4,9 +4,9 @@ gui/theme/styles/shell.py - 壳层全局 QSS 生成
 
 只负责真正适合全局化的部分：
   - 窗口/Widget 基础背景与文字
-  - 导航区
-  - 滚动条（悬浮式细滚动条，hover 加粗提亮）
-  - GroupBox 框架
+  - 侧边栏容器
+  - 滚动条（悬浮式细滚动条，hover 提亮）
+  - GroupBox（卡片式分区：标题置于卡片内部左上角）
   - QTabWidget（pill 风格 TabBar）
   - QLabel 语义 role
   - QSplitter
@@ -28,23 +28,33 @@ from gui.theme.tokens import ThemeTokens
 
 def shell_global_qss(t: ThemeTokens) -> str:
     """生成完整的全局壳层 QSS。"""
-    nav_grad = (
-        "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-        f"stop:0 {t.bg_nav}, stop:1 {t.bg_main})"
-    )
     return f"""
-        /* ====== 基础 ====== */
-        QMainWindow, QWidget {{
+        /* ====== 基础 ======
+           背景由 GlobalShellStyler 设置的 QPalette 驱动；
+           这里不放全局 QWidget background，避免其在祖先样式表
+           级联中压过 QLabel 透明背景，给标签涂出底块。 */
+        QMainWindow {{
             background: {t.bg_main};
+        }}
+        QWidget {{
             color: {t.text_primary};
-            font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+            font-family: 'Segoe UI Variable Display', 'Segoe UI', 'Microsoft YaHei UI',
+                         'Microsoft YaHei', sans-serif;
             font-size: 13px;
         }}
-        QWidget#NavPanel {{
-            background: {nav_grad};
+        QWidget#SidebarPanel {{
+            background: {t.bg_nav};
+            border-right: 1px solid {t.sep_color};
         }}
         QStackedWidget#ContentStack {{
             background: {t.bg_main};
+        }}
+        QScrollArea {{
+            background: transparent;
+            border: none;
+        }}
+        QAbstractScrollArea > QWidget > QWidget {{
+            background: transparent;
         }}
 
         /* ====== 工具提示 ====== */
@@ -53,26 +63,26 @@ def shell_global_qss(t: ThemeTokens) -> str:
             color: {t.text_primary};
             border: 1px solid {t.border};
             border-radius: 6px;
-            padding: 5px 8px;
+            padding: 6px 10px;
             font-size: 12px;
         }}
 
         /* ====== 滚动条（悬浮式）====== */
         QScrollBar:vertical {{
             background: transparent;
-            width: 10px;
+            width: 8px;
             margin: 2px;
         }}
         QScrollBar::handle:vertical {{
             background: {t.border};
             border-radius: 3px;
-            min-height: 32px;
-            margin: 0 2px;
+            min-height: 36px;
+            margin: 0 1px;
         }}
         QScrollBar::handle:vertical:hover {{
             background: {t.border_hover};
             margin: 0;
-            border-radius: 5px;
+            border-radius: 4px;
         }}
         QScrollBar::add-line, QScrollBar::sub-line {{
             height: 0;
@@ -83,40 +93,45 @@ def shell_global_qss(t: ThemeTokens) -> str:
         }}
         QScrollBar:horizontal {{
             background: transparent;
-            height: 10px;
+            height: 8px;
             margin: 2px;
         }}
         QScrollBar::handle:horizontal {{
             background: {t.border};
             border-radius: 3px;
-            min-width: 32px;
-            margin: 2px 0;
+            min-width: 36px;
+            margin: 1px 0;
         }}
         QScrollBar::handle:horizontal:hover {{
             background: {t.border_hover};
             margin: 0;
-            border-radius: 5px;
+            border-radius: 4px;
         }}
 
         /* ====== 输入框 fallback ====== */
         QLineEdit, QTextEdit, QPlainTextEdit {{
-            background: {t.bg_secondary};
+            background: {t.comp.input_bg if t.comp else t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 10px;
+            padding: 6px 12px;
             selection-background-color: {t.selection_bg};
+            selection-color: {t.text_primary};
         }}
         QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover {{
             border-color: {t.border_hover};
         }}
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
             border: 1px solid {t.accent};
-            background: {t.bg_main};
         }}
         QLineEdit[readOnly="true"] {{
             background: {t.bg_elevated};
             color: {t.text_muted};
+        }}
+        QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {{
+            background: {t.bg_elevated};
+            color: {t.text_muted};
+            border-color: {t.border};
         }}
 
         /* ====== 标签语义 ====== */
@@ -126,8 +141,9 @@ def shell_global_qss(t: ThemeTokens) -> str:
         }}
         QLabel[role="pageTitle"] {{
             color: {t.text_primary};
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 700;
+            letter-spacing: 0.2px;
         }}
         QLabel[role="muted"] {{
             color: {t.text_secondary};
@@ -141,14 +157,14 @@ def shell_global_qss(t: ThemeTokens) -> str:
             background: {t.bg_elevated};
             border: 1px solid {t.border};
             border-radius: 12px;
-            padding: 10px 12px;
+            padding: 10px 14px;
         }}
         QLabel[role="warningBanner"] {{
             background: {t.warning_bg};
             border: 1px solid {t.warning_border};
             color: {t.warning};
-            border-radius: 8px;
-            padding: 6px 10px;
+            border-radius: 10px;
+            padding: 7px 12px;
             font-size: 12px;
         }}
         QLabel[role="statusMeta"] {{
@@ -156,31 +172,35 @@ def shell_global_qss(t: ThemeTokens) -> str:
             font-size: 12px;
         }}
 
-        /* ====== GroupBox ====== */
+        /* ====== GroupBox（卡片式分区）====== */
         QGroupBox {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
             border-radius: 14px;
             color: {t.text_primary};
             font-weight: 600;
-            margin-top: 14px;
-            padding-top: 14px;
+            margin-top: 0px;
+            padding: 8px 8px 8px 8px;
+            padding-top: 34px;
         }}
         QGroupBox::title {{
-            subcontrol-origin: margin;
+            subcontrol-origin: border;
+            subcontrol-position: top left;
             left: 16px;
-            padding: 0 6px;
+            top: 12px;
+            padding: 0;
             color: {t.text_secondary};
             font-size: 12px;
-            letter-spacing: 0.4px;
+            font-weight: 700;
+            letter-spacing: 1.2px;
         }}
 
         /* ====== TabWidget（pill 风格）====== */
         QTabWidget::pane {{
             background: {t.bg_secondary};
             border: 1px solid {t.border};
-            border-radius: 10px;
-            top: 6px;
+            border-radius: 12px;
+            top: 8px;
         }}
         QTabBar {{
             qproperty-drawBase: 0;
@@ -190,15 +210,15 @@ def shell_global_qss(t: ThemeTokens) -> str:
             color: {t.text_muted};
             border: 1px solid transparent;
             border-radius: 8px;
-            padding: 6px 14px;
+            padding: 6px 16px;
             margin-right: 4px;
-            font-size: 13px;
+            font-size: 12px;
+            font-weight: 600;
         }}
         QTabBar::tab:selected {{
             background: {t.accent_soft};
             color: {t.accent};
             border-color: transparent;
-            font-weight: 600;
         }}
         QTabBar::tab:hover:!selected {{
             background: {t.nav_hover_bg};
@@ -207,28 +227,29 @@ def shell_global_qss(t: ThemeTokens) -> str:
 
         /* ====== Splitter ====== */
         QSplitter::handle {{
-            background: {t.border};
-            border-radius: 999px;
+            background: transparent;
+            border-radius: 2px;
         }}
         QSplitter::handle:hover {{
-            background: {t.accent};
+            background: {t.accent_soft};
         }}
         QSplitter::handle:horizontal {{
-            width: 3px;
-            margin: 14px 0;
+            width: 5px;
+            margin: 20px 0;
         }}
         QSplitter::handle:vertical {{
-            height: 3px;
-            margin: 0 14px;
+            height: 5px;
+            margin: 0 20px;
         }}
 
         /* ====== ComboBox ====== */
         QComboBox {{
             background: {t.bg_elevated};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 6px 10px;
+            padding: 6px 12px;
+            min-height: 20px;
         }}
         QComboBox:hover {{
             border-color: {t.border_hover};
@@ -239,7 +260,18 @@ def shell_global_qss(t: ThemeTokens) -> str:
         }}
         QComboBox::drop-down {{
             border: none;
-            width: 22px;
+            width: 24px;
+        }}
+        QComboBox::down-arrow {{
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid {t.text_muted};
+            margin-right: 10px;
+        }}
+        QComboBox::down-arrow:hover {{
+            border-top-color: {t.text_secondary};
         }}
         QComboBox QAbstractItemView {{
             background: {t.bg_elevated};
@@ -251,11 +283,16 @@ def shell_global_qss(t: ThemeTokens) -> str:
             padding: 4px;
             outline: none;
         }}
+        QComboBox QAbstractItemView::item {{
+            padding: 6px 10px;
+            min-height: 24px;
+            border-radius: 6px;
+        }}
 
         /* ====== CheckBox ====== */
         QCheckBox {{
             color: {t.text_secondary};
-            spacing: 7px;
+            spacing: 8px;
             background: transparent;
         }}
         QCheckBox:hover {{
@@ -266,7 +303,7 @@ def shell_global_qss(t: ThemeTokens) -> str:
             height: 16px;
             border: 1px solid {t.border_hover};
             border-radius: 5px;
-            background: {t.bg_secondary};
+            background: {t.comp.input_bg if t.comp else t.bg_secondary};
         }}
         QCheckBox::indicator:hover {{
             border-color: {t.accent};
@@ -279,24 +316,28 @@ def shell_global_qss(t: ThemeTokens) -> str:
             background: {t.bg_elevated};
             border-color: {t.border};
         }}
+        QCheckBox:disabled {{
+            color: {t.text_muted};
+        }}
 
         /* ====== 按钮基础 fallback（仅保留无任何 setStyleSheet 覆盖时的默认外观）====== */
         /* variant 语义按钮应使用 ComponentStyleRegistry 或直接调用 styles/buttons.py 函数 */
         QPushButton {{
-            background-color: {t.bg_elevated};
+            background-color: {t.bg_btn};
             border: 1px solid {t.border};
-            border-radius: 9px;
+            border-radius: 10px;
             color: {t.text_primary};
-            padding: 7px 14px;
+            padding: 6px 14px;
             font-size: 13px;
+            font-weight: 500;
         }}
         QPushButton:hover {{
-            background-color: {t.bg_btn};
+            background-color: {t.bg_elevated};
             border-color: {t.border_hover};
         }}
         QPushButton:pressed {{
             background-color: {t.bg_secondary};
-            padding-top: 8px;
+            padding-top: 7px;
         }}
         QPushButton:disabled {{
             background-color: {t.bg_elevated};

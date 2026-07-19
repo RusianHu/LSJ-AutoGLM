@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""主窗口 - 竖版布局：顶部导航条 + 纵向内容区"""
+"""主窗口 - 横版布局：左侧边栏（品牌/导航/主题切换）+ 右侧内容区"""
 
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -18,12 +18,13 @@ from PySide6.QtWidgets import (
 )
 
 from gui.widgets.nav_button import NavButton
+from gui.theme.icons import fa_family, icon_char
 from gui.theme.manager import ThemeManager
 from gui.theme.preferences import ThemePreference
 from gui.theme.global_shell import GlobalShellStyler
 from gui.theme.page_adapter import PageThemeAdapter
 from gui.theme.tokens import ThemeTokens
-from gui.theme.effects import apply_bar_shadow, play_page_fade
+from gui.theme.effects import play_page_fade
 from gui.i18n.manager import I18nManager
 from gui.i18n.page_adapter import PageI18nAdapter
 
@@ -31,7 +32,8 @@ from gui.i18n.page_adapter import PageI18nAdapter
 class MainWindow(QMainWindow):
     """
     主窗口。
-    布局（竖版）：顶部导航条（Logo/主题/导航按钮）+ 下方内容区（StackedWidget）。
+    布局（横版）：左侧固定宽度侧边栏（品牌 / 纵向导航 / 主题切换 / 版本）
+    + 右侧内容区（StackedWidget）。
 
     主题系统：
       - 由 ThemeManager 统一管理主题解析与广播
@@ -40,8 +42,9 @@ class MainWindow(QMainWindow):
       - MainWindow.apply_theme 作为兼容入口，内部委托给 ThemeManager
     """
 
-    MIN_WIDTH = 480
-    MIN_HEIGHT = 720
+    MIN_WIDTH = 1024
+    MIN_HEIGHT = 660
+    SIDEBAR_WIDTH = 216
 
     def __init__(self, services: dict, parent=None):
         """
@@ -82,11 +85,11 @@ class MainWindow(QMainWindow):
         self._app_version = (
             QApplication.instance().applicationVersion().strip()
             if QApplication.instance() and QApplication.instance().applicationVersion()
-            else "1.0.4"
+            else "1.0.9"
         )
         self.setWindowTitle(self._i18n_manager.t("shell.window.title"))
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
-        self.resize(560, 960)
+        self.resize(1360, 850)
         self._build_ui()
         self._connect_signals()
 
@@ -98,111 +101,108 @@ class MainWindow(QMainWindow):
     def _build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        root_layout = QHBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # 顶部导航条
-        self._nav_panel = self._build_nav()
+        # 左侧边栏
+        self._nav_panel = self._build_sidebar()
         root_layout.addWidget(self._nav_panel)
 
-        # 分隔线
-        self._sep = QFrame()
-        self._sep.setObjectName("MainSeparator")
-        self._sep.setFrameShape(QFrame.HLine)
-        self._sep.setStyleSheet("background:#1e2330; border:none; max-height:1px;")
-        root_layout.addWidget(self._sep)
-
-        # 下方内容区
+        # 右侧内容区
         self._stack = QStackedWidget()
         self._stack.setObjectName("ContentStack")
-        self._stack.setStyleSheet("background:#0d1117;")
         root_layout.addWidget(self._stack, 1)
 
         # 延迟导入页面（避免循环依赖）
         self._init_pages()
 
-    def _build_nav(self) -> QWidget:
+    def _build_sidebar(self) -> QWidget:
         nav = QWidget()
-        nav.setObjectName("NavPanel")
-        nav.setStyleSheet("background:#13192a;")
+        nav.setObjectName("SidebarPanel")
+        nav.setFixedWidth(self.SIDEBAR_WIDTH)
         layout = QVBoxLayout(nav)
-        layout.setContentsMargins(14, 10, 14, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 18, 12, 14)
+        layout.setSpacing(4)
 
-        # 第一行：Logo + 版本号 + 主题切换器
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
+        # ---- 品牌区：图标 + 名称 ----
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(6, 0, 0, 0)
+        brand_row.setSpacing(9)
+
+        self._brand_icon_lbl = QLabel(icon_char("brand"))
+        self._brand_icon_lbl.setFixedWidth(24)
+        self._brand_icon_lbl.setAlignment(Qt.AlignCenter)
+        brand_row.addWidget(self._brand_icon_lbl)
+
+        brand_text_col = QVBoxLayout()
+        brand_text_col.setContentsMargins(0, 0, 0, 0)
+        brand_text_col.setSpacing(0)
 
         self._logo_lbl = QLabel("LSJ AutoGLM")
         self._logo_lbl.setFont(QFont("Segoe UI", 12, QFont.Bold))
-        self._logo_lbl.setStyleSheet("color:#529bf5; padding:2px 4px;")
-        top_row.addWidget(self._logo_lbl)
+        brand_text_col.addWidget(self._logo_lbl)
 
         _t = self._i18n_manager.t
         self._ver_lbl = QLabel(_t("shell.footer.version", version=self._app_version))
-        self._ver_lbl.setStyleSheet("color:#3a4560; font-size:10px; padding:4px 2px 0 0;")
-        top_row.addWidget(self._ver_lbl)
+        brand_text_col.addWidget(self._ver_lbl)
+        brand_row.addLayout(brand_text_col, 1)
+        layout.addLayout(brand_row)
 
-        top_row.addStretch(1)
+        layout.addSpacing(18)
 
-        self._theme_switcher_widget = self._build_theme_switcher()
-        top_row.addWidget(self._theme_switcher_widget)
-        layout.addLayout(top_row)
-
-        # 第二行：横向导航按钮
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
+        # ---- 纵向导航按钮 ----
         self._btn_group = QButtonGroup(self)
         self._btn_group.setExclusive(True)
 
-        # (key, icon, i18n_key)
+        # (key, icon_name, i18n_key)
         nav_items = [
-            ("dashboard", "[=]", "shell.nav.dashboard"),
-            ("device",    "[D]", "shell.nav.device"),
-            ("history",   "[H]", "shell.nav.history"),
-            ("settings",  "[S]", "shell.nav.settings"),
-            ("diag",      "[?]", "shell.nav.diagnostics"),
+            ("dashboard", "dashboard", "shell.nav.dashboard"),
+            ("device",    "device",    "shell.nav.device"),
+            ("history",   "history",   "shell.nav.history"),
+            ("settings",  "settings",  "shell.nav.settings"),
+            ("diag",      "diag",      "shell.nav.diagnostics"),
         ]
         self._nav_items_meta = nav_items  # 保留供 retranslate 使用
         self._nav_buttons = {}
-        for key, icon, i18n_key in nav_items:
-            btn = NavButton(icon, _t(i18n_key))
+        for key, icon_name, i18n_key in nav_items:
+            btn = NavButton(icon_name, _t(i18n_key))
             self._btn_group.addButton(btn)
-            btn_row.addWidget(btn, 1)
+            layout.addWidget(btn)
             self._nav_buttons[key] = btn
             btn.setProperty("i18n_key", i18n_key)
-        layout.addLayout(btn_row)
+
+        layout.addStretch(1)
+
+        # ---- 底部：主题切换器 ----
+        self._theme_switcher_widget = self._build_theme_switcher()
+        layout.addWidget(self._theme_switcher_widget)
 
         return nav
 
     def _build_theme_switcher(self) -> QWidget:
-        """构建顶部主题切换器（三段紧凑 pill 按钮组）。"""
+        """构建侧边栏底部主题切换器（三段等宽 pill 按钮组）。"""
         _t = self._i18n_manager.t
 
         container = QWidget()
         container.setObjectName("ThemeSwitcherBar")
-        outer = QHBoxLayout(container)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(2, 0, 2, 0)
         outer.setSpacing(6)
 
-        # 小说明标签（紧凑模式下隐藏，仅保留供 i18n/主题刷新引用）
+        # 小说明标签（保留供 i18n/主题刷新引用，紧凑模式下隐藏）
         self._theme_hint_lbl = QLabel(_t("shell.theme_switcher.label"))
         self._theme_hint_lbl.setObjectName("ThemeSwitcherHint")
-        self._theme_hint_lbl.setStyleSheet(
-            "color:#3a4560; font-size:10px; font-weight:600; background: transparent; border: none;"
-        )
         self._theme_hint_lbl.hide()
         outer.addWidget(self._theme_hint_lbl)
 
         # Pill 容器（三个按钮的外壳）
         pill = QFrame()
         pill.setObjectName("ThemeSwitcherPill")
-        pill.setFixedHeight(32)
-        pill.setStyleSheet("background:#1a2035; border:1px solid #283247; border-radius:10px;")
+        pill.setFixedHeight(34)
         h = QHBoxLayout(pill)
         h.setContentsMargins(3, 3, 3, 3)
-        h.setSpacing(3)
+        h.setSpacing(2)
 
         self._theme_btns: dict[str, QPushButton] = {}
         self._theme_btn_meta = [
@@ -210,41 +210,18 @@ class MainWindow(QMainWindow):
             ("dark", "shell.theme_switcher.button.dark", "shell.theme_switcher.dark"),
             ("light", "shell.theme_switcher.button.light", "shell.theme_switcher.light"),
         ]
-        _default_btn_style = """
-            QPushButton {
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 8px;
-                color: #66778d;
-                font-size: 11px;
-                font-weight: 600;
-                padding: 0 10px;
-                min-height: 24px;
-            }
-            QPushButton:hover {
-                background: #243050;
-                border-color: #31405c;
-                color: #dbe7f5;
-            }
-            QPushButton:checked {
-                background: #529bf5;
-                border-color: #529bf5;
-                color: #ffffff;
-            }
-        """
         for mode, text_key, tooltip_key in self._theme_btn_meta:
             btn = QPushButton(_t(text_key))
-            btn.setFixedHeight(24)
+            btn.setFixedHeight(28)
             btn.setMinimumWidth(0)
-            btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             btn.setCheckable(True)
             btn.setAutoExclusive(True)
             btn.setToolTip(_t(tooltip_key))
             btn.setCursor(Qt.PointingHandCursor)
             btn.setProperty("themeSwitcherMode", mode)
-            btn.setStyleSheet(_default_btn_style)
             btn.clicked.connect(lambda checked, m=mode: self._on_theme_btn_clicked(m))
-            h.addWidget(btn)
+            h.addWidget(btn, 1)
             self._theme_btns[mode] = btn
 
         outer.addWidget(pill)
@@ -284,11 +261,12 @@ class MainWindow(QMainWindow):
             return
         if hasattr(self, "_theme_pill"):
             self._theme_pill.setStyleSheet(
-                f"background:{tokens.bg_elevated}; border:1px solid {tokens.border}; border-radius:10px;"
+                f"QFrame#ThemeSwitcherPill {{ background:{tokens.bg_elevated};"
+                f" border:1px solid {tokens.border}; border-radius:11px; }}"
             )
         if hasattr(self, "_theme_hint_lbl"):
             self._theme_hint_lbl.setStyleSheet(
-                f"color:{tokens.text_secondary}; font-size:10px; font-weight:600;"
+                f"color:{tokens.text_muted}; font-size:10px; font-weight:600;"
                 " background: transparent; border: none;"
             )
         _btn_style = f"""
@@ -296,31 +274,27 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 8px;
-                color: {tokens.text_secondary};
+                color: {tokens.text_muted};
                 font-size: 11px;
                 font-weight: 600;
-                padding: 0 10px;
+                padding: 0 4px;
                 min-height: 24px;
             }}
             QPushButton:hover {{
-                background: {tokens.bg_secondary};
-                border-color: {tokens.border};
+                background: {tokens.nav_hover_bg};
                 color: {tokens.text_primary};
             }}
             QPushButton:pressed {{
                 background: {tokens.accent_soft};
-                border-color: {tokens.accent};
                 color: {tokens.accent};
             }}
             QPushButton:checked {{
-                background: {tokens.accent};
-                border: 1px solid {tokens.accent};
-                color: #ffffff;
+                background: {tokens.bg_secondary if tokens.is_light() else tokens.bg_btn};
+                border: 1px solid {tokens.border};
+                color: {tokens.accent};
             }}
             QPushButton:checked:hover {{
-                background: {tokens.accent_hover};
-                border-color: {tokens.accent_hover};
-                color: #ffffff;
+                color: {tokens.accent_hover};
             }}
         """
         for btn in self._theme_btns.values():
@@ -491,7 +465,7 @@ class MainWindow(QMainWindow):
     def _on_tokens_changed(self, tokens: ThemeTokens):
         """
         ThemeManager.theme_changed 回调。
-        负责：壳层全局 QSS + 导航组件 + 分隔线等壳层局部样式。
+        负责：壳层全局 QSS + 导航组件 + 侧边栏局部样式。
         页面分发由 PageThemeAdapter 处理。
         """
         # 应用全局壳层 QSS
@@ -499,28 +473,32 @@ class MainWindow(QMainWindow):
 
         # 更新壳层局部内联样式
         if hasattr(self, "_nav_panel"):
-            nav_grad = (
-                "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
-                f"stop:0 {tokens.bg_nav}, stop:1 {tokens.bg_main})"
-            )
-            self._nav_panel.setStyleSheet(f"background:{nav_grad};")
-            apply_bar_shadow(self._nav_panel, tokens)
-        if hasattr(self, "_sep"):
-            self._sep.setStyleSheet(
-                f"background:{tokens.sep_color}; border:none; max-height:1px;"
+            self._nav_panel.setStyleSheet(
+                f"QWidget#SidebarPanel {{ background:{tokens.bg_nav};"
+                f" border-right:1px solid {tokens.sep_color}; }}"
             )
         if hasattr(self, "_stack"):
-            self._stack.setStyleSheet(f"background:{tokens.bg_main};")
+            # 必须使用作用域选择器：裸声明会作为通用规则级联到栈内
+            # 所有后代控件（标签/复选框会被涂上底色块）
+            self._stack.setStyleSheet(
+                f"QStackedWidget#ContentStack {{ background:{tokens.bg_main}; }}"
+            )
+        if hasattr(self, "_brand_icon_lbl"):
+            family = fa_family()
+            icon_css = f"font-family:'{family}'; font-size:17px;" if family else "font-size:17px;"
+            self._brand_icon_lbl.setStyleSheet(
+                f"color:{tokens.accent}; background:transparent; {icon_css}"
+            )
         if hasattr(self, "_logo_lbl"):
             self._logo_lbl.setStyleSheet(
-                f"color:{tokens.accent}; padding:2px 4px;"
+                f"color:{tokens.text_primary}; background:transparent; letter-spacing:0.3px;"
             )
         if hasattr(self, "_ver_lbl"):
             self._ver_lbl.setStyleSheet(
-                f"color:{tokens.text_muted}; font-size:10px; padding:4px 2px 0 0;"
+                f"color:{tokens.text_muted}; font-size:10px; background:transparent;"
             )
 
-        # 更新底部主题切换器样式并同步选中态
+        # 更新主题切换器样式并同步选中态
         self._apply_theme_switcher_tokens(tokens)
         self._sync_theme_switcher()
 

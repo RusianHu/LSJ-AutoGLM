@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-工作台页面（竖版布局）。
+工作台页面（横版布局）。
 
-布局：
-  顶部控制区（渠道 + 任务输入 + 控制按钮 + 追加指令 + 状态/就绪条）
-  └── 主工作区 Tab（纵向填充剩余空间）：
-      - 设备镜像
-      - 日志与事件
-      - 工作台概览（动作策略 / 渠道 / 就绪状态卡片）
+布局（QSplitter 左右分栏）：
+  左列：控制区（渠道 + 任务输入 + 控制按钮 + 追加指令 + 状态/就绪条）
+        └── 日志/概览 Tab（纵向填充剩余空间）
+  右列：设备镜像面板（常驻显示，不再与日志抢占同一块空间）
 """
 
 import os
@@ -36,6 +34,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
+    QSplitter,
     QStackedLayout,
     QTabWidget,
     QVBoxLayout,
@@ -66,23 +65,23 @@ from gui.theme.styles.logs import log_console
 
 # 任务状态 -> 颜色（文字由 i18n 提供）
 STATE_COLORS = {
-    TaskState.IDLE:      "#8b949e",
-    TaskState.STARTING:  "#e3b341",
-    TaskState.RUNNING:   "#3fb950",
-    TaskState.PAUSED:    "#e3b341",
-    TaskState.STOPPING:  "#f85149",
-    TaskState.COMPLETED: "#3fb950",
-    TaskState.FAILED:    "#f85149",
-    TaskState.CANCELLED: "#8b949e",
+    TaskState.IDLE:      "#8a91a5",
+    TaskState.STARTING:  "#c77d0a",
+    TaskState.RUNNING:   "#26a269",
+    TaskState.PAUSED:    "#c77d0a",
+    TaskState.STOPPING:  "#e5484d",
+    TaskState.COMPLETED: "#26a269",
+    TaskState.FAILED:    "#e5484d",
+    TaskState.CANCELLED: "#8a91a5",
 }
 
 # 镜像状态 -> 颜色（文字由 i18n 提供）
 MIRROR_STATE_COLORS = {
-    MirrorState.IDLE:     "#8b949e",
-    MirrorState.STARTING: "#e3b341",
-    MirrorState.RUNNING:  "#3fb950",
-    MirrorState.ERROR:    "#f85149",
-    MirrorState.STOPPED:  "#8b949e",
+    MirrorState.IDLE:     "#8a91a5",
+    MirrorState.STARTING: "#c77d0a",
+    MirrorState.RUNNING:  "#26a269",
+    MirrorState.ERROR:    "#e5484d",
+    MirrorState.STOPPED:  "#8a91a5",
 }
 
 # --- 向后兼容别名（防止导入方报错）---
@@ -250,9 +249,9 @@ class DashboardPage(QWidget):
         self._theme_mode = "dark"
         self._theme_tokens = resolve_theme_tokens(self._theme_mode)
         self._theme_vars = self._theme_tokens.to_legacy_dict()
-        self._last_task_status = (self._t("state.idle"), "#8b949e")
-        self._last_device_status = (self._t("page.dashboard.status.no_device"), "#8b949e")
-        self._last_mirror_status = (self._t("mirror.state.idle"), "#8b949e")
+        self._last_task_status = (self._t("state.idle"), "#8a91a5")
+        self._last_device_status = (self._t("page.dashboard.status.no_device"), "#8a91a5")
+        self._last_mirror_status = (self._t("mirror.state.idle"), "#8a91a5")
         self._last_result_color = ""
         self._last_readiness_state = (self._t("page.dashboard.readiness.checking"), "info")
         self._last_readiness_tooltip = self._t("page.dashboard.readiness.checking")
@@ -334,31 +333,47 @@ class DashboardPage(QWidget):
     # ================================================================
 
     def _build_ui(self):
-        root = QVBoxLayout(self)
-        root.setContentsMargins(14, 12, 14, 12)
-        root.setSpacing(10)
-
-        root.addWidget(self._build_hero_panel())
+        root = QHBoxLayout(self)
+        root.setContentsMargins(16, 14, 16, 14)
+        root.setSpacing(0)
 
         mirror_panel = self._build_mirror_panel()
         log_panel = self._build_log_panel()
         overview_panel = self._build_workspace_overview()
 
-        # 竖版主工作区：镜像 / 日志 / 概览以 Tab 纵向复用同一块空间
+        # 左列：控制区 + 日志/概览 Tab
+        left_col = QWidget()
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(0, 0, 12, 0)
+        left_layout.setSpacing(12)
+        left_layout.addWidget(self._build_hero_panel())
+
         self._main_tabs = QTabWidget()
         self._main_tabs.setObjectName("DashboardMainTabs")
         self._main_tabs.setDocumentMode(True)
-        self._main_tabs.addTab(mirror_panel, self._t("page.dashboard.tab.mirror"))
         self._main_tabs.addTab(log_panel, self._t("page.dashboard.tab.logs"))
         self._main_tabs.addTab(overview_panel, self._t("page.dashboard.tab.overview"))
-        root.addWidget(self._main_tabs, 1)
+        left_layout.addWidget(self._main_tabs, 1)
+
+        # 横版主工作区：左（控制+日志）右（镜像常驻）
+        self._main_splitter = QSplitter(Qt.Horizontal)
+        self._main_splitter.setObjectName("DashboardSplitter")
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.addWidget(left_col)
+        self._main_splitter.addWidget(mirror_panel)
+        left_col.setMinimumWidth(480)
+        mirror_panel.setMinimumWidth(320)
+        self._main_splitter.setStretchFactor(0, 3)
+        self._main_splitter.setStretchFactor(1, 2)
+        self._main_splitter.setSizes([780, 520])
+        root.addWidget(self._main_splitter)
 
         self._refresh_workspace_overview()
 
     def _switch_main_tab_to_logs(self):
         """任务启动时自动切到日志页，便于观察执行过程。"""
         if hasattr(self, "_main_tabs"):
-            self._main_tabs.setCurrentIndex(1)
+            self._main_tabs.setCurrentIndex(0)
 
     def _build_hero_panel(self) -> QWidget:
         panel = QFrame()
@@ -386,7 +401,8 @@ class DashboardPage(QWidget):
         self._workspace_section_lbl.setObjectName("DashboardWorkspaceSection")
         outer.addWidget(self._workspace_section_lbl)
 
-        cards_column = QVBoxLayout()
+        # 横版布局：三张卡片并排铺开
+        cards_column = QHBoxLayout()
         cards_column.setContentsMargins(0, 0, 0, 0)
         cards_column.setSpacing(12)
 
@@ -406,7 +422,7 @@ class DashboardPage(QWidget):
         self._policy_card._content_layout.addWidget(self._policy_meta_lbl)
         self._policy_card._content_layout.addStretch(1)
         self._policy_card._content_layout.addWidget(self._btn_policy_manage, 0, Qt.AlignLeft)
-        cards_column.addWidget(self._policy_card)
+        cards_column.addWidget(self._policy_card, 1)
 
         self._channel_card = self._create_workspace_card("DashboardChannelCard")
         self._channel_title_lbl = QLabel(self._t("page.dashboard.workspace.card.channel.title"))
@@ -424,7 +440,7 @@ class DashboardPage(QWidget):
         self._channel_card._content_layout.addWidget(self._channel_meta_lbl)
         self._channel_card._content_layout.addStretch(1)
         self._channel_card._content_layout.addWidget(self._btn_channel_settings, 0, Qt.AlignLeft)
-        cards_column.addWidget(self._channel_card)
+        cards_column.addWidget(self._channel_card, 1)
 
         self._readiness_card = self._create_workspace_card("DashboardReadinessCard")
         self._readiness_title_lbl = QLabel(self._t("page.dashboard.workspace.card.readiness.title"))
@@ -442,10 +458,10 @@ class DashboardPage(QWidget):
         self._readiness_card._content_layout.addWidget(self._readiness_meta_lbl)
         self._readiness_card._content_layout.addStretch(1)
         self._readiness_card._content_layout.addWidget(self._btn_readiness_diagnostics, 0, Qt.AlignLeft)
-        cards_column.addWidget(self._readiness_card)
+        cards_column.addWidget(self._readiness_card, 1)
 
-        cards_column.addStretch(1)
         outer.addLayout(cards_column)
+        outer.addStretch(1)
         return panel
 
     def _create_workspace_card(self, object_name: str) -> QFrame:
@@ -520,8 +536,7 @@ class DashboardPage(QWidget):
         )
         if hasattr(self, "_readiness_card"):
             self._readiness_card.setProperty("semantic", semantic)
-            self._readiness_card.style().unpolish(self._readiness_card)
-            self._readiness_card.style().polish(self._readiness_card)
+            self._readiness_card.setStyleSheet(self._workspace_card_style(semantic))
             self._readiness_card.update()
 
     def _open_action_policy_dialog(self) -> None:
@@ -549,19 +564,17 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(8)
 
-        # 第一行：渠道切换下拉框 + 任务开始按钮
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        self._channel_combo = QComboBox()
-        self._channel_combo.setFixedHeight(32)
-        self._populate_channel_combo()
-        self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
-        top_row.addWidget(self._channel_combo, 1)
-        layout.addLayout(top_row)
-
-        # 第二行：任务输入框 + 开始按钮
+        # 第一行（横版命令栏）：渠道下拉框 + 任务输入框 + 开始按钮
         input_row = QHBoxLayout()
         input_row.setSpacing(8)
+
+        self._channel_combo = QComboBox()
+        self._channel_combo.setFixedHeight(34)
+        self._channel_combo.setMinimumWidth(170)
+        self._populate_channel_combo()
+        self._channel_combo.currentIndexChanged.connect(self._on_channel_changed)
+        input_row.addWidget(self._channel_combo)
+
         self._task_input = QLineEdit()
         self._task_input.setPlaceholderText(self._t("page.dashboard.toolbar.task_placeholder"))
         self._task_input.setFixedHeight(34)
@@ -574,7 +587,7 @@ class DashboardPage(QWidget):
         input_row.addWidget(self._btn_start)
         layout.addLayout(input_row)
 
-        # 第三行：运行控制按钮（等宽平铺）
+        # 第二行：运行控制按钮（等宽平铺）
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(8)
 
@@ -679,15 +692,15 @@ class DashboardPage(QWidget):
 
         self._lbl_task_state = self._make_status_chip(
             self._t("page.dashboard.status.label.state"),
-            self._t("state.idle"), "#8b949e"
+            self._t("state.idle"), "#8a91a5"
         )
         self._lbl_device_status = self._make_status_chip(
             self._t("page.dashboard.status.label.device"),
-            self._t("page.dashboard.status.no_device"), "#8b949e"
+            self._t("page.dashboard.status.no_device"), "#8a91a5"
         )
         self._lbl_mirror_status = self._make_status_chip(
             self._t("page.dashboard.status.label.mirror"),
-            self._t("mirror.state.idle"), "#8b949e"
+            self._t("mirror.state.idle"), "#8a91a5"
         )
 
         layout.addWidget(self._lbl_task_state)
@@ -759,20 +772,20 @@ class DashboardPage(QWidget):
         v = self._theme_vars or {}
         if semantic == "success":
             bg = v.get("success_bg", "#0f2d1a")
-            border = v.get("success_border", "#3fb95040")
-            text = v.get("success", "#3fb950")
+            border = v.get("success_border", "#26a26940")
+            text = v.get("success", "#26a269")
         elif semantic == "error":
             bg = v.get("danger_bg", "#3d1a1a")
             border = v.get("danger_border", "#8f2d2b")
-            text = v.get("danger", "#f85149")
+            text = v.get("danger", "#e5484d")
         elif semantic == "warning":
             bg = v.get("warning_bg", "#3d2800")
             border = v.get("warning_border", "#6e4800")
-            text = v.get("warning", "#e3b341")
+            text = v.get("warning", "#c77d0a")
         else:
             bg = v.get("bg_secondary", "#161b22")
             border = v.get("border", "#30363d")
-            text = v.get("text_secondary", "#8b949e")
+            text = v.get("text_secondary", "#8a91a5")
         return (
             f"QFrame#DashboardReadinessBar {{ background:{bg}; border-bottom:1px solid {border}; }}"
             f"QLabel#DashboardReadinessText {{ color:{text}; font-size:12px; }}"
@@ -859,12 +872,12 @@ class DashboardPage(QWidget):
         self._mirror_panel_group = QGroupBox(self._t("page.dashboard.mirror.title"))
         panel = self._mirror_panel_group
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(12, 18, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 4, 10, 10)
+        layout.setSpacing(8)
 
         # 设备信息区
         self._device_info_lbl = QLabel(self._t("page.dashboard.mirror.no_device"))
-        self._device_info_lbl.setStyleSheet("color:#8b949e; font-size:12px; padding:4px;")
+        self._device_info_lbl.setStyleSheet("color:#8a91a5; font-size:12px; padding:4px;")
         self._device_info_lbl.setWordWrap(True)
         layout.addWidget(self._device_info_lbl)
 
@@ -945,7 +958,7 @@ class DashboardPage(QWidget):
         self._takeover_banner = QLabel(self._t("page.dashboard.takeover.banner"))
         self._takeover_banner.setAlignment(Qt.AlignCenter)
         self._takeover_banner.setStyleSheet("""
-            background:#3d2800; color:#e3b341; font-size:12px;
+            background:#3d2800; color:#c77d0a; font-size:12px;
             border:1px solid #6e4800; border-radius:4px; padding:6px;
         """)
         self._takeover_banner.hide()
@@ -968,7 +981,7 @@ class DashboardPage(QWidget):
         self._log_panel_group = QGroupBox(self._t("event.result_summary"))
         panel = self._log_panel_group
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(8, 16, 8, 8)
+        layout.setContentsMargins(8, 2, 8, 8)
         layout.setSpacing(0)
 
         # Token 统计横条（位于 tabs 上方）
@@ -1100,7 +1113,7 @@ class DashboardPage(QWidget):
                 status_text = self._t("page.dashboard.instruction.status.idle")
             else:
                 status_text = self._t("page.dashboard.instruction.status.completed")
-            status_color = v.get("text_muted", "#8b949e")
+            status_color = v.get("text_muted", "#8a91a5")
             self._instruction_status_chip.setText(status_text)
             self._instruction_status_chip.setStyleSheet(f"color:{status_color};")
             self._instruction_input.setPlaceholderText(
@@ -1108,7 +1121,7 @@ class DashboardPage(QWidget):
             )
         else:
             status_text = self._t("page.dashboard.instruction.status.ready")
-            status_color = v.get("success", "#3fb950")
+            status_color = v.get("success", "#26a269")
             self._instruction_status_chip.setText(status_text)
             self._instruction_status_chip.setStyleSheet(f"color:{status_color};")
             self._instruction_input.setPlaceholderText(
@@ -1124,12 +1137,13 @@ class DashboardPage(QWidget):
             return
         v = self._theme_vars or {}
 
-        # 指令栏外壳
+        # 指令栏外壳（作用域限定，避免样式级联到子控件）
         if hasattr(self, "_instruction_bar"):
             self._instruction_bar.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#f7f9fc')}; "
-                f"border:1px solid {v.get('border', '#d5deea')}; "
-                f"border-radius:12px;"
+                f"QFrame#DashboardInstructionBar {{"
+                f" background:{v.get('bg_elevated', '#1a1d29')};"
+                f" border:1px solid {v.get('border', '#232838')};"
+                f" border-radius:12px; }}"
             )
 
         # 标题文字
@@ -1199,13 +1213,30 @@ class DashboardPage(QWidget):
             )
         self._refresh_readiness_card()
 
+    @staticmethod
+    def _hex_to_rgba(color: str, alpha: float) -> str:
+        """#RRGGBB -> rgba(...)；Qt 的 #RRGGBBAA 写法会被误解析为 #AARRGGBB。"""
+        color = (color or "").strip()
+        if color.startswith("#") and len(color) == 7:
+            try:
+                r = int(color[1:3], 16)
+                g = int(color[3:5], 16)
+                b = int(color[5:7], 16)
+                return f"rgba({r}, {g}, {b}, {alpha})"
+            except ValueError:
+                pass
+        return color
+
     def _summary_style(self, color: str = "") -> str:
         v = self._theme_vars or {}
-        summary_color = color or v.get("text_secondary", "#526273")
-        border_color = f"{summary_color}33" if summary_color.startswith("#") else v.get("border", "#d5deea")
+        summary_color = color or v.get("text_secondary", "#9aa0b5")
+        if summary_color.startswith("#"):
+            border_color = self._hex_to_rgba(summary_color, 0.35)
+        else:
+            border_color = v.get("border", "#232838")
         return (
-            f"background:{v.get('bg_elevated', '#f7f9fc')}; "
-            f"border:1px solid {border_color}; border-radius:12px; padding:10px 12px; "
+            f"background:{v.get('bg_elevated', '#1a1d29')}; "
+            f"border:1px solid {border_color}; border-radius:12px; padding:10px 14px; "
             f"font-size:12px; color:{summary_color}; margin-top:8px;"
         )
 
@@ -1213,36 +1244,41 @@ class DashboardPage(QWidget):
         v = self._theme_vars or {}
         return f"""
             QGroupBox {{
-                background:{v.get('bg_secondary', '#161b22')};
-                border:1px solid {v.get('border', '#30363d')};
-                border-radius:16px;
-                margin-top:18px;
-                padding-top:18px;
-                color:{v.get('text_primary', '#c9d1d9')};
-                font-size:13px;
+                background:{v.get('bg_secondary', '#14161f')};
+                border:1px solid {v.get('border', '#232838')};
+                border-radius:14px;
+                margin-top:0px;
+                padding:8px;
+                padding-top:36px;
+                color:{v.get('text_primary', '#e8eaf2')};
+                font-size:12px;
                 font-weight:700;
             }}
             QGroupBox::title {{
-                subcontrol-origin: margin;
-                left:18px;
-                padding:0 6px;
-                color:{v.get('text_primary', '#c9d1d9')};
+                subcontrol-origin: border;
+                subcontrol-position: top left;
+                left:16px;
+                top:12px;
+                padding:0;
+                color:{v.get('text_secondary', '#9aa0b5')};
+                letter-spacing:1.2px;
             }}
         """
 
     def _workspace_card_style(self, semantic: str = "default") -> str:
         v = self._theme_vars or {}
         semantic_map = {
-            "accent": (v.get("accent_soft", "#162033"), v.get("accent_soft", "#162033")),
-            "success": (v.get("success_bg", "#0f2d1a"), v.get("success_border", v.get("success", "#3fb950"))),
-            "warning": (v.get("warning_bg", "#3d2800"), v.get("warning_border", v.get("warning", "#e3b341"))),
-            "error": (v.get("danger_bg", "#3d1a1a"), v.get("danger_border", v.get("danger", "#f85149"))),
-            "info": (v.get("bg_elevated", "#121924"), v.get("border", "#30363d")),
-            "default": (v.get("bg_secondary", "#161b22"), v.get("border", "#30363d")),
+            "accent": (v.get("accent_soft", "#1c1e3a"), v.get("accent_soft", "#1c1e3a")),
+            "success": (v.get("success_bg", "#0f2d1a"), v.get("success_border", v.get("success", "#34d399"))),
+            "warning": (v.get("warning_bg", "#3d2800"), v.get("warning_border", v.get("warning", "#fbbf24"))),
+            "error": (v.get("danger_bg", "#3d1a1a"), v.get("danger_border", v.get("danger", "#f87171"))),
+            "info": (v.get("bg_elevated", "#1a1d29"), v.get("border", "#232838")),
+            "default": (v.get("bg_secondary", "#14161f"), v.get("border", "#232838")),
         }
         bg, border = semantic_map.get(semantic, semantic_map["default"])
+        # .QFrame 精确类选择器：只作用于卡片本体，避免边框级联到子标签
         return (
-            f"background:{bg}; border:1px solid {border}; border-radius:16px;"
+            f".QFrame {{ background:{bg}; border:1px solid {border}; border-radius:14px; }}"
         )
 
     def _channel_combo_style(self, theme_vars: dict) -> str:
@@ -1267,7 +1303,7 @@ class DashboardPage(QWidget):
                 height:0;
                 border-left:5px solid transparent;
                 border-right:5px solid transparent;
-                border-top:6px solid {v.get('text_secondary', '#8b949e')};
+                border-top:6px solid {v.get('text_secondary', '#8a91a5')};
                 margin-right:10px;
             }}
             QComboBox QAbstractItemView {{
@@ -1309,21 +1345,26 @@ class DashboardPage(QWidget):
         ):
             if widget:
                 widget.setProperty("role", role)
-                widget.setStyleSheet("")
+                # 作用域样式：容器自身透明、内部分隔符着色
+                widget.setStyleSheet(
+                    f"QWidget[role='{role}'] {{ background: transparent; }}"
+                    f"QFrame[role='separator'] {{ background:{v.get('border', '#232838')};"
+                    " border:none; max-width:1px; }"
+                )
                 widget.style().unpolish(widget)
                 widget.style().polish(widget)
                 widget.update()
 
         if hasattr(self, "_hero_panel"):
             self._hero_panel.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#121924')};"
-                f"border:1px solid {v.get('border', '#30363d')}; border-radius:16px;"
+                f"QFrame#DashboardHeroPanel {{ background:{v.get('bg_secondary', '#14161f')};"
+                f" border:1px solid {v.get('border', '#232838')}; border-radius:16px; }}"
             )
             # 主题感知投影（hero 不承载原生窗口，可安全应用图形效果）
             apply_card_shadow(self._hero_panel, self._theme_tokens, blur=26, y_offset=4)
         if hasattr(self, "_workspace_overview_panel"):
             self._workspace_overview_panel.setStyleSheet(
-                f"background:{v.get('bg_elevated', '#121924')}; border:none; border-radius:16px;"
+                f"QFrame#DashboardWorkspacePanel {{ background:transparent; border:none; }}"
             )
         if hasattr(self, "_workspace_section_lbl"):
             self._workspace_section_lbl.setStyleSheet(
@@ -1367,7 +1408,7 @@ class DashboardPage(QWidget):
         ):
             if label is not None:
                 label.setStyleSheet(
-                    f"color:{v.get('text_secondary', '#8b949e')}; font-size:12px; line-height:1.5;"
+                    f"color:{v.get('text_secondary', '#8a91a5')}; font-size:12px; line-height:1.5;"
                 )
 
         if hasattr(self, "_mirror_panel_group"):
@@ -1411,7 +1452,7 @@ class DashboardPage(QWidget):
             self._readiness_bar.setStyleSheet(self._readiness_bar_style(self._last_readiness_state[1]))
         if hasattr(self, "_takeover_banner"):
             self._takeover_banner.setStyleSheet(
-                f"background:{v.get('warning_bg', '#3d2800')}; color:{v.get('warning', '#e3b341')}; "
+                f"background:{v.get('warning_bg', '#3d2800')}; color:{v.get('warning', '#c77d0a')}; "
                 f"font-size:12px; border:1px solid {v.get('warning_border', '#6e4800')}; "
                 f"border-radius:12px; padding:10px 12px;"
             )
@@ -1428,7 +1469,7 @@ class DashboardPage(QWidget):
             )
         if hasattr(self, "_tokens_stats_lbl"):
             self._tokens_stats_lbl.setStyleSheet(
-                f"color:{v.get('text_secondary', '#8b949e')}; font-size:11px; padding:2px 4px;"
+                f"color:{v.get('text_secondary', '#8a91a5')}; font-size:11px; padding:2px 4px;"
             )
 
         self._set_task_status(*self._last_task_status)
@@ -1901,9 +1942,7 @@ class DashboardPage(QWidget):
             if self._mirror_prefers_new_window():
                 self._start_mirror_for_device(device_id, external_window=True)
             else:
-                # 内嵌模式：切到镜像 Tab 保证宿主容器可见后再启动
-                if hasattr(self, "_main_tabs"):
-                    self._main_tabs.setCurrentIndex(0)
+                # 内嵌模式：横版布局下镜像面板常驻右列，宿主容器始终可见
                 self._start_mirror_for_device(device_id)
 
     # ================================================================
@@ -1916,7 +1955,7 @@ class DashboardPage(QWidget):
 
         # i18n 化状态文字
         state_key = f"state.{state.value}"
-        color = STATE_COLORS.get(state, "#8b949e")
+        color = STATE_COLORS.get(state, "#8a91a5")
         text = self._t(state_key)
         self._set_task_status(text, color)
 
@@ -2009,11 +2048,11 @@ class DashboardPage(QWidget):
             f"[{evt.get('time_str', '')}] {message}"
         )
         color_map = {
-            "task_complete": "#3fb950",
-            "task_failed":   "#f85149",
-            "error":         "#f85149",
-            "takeover_request": "#e3b341",
-            "user_pause":    "#e3b341",
+            "task_complete": "#26a269",
+            "task_failed":   "#e5484d",
+            "error":         "#e5484d",
+            "takeover_request": "#c77d0a",
+            "user_pause":    "#c77d0a",
             "stuck_detected":"#f0883e",
         }
         color = color_map.get(evt.get("type"))
@@ -2024,7 +2063,7 @@ class DashboardPage(QWidget):
     def _on_task_finished(self, record):
         state = record.state
         state_key = f"state.{state.value}"
-        color = STATE_COLORS.get(state, "#8b949e")
+        color = STATE_COLORS.get(state, "#8a91a5")
         text = self._t(state_key)
         summary = (
             f"{self._t('page.history.overview.task')}：{record.task_text[:60]}\n"
@@ -2046,7 +2085,7 @@ class DashboardPage(QWidget):
     def _on_devices_changed(self, devices):
         if not devices:
             self._device_info_lbl.setText(self._t("page.device.no_device"))
-            self._update_device_status(self._t("page.device.status.disconnected"), "#f85149")
+            self._update_device_status(self._t("page.device.status.disconnected"), "#e5484d")
             return
 
         current = self._device.selected_device if self._device else None
@@ -2082,7 +2121,7 @@ class DashboardPage(QWidget):
 
         if device_info is None:
             self._device_info_lbl.setText(self._t("page.dashboard.device_info.no_device"))
-            self._update_device_status(self._t("page.dashboard.device_info.no_selected"), "#8b949e")
+            self._update_device_status(self._t("page.dashboard.device_info.no_selected"), "#8a91a5")
             # 清除镜像控件的设备绑定
             if self._mirror_label:
                 self._mirror_label.set_device_id("")
@@ -2111,9 +2150,9 @@ class DashboardPage(QWidget):
         self._device_info_lbl.setStyleSheet("font-size:12px; padding:4px;")
 
         if device_info.status == DeviceStatus.CONNECTED:
-            self._update_device_status(device_info.device_id, "#3fb950")
+            self._update_device_status(device_info.device_id, "#26a269")
         else:
-            self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#e3b341")
+            self._update_device_status(f"{device_info.device_id} ({device_info.status.value})", "#c77d0a")
 
         self._update_mirror_aux_buttons()
         self._sync_mirror_toolbar_preferences()
@@ -2128,7 +2167,7 @@ class DashboardPage(QWidget):
     # ================================================================
 
     def _on_mirror_state_changed(self, state: MirrorState):
-        color = MIRROR_STATE_COLORS.get(state, "#8b949e")
+        color = MIRROR_STATE_COLORS.get(state, "#8a91a5")
         text = self._t(f"mirror.state.{state.value}")
         self._set_mirror_status(text, color)
         if state == MirrorState.RUNNING:
@@ -2662,13 +2701,13 @@ class DashboardPage(QWidget):
         if self._task:
             self._on_task_state_changed(self._task.state)
         else:
-            self._set_task_status(_t("state.idle"), "#8b949e")
+            self._set_task_status(_t("state.idle"), "#8a91a5")
         if self._device and self._device.selected_device:
             self._on_device_selected(self._device.selected_device)
         else:
             if hasattr(self, "_device_info_lbl"):
                 self._device_info_lbl.setText(_t("page.dashboard.device_info.no_device"))
-            self._set_device_status(_t("page.dashboard.device_info.no_selected"), "#8b949e")
+            self._set_device_status(_t("page.dashboard.device_info.no_selected"), "#8a91a5")
         if hasattr(self, "_mirror_panel_group"):
             self._mirror_panel_group.setTitle(_t("page.dashboard.mirror.title"))
         if hasattr(self, "_mirror_open_in_new_window_check"):
@@ -2712,9 +2751,8 @@ class DashboardPage(QWidget):
             self._set_readiness_state(_t("page.dashboard.readiness.checking"), self._last_readiness_state[1])
 
         if hasattr(self, "_main_tabs"):
-            self._main_tabs.setTabText(0, _t("page.dashboard.tab.mirror"))
-            self._main_tabs.setTabText(1, _t("page.dashboard.tab.logs"))
-            self._main_tabs.setTabText(2, _t("page.dashboard.tab.overview"))
+            self._main_tabs.setTabText(0, _t("page.dashboard.tab.logs"))
+            self._main_tabs.setTabText(1, _t("page.dashboard.tab.overview"))
         if hasattr(self, "_log_panel_group"):
             self._log_panel_group.setTitle(_t("event.result_summary"))
         if hasattr(self, "_log_tabs"):
