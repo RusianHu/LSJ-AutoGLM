@@ -13,6 +13,7 @@ from phone_agent.adb.device import (
     double_tap,
     find_installed_app,
     get_current_app,
+    get_current_page_state,
     home,
     launch_app,
     list_installed_apps,
@@ -39,6 +40,7 @@ __all__ = [
     "restore_keyboard",
     # Device control
     "get_current_app",
+    "get_current_page_state",
     "list_installed_apps",
     "find_installed_app",
     "search_installed_apps",

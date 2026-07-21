@@ -12,7 +12,7 @@ import main
 from gui.services.config_service import ConfigService
 from phone_agent.agent import AgentConfig, PhoneAgent
 from phone_agent.config import get_system_prompt
-from phone_agent.model.client import ModelClient
+from phone_agent.model.client import MessageBuilder, ModelClient
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +28,14 @@ def test_only_standard_prompt_api_is_exposed():
     assert '<think>{think}</think>' in prompt
     assert 'finish(message="完成说明")' in prompt
     assert 'do(action="Find_App", query="keyword")' in prompt
+    assert "坐标协议（必须严格遵循）" in prompt
+    assert "x = round(pixel_x / screenshot_width * 1000)" in prompt
+    assert "截图为 1080×2400" in prompt
+    assert "应输出 [100, 240]" in prompt
+    assert "禁止直接输出像素坐标 [108, 576]" in prompt
+    assert "不要把模型内部缩放预览图的像素当作原图像素" in prompt
+    assert "说明: 点击屏幕相对坐标。" in prompt
+    assert "element (list[int], 必填): 二维相对坐标，范围 0-999" in prompt
 
     config = AgentConfig(verbose=False, platform="adb")
     assert config.system_prompt == prompt
@@ -47,6 +55,19 @@ def test_response_parser_accepts_structured_reasoned_and_action_only_outputs():
     assert action == 'do(action="Tap", element=[400, 600])'
 
     assert parse('do(action="Back")') == ("", 'do(action="Back")')
+
+
+def test_screen_info_exposes_dimensions_and_coordinate_space():
+    screen_info = MessageBuilder.build_screen_info(
+        "微信",
+        screenshot_width=1080,
+        screenshot_height=2400,
+        coordinate_space="normalized_0_999",
+    )
+
+    assert '"screenshot_width": 1080' in screen_info
+    assert '"screenshot_height": 2400' in screen_info
+    assert '"coordinate_space": "normalized_0_999"' in screen_info
 
 
 def test_terminal_note_normalization_is_generic_but_avoids_prefix_false_positive():

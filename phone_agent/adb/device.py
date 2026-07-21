@@ -11,7 +11,7 @@ from pathlib import Path
 
 from phone_agent.config.apps import APP_PACKAGES
 from phone_agent.config.timing import TIMING_CONFIG
-from phone_agent.device_factory import AppLaunchResult
+from phone_agent.device_factory import AppLaunchResult, DevicePageState
 
 
 @dataclass
@@ -33,23 +33,8 @@ class InstalledApp:
         return "\n".join(parts).lower()
 
 
-def get_current_app(device_id: str | None = None) -> str:
-    """
-    Get the currently focused app name.
-
-    Args:
-        device_id: Optional ADB device ID for multi-device setups.
-
-    Returns:
-        The app name if recognized, otherwise package name or "System Home".
-    """
-    try:
-        output = _run_adb_shell(["dumpsys", "window"], device_id)
-    except Exception:
-        return "System Home"
-    if not output:
-        return "System Home"
-
+def _parse_current_app_from_window_dump(output: str) -> str:
+    """Parse the foreground app name from ``dumpsys window`` output."""
     # Parse window focus info
     for line in output.split("\n"):
         if "mCurrentFocus" in line or "mFocusedApp" in line:
@@ -62,6 +47,47 @@ def get_current_app(device_id: str | None = None) -> str:
                 return package_match.group(1)
 
     return "System Home"
+
+
+def _parse_focused_window_title(output: str) -> str:
+    """Parse Android's focused window/activity component as a page-title fallback."""
+    for marker in ("mCurrentFocus", "mFocusedApp"):
+        for line in output.split("\n"):
+            if marker not in line:
+                continue
+            match = re.search(r"\bu\d+\s+([^\s}]+)", line)
+            if match:
+                return match.group(1)
+    return ""
+
+
+def get_current_page_state(device_id: str | None = None) -> DevicePageState:
+    """Return foreground app plus a low-latency best-effort window title.
+
+    Android does not expose visible toolbar text for every app. In particular,
+    custom-rendered apps can return an empty UIAutomator tree. The focused
+    window/activity component is therefore used as a deterministic fallback and
+    its source is made explicit in action-trace logs.
+    """
+    try:
+        output = _run_adb_shell(["dumpsys", "window"], device_id)
+    except Exception:
+        return DevicePageState("System Home", "", "unavailable")
+    if not output:
+        return DevicePageState("System Home", "", "unavailable")
+
+    app_name = _parse_current_app_from_window_dump(output)
+    window_title = _parse_focused_window_title(output)
+    return DevicePageState(
+        app_name=app_name,
+        page_title=window_title or app_name,
+        title_source="adb_focused_window" if window_title else "adb_current_app_fallback",
+    )
+
+
+def get_current_app(device_id: str | None = None) -> str:
+    """Get the currently focused app name."""
+    return get_current_page_state(device_id).app_name
 
 
 def tap(

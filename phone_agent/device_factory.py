@@ -14,6 +14,15 @@ class AppLaunchResult:
     package_name: str | None = None
 
 
+@dataclass(frozen=True)
+class DevicePageState:
+    """Best-effort foreground page metadata for action tracing."""
+
+    app_name: str
+    page_title: str
+    title_source: str
+
+
 class DeviceType(Enum):
     """Type of device connection tool."""
 
@@ -62,6 +71,20 @@ class DeviceFactory:
     def get_current_app(self, device_id: str | None = None) -> str:
         """Get current app name."""
         return self.module.get_current_app(device_id)
+
+    def get_current_page_state(self, device_id: str | None = None) -> DevicePageState:
+        """Get the foreground app and best-effort page/window title."""
+        getter = getattr(self.module, "get_current_page_state", None)
+        if getter is not None:
+            state = getter(device_id)
+            if isinstance(state, DevicePageState):
+                return state
+        app_name = self.get_current_app(device_id)
+        return DevicePageState(
+            app_name=app_name,
+            page_title=app_name,
+            title_source=f"{self.device_type.value}_current_app_fallback",
+        )
 
     def tap(
         self, x: int, y: int, device_id: str | None = None, delay: float | None = None

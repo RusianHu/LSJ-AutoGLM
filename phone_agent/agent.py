@@ -181,6 +181,11 @@ class PhoneAgent:
             )
         return ""
 
+    @staticmethod
+    def _print_action_trace(payload: dict[str, Any]) -> None:
+        """Emit a stable machine-readable action trace line."""
+        print(f"[ACTION_TRACE] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
     def _find_recommended_followup_action(self) -> dict[str, Any] | None:
         for message in reversed(self._context):
             if message.get("role") != "user":
@@ -543,7 +548,10 @@ class PhoneAgent:
         # Capture current screen state
         device_factory = get_device_factory()
         screenshot = device_factory.get_screenshot(self.agent_config.device_id)
-        current_app = device_factory.get_current_app(self.agent_config.device_id)
+        page_state_before = device_factory.get_current_page_state(
+            self.agent_config.device_id
+        )
+        current_app = page_state_before.app_name
         self._step_tracker.update_screen(screenshot.base64_data)
 
         # --- 消费运行时用户指令（GUI 追加指令 inbox） ---
@@ -552,7 +560,12 @@ class PhoneAgent:
         # Build messages
         rescue_reason = None if is_first else self._should_trigger_expert_rescue()
         if is_first:
-            screen_info = MessageBuilder.build_screen_info(current_app)
+            screen_info = MessageBuilder.build_screen_info(
+                current_app,
+                screenshot_width=screenshot.width,
+                screenshot_height=screenshot.height,
+                coordinate_space="normalized_0_999",
+            )
             self._context.append(
                 MessageBuilder.create_system_message(self.agent_config.system_prompt)
             )
@@ -592,7 +605,12 @@ class PhoneAgent:
                     self._print_expert_log(
                         f"专家建议已注入主模型上下文（{self._expert_reason_label(rescue_reason)}）"
                     )
-            screen_info = MessageBuilder.build_screen_info(current_app)
+            screen_info = MessageBuilder.build_screen_info(
+                current_app,
+                screenshot_width=screenshot.width,
+                screenshot_height=screenshot.height,
+                coordinate_space="normalized_0_999",
+            )
             text_content = f"** Screen Info **\n\n{screen_info}"
             self._context.append(
                 MessageBuilder.create_user_message(
@@ -697,6 +715,28 @@ class PhoneAgent:
             print("=" * 50 + "\n")
 
         # Execute action
+        model_coordinates, absolute_coordinates = (
+            self.action_handler.describe_action_coordinates(
+                action, screenshot.width, screenshot.height
+            )
+        )
+        if self.agent_config.verbose:
+            self._print_action_trace(
+                {
+                    "phase": "before",
+                    "step": self._step_count,
+                    "action": action.get("action") or action.get("_metadata"),
+                    "screenshot": {
+                        "width": screenshot.width,
+                        "height": screenshot.height,
+                    },
+                    "app": page_state_before.app_name,
+                    "page_title": page_state_before.page_title,
+                    "page_title_source": page_state_before.title_source,
+                    "model_coordinates": model_coordinates,
+                    "absolute_coordinates": absolute_coordinates,
+                }
+            )
         try:
             result = self.action_handler.execute(
                 action, screenshot.width, screenshot.height
@@ -706,6 +746,31 @@ class PhoneAgent:
                 traceback.print_exc()
             result = self.action_handler.execute(
                 finish(message=str(e)), screenshot.width, screenshot.height
+            )
+
+        try:
+            page_state_after = device_factory.get_current_page_state(
+                self.agent_config.device_id
+            )
+        except Exception as exc:
+            page_state_after = None
+            if self.agent_config.verbose:
+                print(f"[WARN] Failed to read page state after action: {exc}", flush=True)
+
+        if self.agent_config.verbose:
+            self._print_action_trace(
+                {
+                    "phase": "after",
+                    "step": self._step_count,
+                    "action": action.get("action") or action.get("_metadata"),
+                    "app": page_state_after.app_name if page_state_after else "",
+                    "page_title": page_state_after.page_title if page_state_after else "",
+                    "page_title_source": (
+                        page_state_after.title_source if page_state_after else "unavailable"
+                    ),
+                    "success": result.success,
+                    "should_finish": result.should_finish,
+                }
             )
 
         if result.message:

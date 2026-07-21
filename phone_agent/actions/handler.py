@@ -157,6 +157,26 @@ class ActionHandler:
         y = int(element[1] / 1000 * screen_height)
         return x, y
 
+    def describe_action_coordinates(
+        self, action: dict[str, Any], screen_width: int, screen_height: int
+    ) -> tuple[dict[str, list[int | float]], dict[str, list[int]]]:
+        """Return model and converted pixel coordinates for diagnostic logging."""
+        model_coordinates: dict[str, list[int | float]] = {}
+        absolute_coordinates: dict[str, list[int]] = {}
+        for field_name in ("element", "start", "end"):
+            value = action.get(field_name)
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                continue
+            if not all(isinstance(item, (int, float)) for item in value):
+                continue
+            relative = [value[0], value[1]]
+            absolute = self._convert_relative_to_absolute(
+                relative, screen_width, screen_height
+            )
+            model_coordinates[field_name] = relative
+            absolute_coordinates[field_name] = [absolute[0], absolute[1]]
+        return model_coordinates, absolute_coordinates
+
     def _handle_launch(self, action: dict, width: int, height: int) -> ActionResult:
         """Handle app launch action."""
         app_name = (action.get("app") or "").strip()
@@ -603,8 +623,11 @@ def parse_action(response: str) -> dict[str, Any]:
             ]:
                 t = t.replace(tag, " ")
 
-            # Unwrap markdown code fences if present
-            fence_match = re.search(r"```(?:python)?\s*(.*?)\s*```", t, re.DOTALL)
+            # Only unwrap a fence that encloses the entire response. A Type action may
+            # legitimately contain Markdown code fences in its text argument.
+            fence_match = re.fullmatch(
+                r"```(?:python)?\s*(.*?)\s*```", t, re.DOTALL
+            )
             if fence_match:
                 t = fence_match.group(1).strip()
             return t.strip()

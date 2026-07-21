@@ -1,3 +1,5 @@
+import os
+
 from PySide6.QtCore import QCoreApplication
 
 from gui.services.config_service import ConfigService
@@ -18,6 +20,29 @@ def test_open_gui_config_observes_cli_atomic_write(tmp_path):
 
     gui_config.shutdown()
     cli_config.shutdown()
+
+
+def test_external_change_detection_handles_same_timestamp_and_size(tmp_path):
+    app = QCoreApplication.instance() or QCoreApplication([])
+    assert app is not None
+    env_file = tmp_path / ".env"
+    config = ConfigService(env_file=env_file)
+    config.set("OPEN_AUTOGLM_LANG", "cn")
+    original_stat = env_file.stat()
+
+    content = env_file.read_text(encoding="utf-8")
+    updated = content.replace("OPEN_AUTOGLM_LANG=cn", "OPEN_AUTOGLM_LANG=en")
+    assert len(updated) == len(content)
+    env_file.write_text(updated, encoding="utf-8")
+    os.utime(
+        env_file,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+
+    config._check_external_change()
+
+    assert config.get("OPEN_AUTOGLM_LANG") == "en"
+    config.shutdown()
 
 
 def test_device_service_applies_externally_selected_device(tmp_path):

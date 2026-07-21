@@ -11,6 +11,7 @@
 - build_command_args 显式传递截图压缩开关
 """
 
+import hashlib
 import json
 import os
 import re
@@ -216,7 +217,7 @@ class ConfigService(QObject):
         self._cache: Dict[str, str] = {}
         self._env_bootstrap_created = False
         self._env_bootstrap_error = ""
-        self._env_signature: tuple[int, int] | None = None
+        self._env_signature: tuple[int, int, bytes] | None = None
         self.load()
         self._external_change_timer = QTimer(self)
         self._external_change_timer.timeout.connect(self._check_external_change)
@@ -314,10 +315,13 @@ class ConfigService(QObject):
         self._env_signature = self._read_env_signature()
         self.config_changed.emit()
 
-    def _read_env_signature(self) -> tuple[int, int] | None:
+    def _read_env_signature(self) -> tuple[int, int, bytes] | None:
         try:
             stat = self._env_file.stat()
-            return int(stat.st_mtime_ns), int(stat.st_size)
+            content_digest = hashlib.blake2b(
+                self._env_file.read_bytes(), digest_size=16
+            ).digest()
+            return int(stat.st_mtime_ns), int(stat.st_size), content_digest
         except OSError:
             return None
 
