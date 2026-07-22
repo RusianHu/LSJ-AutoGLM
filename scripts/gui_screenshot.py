@@ -58,7 +58,7 @@ def main() -> int:
     app = QApplication([])
     app.setStyle("Fusion")
     app.setApplicationName("Open-AutoGLM")
-    app.setApplicationVersion("1.0.10")
+    app.setApplicationVersion("1.0.11")
 
     config = ConfigService()
     history = HistoryService()

@@ -23,6 +23,11 @@ MESSAGES_ZH = {
     "time_to_first_token": "首 Token 延迟 (TTFT)",
     "time_to_thinking_end": "思考完成延迟",
     "total_inference_time": "总推理时间",
+    "repeated_action_blocked": (
+        "已阻止重复动作：同一画面上的 {action} 已有 {count} 次进入相同页面 "
+        "{destination}。请改用不同策略；查找应用时使用 Find_App/Launch，"
+        "不要再次点击同一坐标。"
+    ),
 }
 
 # English messages
@@ -48,6 +53,11 @@ MESSAGES_EN = {
     "time_to_first_token": "Time to First Token (TTFT)",
     "time_to_thinking_end": "Time to Thinking End",
     "total_inference_time": "Total Inference Time",
+    "repeated_action_blocked": (
+        "Blocked repeated action: {action} on the same screen was repeated "
+        "{count} times and reached the same page {destination}. Use a different strategy; "
+        "use Find_App/Launch for apps and do not tap the same coordinate again."
+    ),
 }
 
 

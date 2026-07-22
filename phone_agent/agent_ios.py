@@ -347,9 +347,14 @@ class IOSPhoneAgent:
             )
 
         # Add assistant response to context
+        assistant_content = getattr(response, "content", "") or (
+            f"<think>{response.thinking}</think><answer>{response.action}</answer>"
+        )
+        assistant_reasoning = getattr(response, "reasoning_content", None)
         self._context.append(
             MessageBuilder.create_assistant_message(
-                f"<think>{response.thinking}</think><answer>{response.action}</answer>"
+                assistant_content,
+                reasoning_content=assistant_reasoning,
             )
         )
 

@@ -207,7 +207,7 @@ The `release` directory will contain a Windows x64 ZIP and its SHA-256 checksum.
 After extracting the complete ZIP, run:
 
 ```powershell
-.\OpenAutoGLM-GUI-v1.0.10-windows-x64\OpenAutoGLM-GUI.exe
+.\OpenAutoGLM-GUI-v1.0.11-windows-x64\OpenAutoGLM-GUI.exe
 ```
 
 Do not copy the exe by itself; the adjacent `_internal` directory is required.

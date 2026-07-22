@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from hashlib import sha1
 from typing import Deque
 
+ActionTransition = tuple[str, str, str, str, str, str]
+
 
 @dataclass
 class AgentStepTracker:
@@ -21,6 +23,9 @@ class AgentStepTracker:
         default_factory=lambda: deque(maxlen=12)
     )
     recent_failures: Deque[str] = field(default_factory=lambda: deque(maxlen=5))
+    recent_transitions: Deque[ActionTransition] = field(
+        default_factory=lambda: deque(maxlen=20)
+    )
 
     @staticmethod
     def screen_hash(base64_data: str) -> str:
@@ -61,6 +66,49 @@ class AgentStepTracker:
         if message:
             self.recent_failures.append(message)
 
+    def record_transition(
+        self,
+        screen_hash: str,
+        before_app: str,
+        before_page: str,
+        action_signature: str,
+        after_app: str,
+        after_page: str,
+    ) -> None:
+        """记录一次可复现的“页面 + 动作 → 页面”转移。"""
+        self.recent_transitions.append(
+            (
+                screen_hash,
+                before_app,
+                before_page,
+                action_signature,
+                after_app,
+                after_page,
+            )
+        )
+
+    def repeated_transition_outcome(
+        self,
+        screen_hash: str,
+        before_app: str,
+        before_page: str,
+        action_signature: str,
+        threshold: int = 2,
+    ) -> tuple[str, str, int] | None:
+        """返回已重复达到阈值的相同页面转移结果。"""
+        outcomes: dict[tuple[str, str], int] = {}
+        prefix = (screen_hash, before_app, before_page, action_signature)
+        for transition in self.recent_transitions:
+            if transition[:4] != prefix:
+                continue
+            outcome = (transition[4], transition[5])
+            outcomes[outcome] = outcomes.get(outcome, 0) + 1
+
+        for (after_app, after_page), count in outcomes.items():
+            if count >= threshold:
+                return after_app, after_page, count
+        return None
+
     def is_action_loop(self) -> bool:
         """基于最近动作判断是否进入循环。"""
         return self.looks_like_loop(list(self.recent_action_signatures))
@@ -73,3 +121,4 @@ class AgentStepTracker:
         self.stuck_warnings = 0
         self.recent_action_signatures.clear()
         self.recent_failures.clear()
+        self.recent_transitions.clear()

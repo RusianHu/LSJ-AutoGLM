@@ -6,7 +6,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from phone_agent.actions import ActionHandler
+from phone_agent.actions import ActionHandler, ActionResult
 from phone_agent.actions.handler import do, finish, parse_action
 from phone_agent.actions.registry import (
     ActionPolicyInput,
@@ -265,6 +265,7 @@ class PhoneAgent:
         """
         self._context = []
         self._step_count = 0
+        self._step_tracker.reset()
         self._task_text = task
 
         # First step with user prompt
@@ -552,7 +553,7 @@ class PhoneAgent:
             self.agent_config.device_id
         )
         current_app = page_state_before.app_name
-        self._step_tracker.update_screen(screenshot.base64_data)
+        current_screen_hash = self._step_tracker.update_screen(screenshot.base64_data)
 
         # --- 消费运行时用户指令（GUI 追加指令 inbox） ---
         self._drain_runtime_user_instructions()
@@ -658,9 +659,14 @@ class PhoneAgent:
         self._context[-1] = MessageBuilder.remove_images_from_message(self._context[-1])
 
         # Add assistant response to context
+        assistant_content = getattr(response, "content", "") or (
+            f"<think>{response.thinking}</think><answer>{response.action}</answer>"
+        )
+        assistant_reasoning = getattr(response, "reasoning_content", None)
         self._context.append(
             MessageBuilder.create_assistant_message(
-                f"<think>{response.thinking}</think><answer>{response.action}</answer>"
+                assistant_content,
+                reasoning_content=assistant_reasoning,
             )
         )
 
@@ -705,7 +711,16 @@ class PhoneAgent:
         action = normalized_action
 
         # Track recent actions for loop detection and recovery guidance.
-        self._step_tracker.record_action(self._action_signature(action))
+        action_signature = self._action_signature(action)
+        self._step_tracker.record_action(action_signature)
+        repeated_transition = None
+        if action.get("action") in {"Tap", "Double Tap", "Long Press"}:
+            repeated_transition = self._step_tracker.repeated_transition_outcome(
+                current_screen_hash,
+                page_state_before.app_name,
+                page_state_before.page_title,
+                action_signature,
+            )
 
         if self.agent_config.verbose:
             # Print thinking process
@@ -737,16 +752,31 @@ class PhoneAgent:
                     "absolute_coordinates": absolute_coordinates,
                 }
             )
-        try:
-            result = self.action_handler.execute(
-                action, screenshot.width, screenshot.height
+        if repeated_transition is not None:
+            after_app, after_page, repeat_count = repeated_transition
+            destination = after_app
+            if after_page and after_page != after_app:
+                destination = f"{after_app} ({after_page})"
+            result = ActionResult(
+                False,
+                False,
+                msgs["repeated_action_blocked"].format(
+                    action=action.get("action") or action.get("_metadata"),
+                    destination=destination,
+                    count=repeat_count,
+                ),
             )
-        except Exception as e:
-            if self.agent_config.verbose:
-                traceback.print_exc()
-            result = self.action_handler.execute(
-                finish(message=str(e)), screenshot.width, screenshot.height
-            )
+        else:
+            try:
+                result = self.action_handler.execute(
+                    action, screenshot.width, screenshot.height
+                )
+            except Exception as e:
+                if self.agent_config.verbose:
+                    traceback.print_exc()
+                result = self.action_handler.execute(
+                    finish(message=str(e)), screenshot.width, screenshot.height
+                )
 
         try:
             page_state_after = device_factory.get_current_page_state(
@@ -756,6 +786,16 @@ class PhoneAgent:
             page_state_after = None
             if self.agent_config.verbose:
                 print(f"[WARN] Failed to read page state after action: {exc}", flush=True)
+
+        if repeated_transition is None and page_state_after is not None:
+            self._step_tracker.record_transition(
+                current_screen_hash,
+                page_state_before.app_name,
+                page_state_before.page_title,
+                action_signature,
+                page_state_after.app_name,
+                page_state_after.page_title,
+            )
 
         if self.agent_config.verbose:
             self._print_action_trace(

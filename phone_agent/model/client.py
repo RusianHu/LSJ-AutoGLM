@@ -32,6 +32,11 @@ class ModelResponse:
     thinking: str
     action: str
     raw_content: str
+    # Keep the provider's two response channels separate. Reasoning-capable
+    # OpenAI-compatible APIs (including MiMo) require reasoning_content to be
+    # replayed on historical assistant messages in subsequent requests.
+    content: str = ""
+    reasoning_content: str | None = None
     # Performance metrics
     time_to_first_token: float | None = None  # Time to first token (seconds)
     time_to_thinking_end: float | None = None  # Time to thinking end (seconds)
@@ -133,6 +138,9 @@ class ModelClient:
             stream = self.client.chat.completions.create(**request_kwargs)
 
         raw_content = ""
+        message_content = ""
+        reasoning_content = ""
+        reasoning_content_seen = False
         buffer = ""  # Buffer to hold content that might be part of a marker
         action_markers = ["finish(message=", "do(action="]
         in_action_phase = False  # Track if we've entered the action phase
@@ -155,20 +163,18 @@ class ModelClient:
             except (TypeError, ValueError):
                 return None
 
-        def _extract_stream_text(delta: Any) -> str:
-            """Collect text from OpenAI-compatible streaming delta payloads."""
-            reasoning = _get_field(delta, "reasoning_content")
-            content = _get_field(delta, "content")
+        def _extract_stream_parts(delta: Any) -> tuple[str, str, str, bool]:
+            """Return reasoning, visible content, and a display-compatible merge."""
+            raw_reasoning = _get_field(delta, "reasoning_content")
+            reasoning = str(raw_reasoning or "")
+            content = str(_get_field(delta, "content") or "")
 
+            # A few compatibility gateways mirror the same token into both
+            # fields. Preserve both provider fields verbatim, but do not print
+            # or parse the duplicated token twice.
             if reasoning and content and reasoning == content:
-                return content
-
-            parts: list[str] = []
-            if reasoning:
-                parts.append(reasoning)
-            if content:
-                parts.append(content)
-            return "".join(parts)
+                return reasoning, content, content, raw_reasoning is not None
+            return reasoning, content, reasoning + content, raw_reasoning is not None
 
         for chunk in stream:
             # Collect usage from final chunk. Some compatible endpoints may attach
@@ -196,11 +202,19 @@ class ModelClient:
                 continue
 
             delta = _get_field(choices[0], "delta")
-            content = _extract_stream_text(delta)
-            if not content:
+            (
+                reasoning_delta,
+                content_delta,
+                combined_delta,
+                delta_has_reasoning,
+            ) = _extract_stream_parts(delta)
+            reasoning_content_seen = reasoning_content_seen or delta_has_reasoning
+            reasoning_content += reasoning_delta
+            message_content += content_delta
+            if not combined_delta:
                 continue
 
-            raw_content += content
+            raw_content += combined_delta
 
             # Record time to first token
             if not first_token_received:
@@ -211,7 +225,7 @@ class ModelClient:
                 # Already in action phase, just accumulate content without printing
                 continue
 
-            buffer += content
+            buffer += combined_delta
 
             # Check if any marker is fully present in buffer
             marker_found = False
@@ -253,8 +267,20 @@ class ModelClient:
         # Calculate total time
         total_time = time.time() - start_time
 
-        # Parse thinking and action from response
-        thinking, action = self._parse_response(raw_content)
+        # Prefer the provider's visible content for action parsing and keep its
+        # reasoning channel intact. Legacy endpoints that emit a single
+        # <think>/<answer> content string continue to use the old parser path.
+        if message_content:
+            content_thinking, action = self._parse_response(message_content)
+            thinking = reasoning_content.strip() or content_thinking
+            if (
+                reasoning_content.strip()
+                and content_thinking
+                and content_thinking not in reasoning_content
+            ):
+                thinking = f"{reasoning_content.strip()} {content_thinking}".strip()
+        else:
+            thinking, action = self._parse_response(raw_content)
 
         # Print performance metrics
         lang = self.config.lang
@@ -304,6 +330,8 @@ class ModelClient:
             thinking=thinking,
             action=action,
             raw_content=raw_content,
+            content=message_content,
+            reasoning_content=(reasoning_content if reasoning_content_seen else None),
             time_to_first_token=time_to_first_token,
             time_to_thinking_end=time_to_thinking_end,
             total_time=total_time,
@@ -453,9 +481,14 @@ class MessageBuilder:
         return {"role": "user", "content": content}
 
     @staticmethod
-    def create_assistant_message(content: str) -> dict[str, Any]:
-        """Create an assistant message."""
-        return {"role": "assistant", "content": content}
+    def create_assistant_message(
+        content: str, reasoning_content: str | None = None
+    ) -> dict[str, Any]:
+        """Create an assistant message, preserving provider reasoning metadata."""
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if reasoning_content is not None:
+            message["reasoning_content"] = reasoning_content
+        return message
 
     @staticmethod
     def remove_images_from_message(message: dict[str, Any]) -> dict[str, Any]:

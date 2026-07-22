@@ -20,3 +20,8 @@ def test_release_version_is_consistent():
         r'setApplicationVersion\("([^"]+)"\)',
         "gui_app.py",
     )
+    assert expected == _extract(
+        r'setApplicationVersion\("([^"]+)"\)',
+        "scripts/gui_screenshot.py",
+    )
+    assert expected == _extract(r'else "([^"]+)"', "gui/main_window.py")

@@ -33,6 +33,22 @@ class InstalledApp:
         return "\n".join(parts).lower()
 
 
+_PACKAGE_ALIASES: dict[str, tuple[str, ...]] = {}
+_NORMALIZED_ALIAS_PACKAGES: dict[str, str] = {}
+for _app_alias, _app_package in APP_PACKAGES.items():
+    _PACKAGE_ALIASES[_app_package] = (
+        *_PACKAGE_ALIASES.get(_app_package, ()),
+        _app_alias,
+    )
+    _NORMALIZED_ALIAS_PACKAGES[_app_alias.strip().lower()] = _app_package
+
+
+def _known_display_name(package_name: str) -> str | None:
+    """Return the preferred built-in display name for a package."""
+    aliases = _PACKAGE_ALIASES.get(package_name, ())
+    return aliases[0] if aliases else None
+
+
 def _parse_current_app_from_window_dump(output: str) -> str:
     """Parse the foreground app name from ``dumpsys window`` output."""
     # Parse window focus info
@@ -347,6 +363,7 @@ def list_installed_apps(device_id: str | None = None) -> list[InstalledApp]:
         apps.append(
             InstalledApp(
                 package_name=package_name,
+                display_name=_known_display_name(package_name),
                 activity_name=activity_name,
             )
         )
@@ -372,6 +389,18 @@ def search_installed_apps(query: str, device_id: str | None = None) -> list[Inst
     if not apps:
         return []
 
+    # Human-readable names in APP_PACKAGES are authoritative aliases. Android's
+    # fast package query does not return localized labels, so consult aliases
+    # before package/activity substring matching while still verifying that the
+    # mapped package is actually installed and launchable.
+    exact_alias_package = _NORMALIZED_ALIAS_PACKAGES.get(normalized_query)
+    if exact_alias_package:
+        exact_alias_matches = [
+            app for app in apps if app.package_name == exact_alias_package
+        ]
+        if exact_alias_matches:
+            return exact_alias_matches
+
     exact_matches = [
         app
         for app in apps
@@ -387,7 +416,17 @@ def search_installed_apps(query: str, device_id: str | None = None) -> list[Inst
     if package_suffix_matches:
         return package_suffix_matches
 
-    fuzzy_matches = [app for app in apps if normalized_query in app.search_blob]
+    fuzzy_alias_packages = {
+        package
+        for alias, package in _NORMALIZED_ALIAS_PACKAGES.items()
+        if normalized_query in alias
+    }
+    fuzzy_matches = [
+        app
+        for app in apps
+        if normalized_query in app.search_blob
+        or app.package_name in fuzzy_alias_packages
+    ]
     fuzzy_matches.sort(
         key=lambda app: (
             app.package_name.lower() != normalized_query,
